@@ -1,0 +1,261 @@
+package router
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"go-web-gin-health/internal/config"
+	"go-web-gin-health/internal/controller"
+	"go-web-gin-health/internal/middleware"
+	"go-web-gin-health/internal/service"
+	"go-web-gin-health/internal/utils"
+)
+
+func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
+	engine.Use(gin.Recovery())
+	engine.Use(middleware.Logger())
+	engine.Use(middleware.CORS(cfg.FrontendURL))
+	engine.Use(middleware.RateLimit(cfg.RateLimitPerMinute))
+
+	authService := service.NewAuthService(cfg, db)
+	packageService := service.NewPackageService(db)
+	orderService := service.NewOrderService(db)
+	alipayService, _ := service.NewAlipayService(cfg)
+	adminService := service.NewAdminService(cfg, db)
+	merchantService := service.NewMerchantService(cfg, db)
+	dashboardService := service.NewDashboardService(db)
+	auditService := service.NewAuditService(db)
+
+	authCtl := controller.NewAuthController(authService)
+	merchantCtl := controller.NewMerchantController(merchantService, adminService, alipayService, auditService)
+	userCtl := controller.NewUserController(db, authService)
+	packageCtl := controller.NewPackageController(packageService)
+	orderCtl := controller.NewOrderController(orderService, alipayService, auditService)
+	adminCtl := controller.NewAdminController(adminService, dashboardService, auditService)
+
+	engine.GET("/health", func(c *gin.Context) {
+		utils.Success(c, gin.H{"status": "ok"})
+	})
+	engine.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, cfg.FrontendURL+"/login")
+	})
+	engine.GET("/login", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, cfg.FrontendURL+"/login")
+	})
+	engine.GET("/admin", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, cfg.FrontendURL+"/login")
+	})
+	engine.GET("/portal", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, cfg.FrontendURL+"/portal/login")
+	})
+	engine.GET("/portal/login", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, cfg.FrontendURL+"/portal/login")
+	})
+
+	apiLegacy := engine.Group("/api")
+	{
+		apiLegacy.POST("/merchant/register/send-code", merchantCtl.SendRegisterCode)
+		apiLegacy.POST("/merchant/register", merchantCtl.Register)
+		apiLegacy.POST("/merchant/login", merchantCtl.Login)
+		apiLegacy.POST("/admin/auth/login", authCtl.AdminLogin)
+		apiLegacy.GET("/customer/stores/:id", merchantCtl.PublicStore)
+		apiLegacy.GET("/customer/store/:storeId/products", orderCtl.PublicStoreProducts)
+		apiLegacy.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
+		apiLegacy.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		apiLegacy.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
+
+		merchantLegacy := apiLegacy.Group("/merchant")
+		merchantLegacy.Use(middleware.Auth(cfg, "merchant"))
+		{
+			merchantLegacy.GET("/info", merchantCtl.Info)
+			merchantLegacy.GET("/check-subscription", merchantCtl.CheckSubscription)
+			merchantLegacy.GET("/subscription", merchantCtl.Subscription)
+			merchantLegacy.POST("/subscription/orders", merchantCtl.CreateSubscriptionOrder)
+			merchantLegacy.GET("/subscription/orders/:orderNo", merchantCtl.SubscriptionOrderStatus)
+			merchantProtected := merchantLegacy.Group("")
+			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
+			{
+				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
+				merchantProtected.GET("/leads", merchantCtl.Leads)
+				merchantProtected.GET("/leads/stats", merchantCtl.LeadStats)
+				merchantProtected.PUT("/info", merchantCtl.UpdateInfo)
+				merchantProtected.GET("/payment-config", merchantCtl.PaymentConfig)
+				merchantProtected.PUT("/payment-config", merchantCtl.SavePaymentConfig)
+				merchantProtected.GET("/stores", merchantCtl.Stores)
+				merchantProtected.POST("/stores", merchantCtl.CreateStore)
+				merchantProtected.PUT("/stores/:id", merchantCtl.UpdateStore)
+				merchantProtected.DELETE("/stores/:id", merchantCtl.DeleteStore)
+				merchantProtected.GET("/stores/:storeId/products", merchantCtl.StoreProducts)
+				merchantProtected.POST("/products", merchantCtl.CreateStoreProduct)
+				merchantProtected.PUT("/products/:id", merchantCtl.UpdateStoreProduct)
+				merchantProtected.DELETE("/products/:id", merchantCtl.DeleteStoreProduct)
+				merchantProtected.GET("/orders", orderCtl.MerchantOrders)
+				merchantProtected.GET("/refunds", orderCtl.MerchantRefunds)
+				merchantProtected.GET("/orders/:id", orderCtl.MerchantOrderDetail)
+				merchantProtected.PUT("/orders/:id/accept", orderCtl.AcceptMerchantOrder)
+				merchantProtected.PUT("/orders/:id/complete", orderCtl.CompleteMerchantOrder)
+				merchantProtected.PUT("/orders/:id/close", orderCtl.CloseMerchantOrder)
+				merchantProtected.PUT("/orders/:id/note", orderCtl.UpdateMerchantOrderNote)
+				merchantProtected.POST("/orders/:id/refund", orderCtl.RefundMerchantOrder)
+				merchantProtected.GET("/promotions", merchantCtl.Promotions)
+				merchantProtected.POST("/promotions/ai-draft", merchantCtl.GeneratePromotionDraft)
+				merchantProtected.POST("/promotions", merchantCtl.CreatePromotion)
+				merchantProtected.PUT("/promotions/:id", merchantCtl.UpdatePromotion)
+				merchantProtected.DELETE("/promotions/:id", merchantCtl.DeletePromotion)
+			}
+		}
+
+		adminLegacy := apiLegacy.Group("/admin")
+		adminLegacy.Use(middleware.Auth(cfg, "admin"))
+		{
+			adminLegacy.GET("/merchants", adminCtl.Merchants)
+			adminLegacy.GET("/merchants/:id", adminCtl.MerchantDetail)
+			adminLegacy.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
+			adminLegacy.PUT("/merchants/:id/payment-config", merchantCtl.ReviewPaymentConfig)
+			adminLegacy.PUT("/merchants/:id/status", adminCtl.UpdateMerchantStatus)
+			adminLegacy.POST("/merchants/:id/subscription/open", adminCtl.OpenMerchantSubscription)
+			adminLegacy.POST("/merchants/:id/subscription/stop", adminCtl.StopMerchantSubscription)
+			adminLegacy.GET("/merchants/:id/subscription-orders", adminCtl.MerchantSubscriptionOrders)
+			adminLegacy.GET("/merchants/:id/store-orders", adminCtl.MerchantStoreOrders)
+			adminLegacy.GET("/merchants/:id/stores", adminCtl.MerchantStores)
+			adminLegacy.POST("/merchants/:id/stores", adminCtl.CreateMerchantStore)
+			adminLegacy.PUT("/merchants/:id/stores/:store_id", adminCtl.UpdateMerchantStore)
+			adminLegacy.DELETE("/merchants/:id/stores/:store_id", adminCtl.DisableMerchantStore)
+			adminLegacy.GET("/merchants/:id/leads", adminCtl.MerchantLeads)
+			adminLegacy.GET("/merchants/:id/leads/stats", adminCtl.MerchantLeadStats)
+			adminLegacy.PUT("/merchants/:id/leads/:lead_id", adminCtl.UpdateMerchantLead)
+			adminLegacy.GET("/merchants/:id/ai/insights", adminCtl.MerchantAIInsights)
+			adminLegacy.POST("/orders/:id/refund", orderCtl.RefundAdminOrder)
+			adminLegacy.GET("/refunds", orderCtl.Refunds)
+			adminLegacy.GET("/audit-logs", adminCtl.AuditLogs)
+		}
+	}
+
+	v1 := engine.Group("/api/v1")
+	{
+		v1.POST("/merchant/register/send-code", merchantCtl.SendRegisterCode)
+		v1.POST("/merchant/register", merchantCtl.Register)
+		v1.POST("/merchant/login", merchantCtl.Login)
+		v1.POST("/auth/register", authCtl.Register)
+		v1.POST("/auth/register/send-code", authCtl.SendRegisterCode)
+		v1.POST("/auth/login", authCtl.Login)
+		v1.POST("/auth/login-by-phone", authCtl.LoginByPhone)
+		v1.POST("/auth/login/send-code", authCtl.SendLoginCode)
+		v1.POST("/auth/forgot-password", authCtl.ForgotPassword)
+		v1.POST("/auth/password/send-code", authCtl.SendPasswordResetCode)
+		v1.POST("/auth/password/reset", authCtl.ResetPasswordByPhone)
+		v1.GET("/packages", packageCtl.ListPublished)
+		v1.POST("/admin/auth/login", authCtl.AdminLogin)
+		v1.POST("/payments/callback/alipay", orderCtl.PaymentCallback)
+		v1.GET("/customer/stores/:id", merchantCtl.PublicStore)
+		v1.GET("/customer/store/:storeId/products", orderCtl.PublicStoreProducts)
+		v1.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
+		v1.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		v1.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
+		if cfg.AppEnv != "production" {
+			v1.POST("/auth/dev/reset-password", authCtl.DevResetPassword)
+		}
+
+		userGroup := v1.Group("/user")
+		userGroup.Use(middleware.Auth(cfg, "user"))
+		{
+			userGroup.GET("/profile", userCtl.Profile)
+			userGroup.POST("/devices/bind", userCtl.BindDevice)
+			userGroup.POST("/phone/send-code", userCtl.SendBindPhoneCode)
+			userGroup.POST("/phone/bind", userCtl.BindPhone)
+			userGroup.POST("/email/send-code", userCtl.SendBindEmailCode)
+			userGroup.POST("/email/bind", userCtl.BindEmail)
+			userGroup.GET("/orders", orderCtl.ListMine)
+			userGroup.GET("/orders/:orderNo", orderCtl.Detail)
+			userGroup.POST("/orders", orderCtl.Create)
+			userGroup.POST("/orders/:orderNo/cancel", orderCtl.Cancel)
+			userGroup.POST("/cards/redeem", orderCtl.RedeemCard)
+		}
+
+		merchantGroup := v1.Group("/merchant")
+		merchantGroup.Use(middleware.Auth(cfg, "merchant"))
+		{
+			merchantGroup.GET("/info", merchantCtl.Info)
+			merchantGroup.GET("/check-subscription", merchantCtl.CheckSubscription)
+			merchantGroup.GET("/subscription", merchantCtl.Subscription)
+			merchantGroup.POST("/subscription/orders", merchantCtl.CreateSubscriptionOrder)
+			merchantGroup.GET("/subscription/orders/:orderNo", merchantCtl.SubscriptionOrderStatus)
+			merchantProtected := merchantGroup.Group("")
+			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
+			{
+				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
+				merchantProtected.GET("/leads", merchantCtl.Leads)
+				merchantProtected.GET("/leads/stats", merchantCtl.LeadStats)
+				merchantProtected.PUT("/info", merchantCtl.UpdateInfo)
+				merchantProtected.GET("/payment-config", merchantCtl.PaymentConfig)
+				merchantProtected.PUT("/payment-config", merchantCtl.SavePaymentConfig)
+				merchantProtected.GET("/stores", merchantCtl.Stores)
+				merchantProtected.POST("/stores", merchantCtl.CreateStore)
+				merchantProtected.PUT("/stores/:id", merchantCtl.UpdateStore)
+				merchantProtected.DELETE("/stores/:id", merchantCtl.DeleteStore)
+				merchantProtected.GET("/stores/:storeId/products", merchantCtl.StoreProducts)
+				merchantProtected.POST("/products", merchantCtl.CreateStoreProduct)
+				merchantProtected.PUT("/products/:id", merchantCtl.UpdateStoreProduct)
+				merchantProtected.DELETE("/products/:id", merchantCtl.DeleteStoreProduct)
+				merchantProtected.GET("/orders", orderCtl.MerchantOrders)
+				merchantProtected.GET("/refunds", orderCtl.MerchantRefunds)
+				merchantProtected.GET("/orders/:id", orderCtl.MerchantOrderDetail)
+				merchantProtected.PUT("/orders/:id/accept", orderCtl.AcceptMerchantOrder)
+				merchantProtected.PUT("/orders/:id/complete", orderCtl.CompleteMerchantOrder)
+				merchantProtected.PUT("/orders/:id/close", orderCtl.CloseMerchantOrder)
+				merchantProtected.PUT("/orders/:id/note", orderCtl.UpdateMerchantOrderNote)
+				merchantProtected.POST("/orders/:id/refund", orderCtl.RefundMerchantOrder)
+				merchantProtected.GET("/promotions", merchantCtl.Promotions)
+				merchantProtected.POST("/promotions/ai-draft", merchantCtl.GeneratePromotionDraft)
+				merchantProtected.POST("/promotions", merchantCtl.CreatePromotion)
+				merchantProtected.PUT("/promotions/:id", merchantCtl.UpdatePromotion)
+				merchantProtected.DELETE("/promotions/:id", merchantCtl.DeletePromotion)
+			}
+		}
+
+		adminGroup := v1.Group("/admin")
+		adminGroup.Use(middleware.Auth(cfg, "admin"))
+		{
+			adminGroup.GET("/dashboard", adminCtl.Dashboard)
+			adminGroup.GET("/audit-logs", adminCtl.AuditLogs)
+			adminGroup.GET("/merchants", adminCtl.Merchants)
+			adminGroup.GET("/merchant-plans", adminCtl.MerchantPlans)
+			adminGroup.POST("/merchant-plans", adminCtl.SaveMerchantPlan)
+			adminGroup.PUT("/merchant-plans/:id", adminCtl.SaveMerchantPlan)
+			adminGroup.GET("/merchants/:id", adminCtl.MerchantDetail)
+			adminGroup.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
+			adminGroup.PUT("/merchants/:id/payment-config", merchantCtl.ReviewPaymentConfig)
+			adminGroup.PUT("/merchants/:id/status", adminCtl.UpdateMerchantStatus)
+			adminGroup.POST("/merchants/:id/subscription/open", adminCtl.OpenMerchantSubscription)
+			adminGroup.POST("/merchants/:id/subscription/stop", adminCtl.StopMerchantSubscription)
+			adminGroup.GET("/merchants/:id/subscription-orders", adminCtl.MerchantSubscriptionOrders)
+			adminGroup.GET("/merchants/:id/store-orders", adminCtl.MerchantStoreOrders)
+			adminGroup.GET("/merchants/:id/stores", adminCtl.MerchantStores)
+			adminGroup.POST("/merchants/:id/stores", adminCtl.CreateMerchantStore)
+			adminGroup.PUT("/merchants/:id/stores/:store_id", adminCtl.UpdateMerchantStore)
+			adminGroup.DELETE("/merchants/:id/stores/:store_id", adminCtl.DisableMerchantStore)
+			adminGroup.GET("/merchants/:id/leads", adminCtl.MerchantLeads)
+			adminGroup.GET("/merchants/:id/leads/stats", adminCtl.MerchantLeadStats)
+			adminGroup.PUT("/merchants/:id/leads/:lead_id", adminCtl.UpdateMerchantLead)
+			adminGroup.GET("/merchants/:id/ai/insights", adminCtl.MerchantAIInsights)
+			adminGroup.GET("/customers", adminCtl.Customers)
+			adminGroup.GET("/users", adminCtl.Users)
+			adminGroup.PUT("/users/:id/status", adminCtl.UpdateUserStatus)
+			adminGroup.PUT("/users/:id/phone", adminCtl.UpdateUserPhone)
+			adminGroup.POST("/users/:id/member", adminCtl.ManualOpenMember)
+			adminGroup.GET("/packages", packageCtl.ListAll)
+			adminGroup.POST("/packages", packageCtl.Save)
+			adminGroup.PUT("/packages/:id", packageCtl.Save)
+			adminGroup.GET("/orders", orderCtl.ListAll)
+			adminGroup.GET("/payments", orderCtl.Payments)
+			adminGroup.POST("/orders/:id/refund", orderCtl.RefundAdminOrder)
+			adminGroup.GET("/refunds", orderCtl.Refunds)
+			adminGroup.POST("/cards/batch", adminCtl.GenerateCards)
+			adminGroup.GET("/cards", adminCtl.Cards)
+			adminGroup.POST("/configs", adminCtl.SaveConfigs)
+			adminGroup.GET("/configs", adminCtl.Configs)
+		}
+	}
+}

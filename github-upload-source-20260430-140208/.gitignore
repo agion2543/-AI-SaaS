@@ -1,0 +1,25 @@
+.env
+.gocache
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+node_modules/
+dist/
+
+# Local database/runtime data
+mysql-data/
+mysql-run/
+*.pid
+
+# Compiled binaries
+*.exe
+*.exe~
+
+# Logs
+*.log
+*.err.log
+
+# Local temp/cache files
+tmp/
+*.tmp

@@ -1,0 +1,68 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: saas-mysql-prod
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-replace-with-root-password}
+      MYSQL_DATABASE: saas_billing
+      MYSQL_USER: saas_user
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-replace-with-db-password}
+      TZ: Asia/Shanghai
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_prod_data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./sql/migrations:/docker-entrypoint-initdb.d/migrations:ro
+    networks:
+      - saas_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-replace-with-root-password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: saas-backend-prod
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - saas_net
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: saas-frontend-prod
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "80:80"
+    networks:
+      - saas_net
+
+volumes:
+  mysql_prod_data:
+
+networks:
+  saas_net:
+    driver: bridge

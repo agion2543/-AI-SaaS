@@ -1,0 +1,13 @@
+.env
+.git
+.gocache
+mysql-data
+mysql-run
+web/node_modules
+web/dist
+*.exe
+*.exe~
+*.log
+*.err.log
+github-upload-source-*.zip
+tmp

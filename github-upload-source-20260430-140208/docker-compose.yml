@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: saas-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: saas_billing
+    ports:
+      - "3306:3306"
+    command:
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: saas-backend
+    restart: unless-stopped
+    depends_on:
+      - mysql
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+
+  frontend:
+    image: node:20-alpine
+    container_name: saas-frontend
+    working_dir: /app
+    restart: unless-stopped
+    volumes:
+      - ./web:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+
+volumes:
+  mysql_data:
