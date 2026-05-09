@@ -20,6 +20,7 @@ function Should-SkipFile {
     ".git/",
     ".gocache/",
     ".github-upload-tmp/",
+    "github-upload-source-",
     "mysql-data/",
     "mysql-run/",
     "web/node_modules/",
