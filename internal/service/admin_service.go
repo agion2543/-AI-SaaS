@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,21 @@ type MerchantSettlementPrepare struct {
 	PeriodStart       *time.Time    `json:"settlement_period_start"`
 	PeriodEnd         *time.Time    `json:"settlement_period_end"`
 	Orders            []model.Order `json:"orders"`
+}
+
+type SecurityCheckItem struct {
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Description string `json:"description"`
+	Suggestion  string `json:"suggestion"`
+}
+
+type SecurityCheckReport struct {
+	OverallStatus string              `json:"overall_status"`
+	GeneratedAt   time.Time           `json:"generated_at"`
+	Environment   string              `json:"environment"`
+	Items         []SecurityCheckItem `json:"items"`
 }
 
 func NewAdminService(cfg *config.Config, db *gorm.DB) *AdminService {
@@ -1051,6 +1067,131 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 	}
 
 	return list, nil
+}
+
+func (s *AdminService) SecurityCheck() SecurityCheckReport {
+	items := []SecurityCheckItem{
+		s.checkAdminPassword(),
+		s.checkProductionEnv(),
+		s.checkSecrets(),
+		s.checkDatabaseConfig(),
+		s.checkAlipayConfig(),
+		s.checkBackupScripts(),
+		s.checkRateLimit(),
+		s.checkCORS(),
+		s.checkLogging(),
+	}
+	overall := "pass"
+	for _, item := range items {
+		if item.Status == "danger" {
+			overall = "danger"
+			break
+		}
+		if item.Status == "warning" && overall != "danger" {
+			overall = "warning"
+		}
+	}
+	return SecurityCheckReport{
+		OverallStatus: overall,
+		GeneratedAt:   time.Now(),
+		Environment:   s.cfg.AppEnv,
+		Items:         items,
+	}
+}
+
+func (s *AdminService) checkAdminPassword() SecurityCheckItem {
+	var admin model.AdminUser
+	err := s.db.Where("username = ?", "admin").First(&admin).Error
+	if err != nil {
+		return securityItem("admin_password", "默认管理员密码", "warning", "未找到默认 admin 账号。", "确认生产环境至少存在一个独立管理员账号，并妥善保管密码。")
+	}
+	if utils.CheckPassword(admin.PasswordHash, "Admin@123456") {
+		return securityItem("admin_password", "默认管理员密码", "danger", "默认管理员密码仍为 Admin@123456。", "上线前必须修改 admin 密码，避免被扫描登录。")
+	}
+	return securityItem("admin_password", "默认管理员密码", "pass", "默认管理员密码已修改。", "继续定期轮换管理员密码，并启用强密码策略。")
+}
+
+func (s *AdminService) checkProductionEnv() SecurityCheckItem {
+	if strings.EqualFold(s.cfg.AppEnv, "production") {
+		return securityItem("app_env", "生产环境标识", "pass", "APP_ENV 已设置为 production。", "保持生产环境与测试环境配置隔离。")
+	}
+	return securityItem("app_env", "生产环境标识", "warning", "当前 APP_ENV 不是 production。", "正式上线前将 APP_ENV 设置为 production，关闭开发测试能力。")
+}
+
+func (s *AdminService) checkSecrets() SecurityCheckItem {
+	weakJWT := s.cfg.JWTSecret == "" || s.cfg.JWTSecret == "replace-with-a-very-strong-secret" || len(s.cfg.JWTSecret) < 32
+	weakAES := s.cfg.AESSecret == "" || s.cfg.AESSecret == "0123456789abcdef0123456789abcdef" || len(s.cfg.AESSecret) != 32
+	if weakJWT || weakAES {
+		return securityItem("secrets", "密钥配置", "danger", "JWT_SECRET 或 AES_SECRET 仍为默认/弱配置。", "生产环境使用随机生成的强密钥，AES_SECRET 必须为 32 字符。")
+	}
+	return securityItem("secrets", "密钥配置", "pass", "JWT 与 AES 密钥格式符合上线要求。", "不要把生产密钥提交到 GitHub。")
+}
+
+func (s *AdminService) checkDatabaseConfig() SecurityCheckItem {
+	dsn := strings.ToLower(s.cfg.MySQLDSN)
+	if strings.Contains(dsn, "root:") || strings.Contains(dsn, "127.0.0.1") || strings.Contains(dsn, "localhost") {
+		return securityItem("database", "数据库配置", "warning", "数据库仍使用本地或 root 连接配置。", "生产环境建议创建独立 MySQL 用户，限制权限并配置备份策略。")
+	}
+	return securityItem("database", "数据库配置", "pass", "数据库连接看起来已使用非本地生产配置。", "继续确认数据库安全组、备份和最小权限。")
+}
+
+func (s *AdminService) checkAlipayConfig() SecurityCheckItem {
+	if s.cfg.AlipayAppID == "" || s.cfg.AlipayPrivateKey == "" || s.cfg.AlipayPublicKey == "" {
+		return securityItem("alipay", "支付宝配置", "danger", "支付宝 APPID、应用私钥或支付宝公钥未完整配置。", "上线前填写支付宝正式环境配置，并使用公网 HTTPS 回调地址。")
+	}
+	if s.cfg.AlipaySandbox {
+		return securityItem("alipay", "支付宝配置", "warning", "当前仍处于支付宝沙箱模式。", "正式上线前切换到正式应用，并重新验证支付、回调和退款。")
+	}
+	if !strings.HasPrefix(strings.ToLower(s.cfg.AlipayNotifyURL), "https://") {
+		return securityItem("alipay", "支付宝配置", "warning", "支付宝回调地址不是 HTTPS。", "生产环境必须使用公网 HTTPS 回调地址。")
+	}
+	return securityItem("alipay", "支付宝配置", "pass", "支付宝正式配置看起来完整。", "上线前做一笔小额真实支付和退款验证。")
+}
+
+func (s *AdminService) checkBackupScripts() SecurityCheckItem {
+	windowsOK := fileExists("scripts/backup-mysql.ps1")
+	linuxOK := fileExists("scripts/backup-mysql.sh")
+	if windowsOK && linuxOK {
+		return securityItem("backup", "数据库备份脚本", "pass", "已提供 Windows 和 Linux 数据库备份脚本。", "上线后配置 Windows 计划任务或 Linux cron 定时执行。")
+	}
+	return securityItem("backup", "数据库备份脚本", "warning", "数据库备份脚本不完整。", "补齐备份脚本，并定期演练恢复。")
+}
+
+func (s *AdminService) checkRateLimit() SecurityCheckItem {
+	if s.cfg.RateLimitPerMinute <= 0 {
+		return securityItem("rate_limit", "限流中间件", "danger", "RATE_LIMIT_PER_MINUTE 未启用或配置无效。", "生产环境必须开启 API 限流，建议按业务压测后设置。")
+	}
+	if s.cfg.RateLimitPerMinute > 600 {
+		return securityItem("rate_limit", "限流中间件", "warning", "当前限流阈值偏高。", "根据业务量设置更合理的限流阈值。")
+	}
+	return securityItem("rate_limit", "限流中间件", "pass", "限流中间件已配置。", "继续观察登录、支付、短信验证码等高风险接口。")
+}
+
+func (s *AdminService) checkCORS() SecurityCheckItem {
+	frontend := strings.ToLower(s.cfg.FrontendURL)
+	if frontend == "" || strings.Contains(frontend, "localhost") || strings.Contains(frontend, "127.0.0.1") {
+		return securityItem("cors", "跨域配置", "warning", "FRONTEND_URL 仍是本地开发地址。", "生产环境改为正式域名，避免宽泛跨域。")
+	}
+	if !strings.HasPrefix(frontend, "https://") {
+		return securityItem("cors", "跨域配置", "warning", "FRONTEND_URL 不是 HTTPS。", "生产环境建议全站 HTTPS。")
+	}
+	return securityItem("cors", "跨域配置", "pass", "跨域来源已指向正式 HTTPS 域名。", "保持只允许可信前端域名。")
+}
+
+func (s *AdminService) checkLogging() SecurityCheckItem {
+	if strings.EqualFold(s.cfg.AppEnv, "production") {
+		return securityItem("logging", "请求日志与审计", "pass", "请求日志和操作审计已在后端注册。", "生产环境建议接入日志文件轮转或云日志服务。")
+	}
+	return securityItem("logging", "请求日志与审计", "warning", "当前为开发环境日志。", "上线前配置日志留存、错误告警和审计查询。")
+}
+
+func securityItem(key, title, status, description, suggestion string) SecurityCheckItem {
+	return SecurityCheckItem{Key: key, Title: title, Status: status, Description: description, Suggestion: suggestion}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func isValidAdminManagedPhone(phone string) bool {

@@ -38,7 +38,7 @@
         <el-menu-item index="/admin/packages">
           <div class="menu-item">
             <strong>平台套餐</strong>
-            <span>卖给商家的月付 / 年付</span>
+            <span>售卖给商家的月付 / 年付</span>
           </div>
         </el-menu-item>
         <el-menu-item index="/admin/orders">
@@ -64,7 +64,7 @@
         <el-menu-item index="/admin/system">
           <div class="menu-item">
             <strong>系统配置</strong>
-            <span>站点、支付、公告、备案</span>
+            <span>安全检查、站点、支付、备份</span>
           </div>
         </el-menu-item>
       </el-menu>

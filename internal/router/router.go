@@ -136,6 +136,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.POST("/orders/:id/refund", orderCtl.RefundAdminOrder)
 			adminLegacy.GET("/refunds", orderCtl.Refunds)
 			adminLegacy.GET("/audit-logs", adminCtl.AuditLogs)
+			adminLegacy.GET("/security-check", adminCtl.SecurityCheck)
 		}
 	}
 
@@ -227,6 +228,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		{
 			adminGroup.GET("/dashboard", adminCtl.Dashboard)
 			adminGroup.GET("/audit-logs", adminCtl.AuditLogs)
+			adminGroup.GET("/security-check", adminCtl.SecurityCheck)
 			adminGroup.GET("/merchants", adminCtl.Merchants)
 			adminGroup.GET("/merchant-plans", adminCtl.MerchantPlans)
 			adminGroup.POST("/merchant-plans", adminCtl.SaveMerchantPlan)

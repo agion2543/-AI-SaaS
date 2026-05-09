@@ -62,6 +62,7 @@ export const deleteMerchantPromotion = (id) => http.delete(`/merchant/promotions
 export const adminLogin = (payload) => http.post('/admin/auth/login', payload)
 export const fetchDashboard = (params) => http.get('/admin/dashboard', { params })
 export const fetchAuditLogs = (params) => http.get('/admin/audit-logs', { params })
+export const fetchSecurityCheck = () => http.get('/admin/security-check')
 export const fetchMerchants = (params) => http.get('/admin/merchants', { params })
 export const fetchMerchantPlans = () => http.get('/admin/merchant-plans')
 export const createMerchantPlan = (payload) => http.post('/admin/merchant-plans', payload)

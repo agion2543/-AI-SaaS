@@ -533,6 +533,10 @@ func (ctl *AdminController) Configs(c *gin.Context) {
 	utils.Success(c, list)
 }
 
+func (ctl *AdminController) SecurityCheck(c *gin.Context) {
+	utils.Success(c, ctl.admin.SecurityCheck())
+}
+
 func atoi(v string) int {
 	value, _ := strconv.Atoi(v)
 	return value
