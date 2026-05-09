@@ -90,6 +90,7 @@ const routes = [
   },
   { path: '/customer/store/:storeId', component: CustomerStoreView },
   { path: '/customer/order-success', component: CustomerOrderSuccessView },
+  { path: '/customer/orders/:orderNo', component: CustomerOrderSuccessView },
   {
     path: '/portal',
     component: UserLayout,

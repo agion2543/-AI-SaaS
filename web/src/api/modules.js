@@ -14,6 +14,7 @@ export const fetchCustomerStoreProducts = (storeId) => http.get(`/customer/store
 export const submitCustomerLead = (id, payload) => http.post(`/customer/stores/${id}/leads`, payload)
 export const createCustomerStoreOrder = (payload) => http.post('/customer/orders', payload)
 export const fetchCustomerOrder = (orderNo) => http.get(`/customer/orders/${orderNo}`)
+export const retryCustomerOrderPayment = (orderNo, payload) => http.post(`/customer/orders/${orderNo}/retry`, payload)
 export const fetchUserProfile = () => http.get('/user/profile')
 export const sendBindEmailCode = (payload) => http.post('/user/email/send-code', payload)
 export const bindUserEmail = (payload) => http.post('/user/email/bind', payload)

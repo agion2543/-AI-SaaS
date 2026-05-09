@@ -394,7 +394,7 @@ const startPolling = (orderNo) => {
         stopPolling()
         qrDialogVisible.value = false
         cartVisible.value = false
-        router.push(`/customer/order-success?orderNo=${encodeURIComponent(orderNo)}`)
+        router.push(`/customer/orders/${encodeURIComponent(orderNo)}`)
       }
     } catch {
       // Keep the QR dialog open if a temporary polling request fails.
@@ -450,6 +450,9 @@ const checkout = async () => {
       return
     }
     ElMessage.success(t.orderCreated)
+    if (order?.order_no) {
+      router.push(`/customer/orders/${encodeURIComponent(order.order_no)}`)
+    }
   } catch (err) {
     ElMessage.error(err.response?.data?.message || t.orderFailed)
   } finally {

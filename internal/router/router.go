@@ -65,6 +65,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		apiLegacy.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		apiLegacy.POST("/customer/orders", orderCtl.CreateCustomerOrder)
 		apiLegacy.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
+		apiLegacy.POST("/customer/orders/:orderNo/retry", orderCtl.RetryCustomerOrderPayment)
 
 		merchantLegacy := apiLegacy.Group("/merchant")
 		merchantLegacy.Use(middleware.Auth(cfg, "merchant"))
@@ -154,6 +155,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		v1.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		v1.POST("/customer/orders", orderCtl.CreateCustomerOrder)
 		v1.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
+		v1.POST("/customer/orders/:orderNo/retry", orderCtl.RetryCustomerOrderPayment)
 		if cfg.AppEnv != "production" {
 			v1.POST("/auth/dev/reset-password", authCtl.DevResetPassword)
 		}

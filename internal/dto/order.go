@@ -22,6 +22,10 @@ type CreateCustomerOrderRequest struct {
 	Items          []CustomerOrderItemRequest `json:"items" binding:"required"`
 }
 
+type RetryCustomerOrderPaymentRequest struct {
+	PayMode string `json:"pay_mode"`
+}
+
 type MerchantOrderFilterRequest struct {
 	Status   string `form:"status"`
 	StoreID  uint   `form:"store_id"`

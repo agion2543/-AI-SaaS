@@ -98,6 +98,25 @@ func (ctl *OrderController) CustomerOrderDetail(c *gin.Context) {
 	utils.Success(c, gin.H{"order": serializeOrder(order)})
 }
 
+func (ctl *OrderController) RetryCustomerOrderPayment(c *gin.Context) {
+	var req dto.RetryCustomerOrderPaymentRequest
+	_ = c.ShouldBindJSON(&req)
+
+	order, err := ctl.service.PrepareCustomerOrderRetry(c.Param("orderNo"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.Success(c, gin.H{"order": serializeOrder(order), "payment": payment})
+}
+
 func (ctl *OrderController) ListMine(c *gin.Context) {
 	orders, err := ctl.service.UserOrders(c.GetUint("user_id"))
 	if err != nil {

@@ -220,6 +220,27 @@ func (s *OrderService) PublicOrderDetail(orderNo string) (*model.Order, error) {
 	return order, nil
 }
 
+func (s *OrderService) PrepareCustomerOrderRetry(orderNo string) (*model.Order, error) {
+	order, err := s.orders.FindByOrderNo(orderNo)
+	if err != nil {
+		return nil, errors.New("order not found")
+	}
+	if order.OrderType != "store_order" {
+		return nil, errors.New("order not found")
+	}
+	if order.Status != "pending" && order.Status != "failed" {
+		return nil, errors.New("order status does not allow payment retry")
+	}
+	if order.Status == "failed" {
+		order.Status = "pending"
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "payment_retry", "顾客重新发起支付")
+		if err := s.orders.Save(order); err != nil {
+			return nil, err
+		}
+	}
+	return order, nil
+}
+
 func (s *OrderService) applyPackageToUser(user *model.User, pkg *model.MembershipPackage, autoRenew bool) error {
 	now := time.Now()
 	base := now
