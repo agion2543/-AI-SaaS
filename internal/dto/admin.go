@@ -74,3 +74,11 @@ type SaveSystemConfigRequest struct {
 	FilingInfo     string `json:"filing_info"`
 	Notice         string `json:"notice"`
 }
+
+type CreateMerchantSettlementRequest struct {
+	Remark string `json:"remark"`
+}
+
+type MarkMerchantSettlementPaidRequest struct {
+	Remark string `json:"remark"`
+}

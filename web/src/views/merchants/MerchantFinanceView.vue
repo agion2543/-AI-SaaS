@@ -4,26 +4,29 @@
       <div>
         <div class="eyebrow">FINANCE CENTER</div>
         <h2 class="page-title">财务对账</h2>
-        <p class="muted">按顾客扫码点单的已支付订单核对收入、退款和净实收。商家订阅费不计入这里。</p>
+        <p class="muted">
+          仅统计顾客扫码点单的已支付订单，商家订阅费用不计入本页，方便商家核对真实经营收入。
+        </p>
       </div>
       <div class="hero-actions">
-        <el-button @click="exportIncomeCsv">导出收入</el-button>
+        <el-button @click="exportIncomeCsv">导出收入 CSV</el-button>
+        <el-button @click="exportRefundCsv">导出退款 CSV</el-button>
         <el-button type="primary" :loading="loading" @click="load">刷新财务</el-button>
       </div>
     </section>
 
     <section class="finance-note page-card">
       <div>
-        <strong>收款账户</strong>
-        <span>建议顾客付款直达商家自己的支付宝/微信账户，平台只记录流水用于对账。</span>
+        <strong>收款口径</strong>
+        <span>当前建议顾客付款直达商家自己的支付宝/微信账户，平台只做订单流水和对账记录。</span>
       </div>
       <div>
-        <strong>提现口径</strong>
-        <span>如果款项已直达商家账户，这里展示的是“可核对净收入”，不需要平台二次提现。</span>
+        <strong>净收入</strong>
+        <span>净收入 = 已支付订单实付金额 - 已记录退款金额，用于核对门店实际经营结果。</span>
       </div>
       <div>
         <strong>后续扩展</strong>
-        <span>如接入官方服务商分账，可继续增加结算批次、提现申请和到账状态。</span>
+        <span>如果后续接官方服务商分账，可继续增加结算批次、提现申请和到账状态。</span>
       </div>
     </section>
 
@@ -40,12 +43,18 @@
       <el-select v-model="filters.storeId" clearable placeholder="全部门店">
         <el-option v-for="store in stores" :key="store.id" :label="store.name" :value="store.id" />
       </el-select>
-      <el-select v-model="filters.status" clearable placeholder="全部状态">
+      <el-select v-model="filters.paymentChannel" clearable placeholder="全部支付渠道">
+        <el-option label="支付宝" value="alipay" />
+        <el-option label="微信/模拟" value="mock_wechat" />
+        <el-option label="其他渠道" value="other" />
+      </el-select>
+      <el-select v-model="filters.status" clearable placeholder="全部订单状态">
         <el-option label="待接单" value="received" />
         <el-option label="已接单" value="accepted" />
         <el-option label="已完成" value="completed" />
         <el-option label="已关闭" value="closed" />
       </el-select>
+      <el-button type="primary" plain @click="load">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
     </section>
 
@@ -59,12 +68,16 @@
         <strong>{{ formatMoney(totalPaid) }}</strong>
       </div>
       <div class="stat-card">
-        <span>已退款</span>
+        <span>退款金额</span>
         <strong>{{ formatMoney(totalRefunded) }}</strong>
       </div>
       <div class="stat-card highlight">
-        <span>净实收</span>
+        <span>净收入</span>
         <strong>{{ formatMoney(netIncome) }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>客单价</span>
+        <strong>{{ formatMoney(avgPaid) }}</strong>
       </div>
     </section>
 
@@ -77,16 +90,19 @@
               <template #default="{ row }">{{ row.store?.name || '-' }}</template>
             </el-table-column>
             <el-table-column prop="customer_phone" label="顾客手机号" min-width="130" />
-            <el-table-column label="订单实付" width="120">
-              <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
+            <el-table-column label="支付渠道" width="120">
+              <template #default="{ row }">{{ channelLabel(row.payment_channel) }}</template>
             </el-table-column>
-            <el-table-column label="已退款" width="120">
+            <el-table-column label="订单实付" width="120">
+              <template #default="{ row }">{{ formatMoney(orderPaidAmount(row)) }}</template>
+            </el-table-column>
+            <el-table-column label="退款金额" width="120">
               <template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template>
             </el-table-column>
-            <el-table-column label="净实收" width="120">
+            <el-table-column label="净收入" width="120">
               <template #default="{ row }"><strong>{{ formatMoney(netReceived(row)) }}</strong></template>
             </el-table-column>
-            <el-table-column label="状态" width="120">
+            <el-table-column label="状态" width="110">
               <template #default="{ row }">
                 <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
               </template>
@@ -103,6 +119,9 @@
             <el-table-column label="关联订单" min-width="190">
               <template #default="{ row }">{{ row.order?.order_no || row.order_id }}</template>
             </el-table-column>
+            <el-table-column label="门店" min-width="130">
+              <template #default="{ row }">{{ storeName(row.store_id || row.order?.store_id) }}</template>
+            </el-table-column>
             <el-table-column label="退款金额" width="120">
               <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
             </el-table-column>
@@ -110,21 +129,28 @@
             <el-table-column label="操作方" width="120">
               <template #default="{ row }">{{ row.operator_role === 'admin' ? '平台后台' : '商家端' }}</template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag type="success">{{ row.status || 'success' }}</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="创建时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="提现 / 结算">
+        <el-tab-pane label="结算说明">
           <div class="settlement-card">
             <h3>当前结算建议</h3>
-            <p>当前阶段建议采用“顾客直付商家账户”模式，因此商家无需向平台申请提现；平台仅用于核对订单、退款和净收入。</p>
+            <p>
+              前期采用“顾客直付商家账户”更稳妥，平台不碰经营流水，只收 SaaS 订阅费并保存订单、退款和对账数据。
+              这样能降低二清与资金清分风险。
+            </p>
             <div class="settlement-grid">
               <div><span>可核对净收入</span><strong>{{ formatMoney(netIncome) }}</strong></div>
               <div><span>结算方式</span><strong>商家自有收款账户</strong></div>
-              <div><span>平台处理</span><strong>仅记录流水，不代收</strong></div>
+              <div><span>平台处理</span><strong>记录流水，不代收</strong></div>
             </div>
           </div>
         </el-tab-pane>
@@ -141,19 +167,20 @@ const loading = ref(false)
 const orders = ref([])
 const refunds = ref([])
 const stores = ref([])
-const filters = reactive({ dateRange: [], storeId: undefined, status: '' })
+const filters = reactive({ dateRange: [], storeId: undefined, status: '', paymentChannel: '' })
 const paidStatuses = ['received', 'accepted', 'completed', 'closed']
 
-const paidOrders = computed(() => orders.value.filter((item) => paidStatuses.includes(item.status)))
+const paidOrders = computed(() => orders.value.filter((item) => item.order_type === 'store_order' && paidStatuses.includes(item.status)))
 const filteredPaidOrders = computed(() => paidOrders.value.filter((item) => matchFilters(item)))
 const filteredRefunds = computed(() => refunds.value.filter((item) => {
   if (!matchDate(item.created_at)) return false
   if (filters.storeId && Number(item.store_id || item.order?.store_id) !== Number(filters.storeId)) return false
   return true
 }))
-const totalPaid = computed(() => filteredPaidOrders.value.reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
+const totalPaid = computed(() => filteredPaidOrders.value.reduce((sum, item) => sum + orderPaidAmount(item), 0))
 const totalRefunded = computed(() => filteredRefunds.value.reduce((sum, item) => sum + Number(item.amount || 0), 0))
 const netIncome = computed(() => Math.max(totalPaid.value - totalRefunded.value, 0))
+const avgPaid = computed(() => filteredPaidOrders.value.length ? Math.round(totalPaid.value / filteredPaidOrders.value.length) : 0)
 
 const load = async () => {
   loading.value = true
@@ -175,12 +202,14 @@ const resetFilters = () => {
   filters.dateRange = []
   filters.storeId = undefined
   filters.status = ''
+  filters.paymentChannel = ''
 }
 
 const matchFilters = (item) => {
   if (!matchDate(item.paid_at || item.updated_at)) return false
   if (filters.storeId && Number(item.store_id) !== Number(filters.storeId)) return false
   if (filters.status && item.status !== filters.status) return false
+  if (filters.paymentChannel && normalizedChannel(item.payment_channel) !== filters.paymentChannel) return false
   return true
 }
 
@@ -190,28 +219,41 @@ const matchDate = (value) => {
   return day >= filters.dateRange[0] && day <= filters.dateRange[1]
 }
 
-const netReceived = (row) => {
-  if (!paidStatuses.includes(row.status)) return 0
-  return Math.max(Number(row.total_amount || row.amount || 0) - Number(row.refunded_amount || 0), 0)
-}
+const orderPaidAmount = (row) => Number(row.total_amount || row.amount || 0)
+const netReceived = (row) => Math.max(orderPaidAmount(row) - Number(row.refunded_amount || 0), 0)
 
 const exportIncomeCsv = () => {
   const rows = filteredPaidOrders.value.map((item) => ({
     订单号: item.order_no,
     门店: item.store?.name || '',
     顾客手机号: item.customer_phone || '',
-    订单实付: (Number(item.total_amount || item.amount || 0) / 100).toFixed(2),
-    已退款: (Number(item.refunded_amount || 0) / 100).toFixed(2),
-    净实收: (netReceived(item) / 100).toFixed(2),
+    支付渠道: channelLabel(item.payment_channel),
+    订单实付元: centsToYuan(orderPaidAmount(item)),
+    退款金额元: centsToYuan(item.refunded_amount),
+    净收入元: centsToYuan(netReceived(item)),
     状态: statusLabel(item.status),
     支付时间: formatTime(item.paid_at || item.updated_at)
   }))
-  downloadCsv('merchant-finance.csv', rows)
+  downloadCsv('merchant-income.csv', rows)
+}
+
+const exportRefundCsv = () => {
+  const rows = filteredRefunds.value.map((item) => ({
+    退款单号: item.refund_no,
+    关联订单: item.order?.order_no || item.order_id,
+    门店: storeName(item.store_id || item.order?.store_id),
+    退款金额元: centsToYuan(item.amount),
+    退款原因: item.reason || '',
+    操作方: item.operator_role === 'admin' ? '平台后台' : '商家端',
+    状态: item.status || '',
+    创建时间: formatTime(item.created_at)
+  }))
+  downloadCsv('merchant-refunds.csv', rows)
 }
 
 const downloadCsv = (filename, rows) => {
-  const headers = Object.keys(rows[0] || { 暂无数据: '' })
   const body = rows.length ? rows : [{ 暂无数据: '' }]
+  const headers = Object.keys(body[0])
   const csv = [headers.join(','), ...body.map((row) => headers.map((key) => `"${String(row[key] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n')
   const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
@@ -221,7 +263,19 @@ const downloadCsv = (filename, rows) => {
   URL.revokeObjectURL(link.href)
 }
 
-const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
+const storeName = (storeId) => stores.value.find((item) => Number(item.id) === Number(storeId))?.name || '-'
+const normalizedChannel = (value) => {
+  if (value === 'alipay') return 'alipay'
+  if (value === 'mock_wechat') return 'mock_wechat'
+  return 'other'
+}
+const channelLabel = (value) => ({
+  alipay: '支付宝',
+  mock_wechat: '微信/模拟',
+  other: '其他渠道'
+}[normalizedChannel(value)])
+const centsToYuan = (value) => (Number(value || 0) / 100).toFixed(2)
+const formatMoney = (value) => `¥${centsToYuan(value)}`
 const formatTime = (value) => value ? String(value).replace('T', ' ').slice(0, 19) : '-'
 const statusLabel = (status) => ({
   received: '待接单',
@@ -356,5 +410,11 @@ onMounted(load)
 
 .settlement-grid strong {
   margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .hero-card {
+    display: grid;
+  }
 }
 </style>

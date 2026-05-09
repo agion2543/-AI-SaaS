@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -76,6 +77,37 @@ func (s *AlipayService) VerifyNotification(values url.Values) error {
 		return errors.New("alipay sandbox is not configured")
 	}
 	return s.client.VerifySign(context.Background(), values)
+}
+
+func (s *AlipayService) Refund(order *model.Order, refundNo string, amount int64, reason string) (string, error) {
+	if !s.Enabled() {
+		return "", errors.New("alipay sandbox is not configured")
+	}
+	if order.TransactionNo == "" && order.OrderNo == "" {
+		return "", errors.New("alipay transaction number is missing")
+	}
+
+	param := alipay.TradeRefund{
+		OutTradeNo:   order.OrderNo,
+		TradeNo:      order.TransactionNo,
+		RefundAmount: utils.FenToYuan(amount),
+		RefundReason: reason,
+		OutRequestNo: refundNo,
+		QueryOptions: []string{"refund_detail_item_list"},
+		AppAuthToken: "",
+	}
+	result, err := s.client.TradeRefund(context.Background(), param)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", errors.New("alipay refund returned empty response")
+	}
+	if result.IsFailure() {
+		return "", fmt.Errorf("alipay refund failed: %s %s", result.Code, result.Msg)
+	}
+	raw, _ := json.Marshal(result)
+	return string(raw), nil
 }
 
 func (s *AlipayService) buildPagePayload(order *model.Order) (*AlipayCheckoutPayload, error) {

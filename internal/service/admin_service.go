@@ -31,6 +31,17 @@ type AdminService struct {
 	systems   *repository.SystemRepository
 }
 
+type MerchantSettlementPrepare struct {
+	MerchantID        uint          `json:"merchant_id"`
+	OrderCount        int           `json:"order_count"`
+	TotalAmountCents  int64         `json:"total_amount_cents"`
+	RefundAmountCents int64         `json:"refund_amount_cents"`
+	NetAmountCents    int64         `json:"net_amount_cents"`
+	PeriodStart       *time.Time    `json:"settlement_period_start"`
+	PeriodEnd         *time.Time    `json:"settlement_period_end"`
+	Orders            []model.Order `json:"orders"`
+}
+
 func NewAdminService(cfg *config.Config, db *gorm.DB) *AdminService {
 	return &AdminService{
 		cfg:       cfg,
@@ -341,6 +352,158 @@ func (s *AdminService) ListMerchantStoreOrders(merchantID uint, limit int) ([]mo
 		Limit(limit).
 		Find(&orders).Error
 	return orders, err
+}
+
+func (s *AdminService) PrepareMerchantSettlement(merchantID uint) (*MerchantSettlementPrepare, error) {
+	if _, err := s.merchants.FindByID(merchantID); err != nil {
+		return nil, errors.New("商家不存在")
+	}
+	orders, err := s.unsettledMerchantOrders(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	prepare := &MerchantSettlementPrepare{
+		MerchantID: merchantID,
+		Orders:     orders,
+	}
+	for i := range orders {
+		order := orders[i]
+		prepare.OrderCount++
+		prepare.TotalAmountCents += settlementOrderAmount(order)
+		prepare.RefundAmountCents += order.RefundedAmount
+		if prepare.PeriodStart == nil || order.CreatedAt.Before(*prepare.PeriodStart) {
+			t := order.CreatedAt
+			prepare.PeriodStart = &t
+		}
+		if prepare.PeriodEnd == nil || order.CreatedAt.After(*prepare.PeriodEnd) {
+			t := order.CreatedAt
+			prepare.PeriodEnd = &t
+		}
+	}
+	prepare.NetAmountCents = prepare.TotalAmountCents - prepare.RefundAmountCents
+	if prepare.NetAmountCents < 0 {
+		prepare.NetAmountCents = 0
+	}
+	return prepare, nil
+}
+
+func (s *AdminService) CreateMerchantSettlement(merchantID uint, req dto.CreateMerchantSettlementRequest) (*model.MerchantSettlement, []model.Order, error) {
+	if _, err := s.merchants.FindByID(merchantID); err != nil {
+		return nil, nil, errors.New("商家不存在")
+	}
+	remark := strings.TrimSpace(req.Remark)
+	var settlement model.MerchantSettlement
+	var settledOrders []model.Order
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		orders, err := s.unsettledMerchantOrdersTx(tx, merchantID)
+		if err != nil {
+			return err
+		}
+		if len(orders) == 0 {
+			return errors.New("暂无可结算订单")
+		}
+		var total, refunded int64
+		var periodStart, periodEnd *time.Time
+		orderIDs := make([]uint, 0, len(orders))
+		for i := range orders {
+			order := orders[i]
+			orderIDs = append(orderIDs, order.ID)
+			total += settlementOrderAmount(order)
+			refunded += order.RefundedAmount
+			if periodStart == nil || order.CreatedAt.Before(*periodStart) {
+				t := order.CreatedAt
+				periodStart = &t
+			}
+			if periodEnd == nil || order.CreatedAt.After(*periodEnd) {
+				t := order.CreatedAt
+				periodEnd = &t
+			}
+		}
+		net := total - refunded
+		if net < 0 {
+			net = 0
+		}
+		settlement = model.MerchantSettlement{
+			MerchantID:            merchantID,
+			SettlementPeriodStart: periodStart,
+			SettlementPeriodEnd:   periodEnd,
+			OrderCount:            len(orders),
+			TotalAmountCents:      total,
+			RefundAmountCents:     refunded,
+			NetAmountCents:        net,
+			Status:                "pending",
+			Remark:                remark,
+		}
+		if err := tx.Create(&settlement).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Order{}).Where("id IN ?", orderIDs).Update("settlement_id", settlement.ID).Error; err != nil {
+			return err
+		}
+		settledOrders = orders
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &settlement, settledOrders, nil
+}
+
+func (s *AdminService) ListMerchantSettlements(merchantID uint) ([]model.MerchantSettlement, error) {
+	var list []model.MerchantSettlement
+	err := s.db.Where("merchant_id = ?", merchantID).Order("id desc").Find(&list).Error
+	return list, err
+}
+
+func (s *AdminService) GetMerchantSettlement(id uint) (*model.MerchantSettlement, []model.Order, error) {
+	var settlement model.MerchantSettlement
+	if err := s.db.Preload("Merchant").First(&settlement, id).Error; err != nil {
+		return nil, nil, err
+	}
+	var orders []model.Order
+	err := s.db.Preload("Store").
+		Where("settlement_id = ?", settlement.ID).
+		Order("created_at desc").
+		Find(&orders).Error
+	return &settlement, orders, err
+}
+
+func (s *AdminService) MarkMerchantSettlementPaid(id uint, req dto.MarkMerchantSettlementPaidRequest) (*model.MerchantSettlement, error) {
+	var settlement model.MerchantSettlement
+	if err := s.db.First(&settlement, id).Error; err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	settlement.Status = "paid"
+	settlement.PaidAt = &now
+	if remark := strings.TrimSpace(req.Remark); remark != "" {
+		settlement.Remark = remark
+	}
+	if err := s.db.Save(&settlement).Error; err != nil {
+		return nil, err
+	}
+	return &settlement, nil
+}
+
+func (s *AdminService) unsettledMerchantOrders(merchantID uint) ([]model.Order, error) {
+	return s.unsettledMerchantOrdersTx(s.db, merchantID)
+}
+
+func (s *AdminService) unsettledMerchantOrdersTx(tx *gorm.DB, merchantID uint) ([]model.Order, error) {
+	var orders []model.Order
+	err := tx.Preload("Store").
+		Where("merchant_id = ? AND order_type = ? AND settlement_id IS NULL", merchantID, "store_order").
+		Where("status IN ?", []string{"accepted", "completed"}).
+		Order("created_at asc").
+		Find(&orders).Error
+	return orders, err
+}
+
+func settlementOrderAmount(order model.Order) int64 {
+	if order.TotalAmount > 0 {
+		return order.TotalAmount
+	}
+	return order.Amount
 }
 
 func (s *AdminService) ListMerchantStores(merchantID uint, page, pageSize int) ([]model.Store, int64, error) {

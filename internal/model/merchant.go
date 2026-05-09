@@ -39,3 +39,18 @@ type MerchantPaymentConfig struct {
 	ContactPhone string   `gorm:"size:30" json:"contact_phone"`
 	Remark       string   `gorm:"size:255" json:"remark"`
 }
+
+type MerchantSettlement struct {
+	BaseModel
+	MerchantID            uint       `gorm:"index;not null" json:"merchant_id"`
+	Merchant              Merchant   `json:"merchant,omitempty"`
+	SettlementPeriodStart *time.Time `json:"settlement_period_start"`
+	SettlementPeriodEnd   *time.Time `json:"settlement_period_end"`
+	OrderCount            int        `gorm:"default:0" json:"order_count"`
+	TotalAmountCents      int64      `gorm:"default:0" json:"total_amount_cents"`
+	RefundAmountCents     int64      `gorm:"default:0" json:"refund_amount_cents"`
+	NetAmountCents        int64      `gorm:"default:0" json:"net_amount_cents"`
+	Status                string     `gorm:"size:20;default:pending;index" json:"status"`
+	PaidAt                *time.Time `json:"paid_at"`
+	Remark                string     `gorm:"size:255" json:"remark"`
+}

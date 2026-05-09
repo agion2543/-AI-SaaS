@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/csv"
 	"net/http"
 	"strconv"
 
@@ -142,6 +143,115 @@ func (ctl *AdminController) MerchantStoreOrders(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"list": orders})
+}
+
+func (ctl *AdminController) MerchantSettlementPrepare(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	data, err := ctl.admin.PrepareMerchantSettlement(id)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, data)
+}
+
+func (ctl *AdminController) MerchantSettlements(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	list, err := ctl.admin.ListMerchantSettlements(id)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": list})
+}
+
+func (ctl *AdminController) CreateMerchantSettlement(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.CreateMerchantSettlementRequest
+	_ = c.ShouldBindJSON(&req)
+	settlement, orders, err := ctl.admin.CreateMerchantSettlement(id, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctl.audit.Record(c, service.AuditRecordInput{
+		Action:     "merchant_settlement_create",
+		TargetType: "merchant_settlement",
+		TargetID:   settlement.ID,
+		MerchantID: &id,
+		Detail: gin.H{
+			"order_count": settlement.OrderCount,
+			"net_amount":  settlement.NetAmountCents,
+			"remark":      req.Remark,
+		},
+	})
+	utils.Success(c, gin.H{"settlement": settlement, "orders": orders})
+}
+
+func (ctl *AdminController) MarkMerchantSettlementPaid(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.MarkMerchantSettlementPaidRequest
+	_ = c.ShouldBindJSON(&req)
+	settlement, err := ctl.admin.MarkMerchantSettlementPaid(id, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctl.audit.Record(c, service.AuditRecordInput{
+		Action:     "merchant_settlement_paid",
+		TargetType: "merchant_settlement",
+		TargetID:   settlement.ID,
+		MerchantID: &settlement.MerchantID,
+		Detail: gin.H{
+			"net_amount": settlement.NetAmountCents,
+			"remark":     req.Remark,
+		},
+	})
+	utils.Success(c, gin.H{"settlement": settlement})
+}
+
+func (ctl *AdminController) ExportMerchantSettlement(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	settlement, orders, err := ctl.admin.GetMerchantSettlement(id)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", "attachment; filename=merchant-settlement-"+strconv.Itoa(int(settlement.ID))+".csv")
+	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
+	writer := csv.NewWriter(c.Writer)
+	_ = writer.Write([]string{"结算ID", "商家", "订单号", "门店", "订单实付(元)", "退款金额(元)", "净收入(元)", "订单状态", "创建时间"})
+	for _, order := range orders {
+		total := order.TotalAmount
+		if total <= 0 {
+			total = order.Amount
+		}
+		net := total - order.RefundedAmount
+		if net < 0 {
+			net = 0
+		}
+		storeName := ""
+		if order.Store != nil {
+			storeName = order.Store.Name
+		}
+		merchantName := ""
+		if settlement.Merchant.Name != "" {
+			merchantName = settlement.Merchant.Name
+		}
+		_ = writer.Write([]string{
+			strconv.Itoa(int(settlement.ID)),
+			merchantName,
+			order.OrderNo,
+			storeName,
+			utils.FenToYuan(total),
+			utils.FenToYuan(order.RefundedAmount),
+			utils.FenToYuan(net),
+			order.Status,
+			order.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	writer.Flush()
 }
 
 func (ctl *AdminController) MerchantStores(c *gin.Context) {

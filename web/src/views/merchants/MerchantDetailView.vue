@@ -5,7 +5,7 @@
         <el-button text @click="router.push('/admin/merchants')">返回商家列表</el-button>
         <div class="eyebrow">MERCHANT PROFILE</div>
         <h2 class="page-title">{{ merchant.name || '商家详情' }}</h2>
-        <p class="page-desc">统一查看商家订阅、收款配置、门店、订单流水、退款与 AI 经营摘要。</p>
+        <p class="page-desc">查看商家订阅、收款资料、门店订单、退款记录和人工结算单。</p>
       </div>
       <div class="hero-actions">
         <el-tag size="large" :type="statusType(merchant.status)">{{ statusLabel(merchant.status) }}</el-tag>
@@ -14,186 +14,155 @@
     </section>
 
     <section class="summary-grid">
-      <div class="summary-card">
-        <span>联系人手机号</span>
-        <strong>{{ merchant.contact_phone || '-' }}</strong>
-      </div>
-      <div class="summary-card">
-        <span>订阅状态</span>
-        <strong>{{ subscriptionValid ? '订阅中' : '未订阅 / 已过期' }}</strong>
-      </div>
-      <div class="summary-card">
-        <span>到期时间</span>
-        <strong>{{ formatTime(merchant.subscription_expire_at || merchant.subscription_expired_at) }}</strong>
-      </div>
-      <div class="summary-card">
-        <span>门店数量</span>
-        <strong>{{ stores.length }}</strong>
-      </div>
-      <div class="summary-card">
-        <span>扫码订单</span>
-        <strong>{{ aiInsights.order_stats?.order_count || storeOrders.length || 0 }}</strong>
-      </div>
-      <div class="summary-card">
-        <span>交易额</span>
-        <strong>{{ formatMoney(aiInsights.order_stats?.trade_amount || storeOrderAmount) }}</strong>
-      </div>
-    </section>
-
-    <section class="grid-2">
-      <div class="page-card">
-        <div class="toolbar">
-          <div>
-            <h2 class="page-title">订阅权限</h2>
-            <p class="page-desc">平台可在测试或售后场景下为商家手动开通、延长或停用订阅。</p>
-          </div>
-          <div class="action-row">
-            <el-button type="primary" @click="openSubscriptionDialog">开通 / 调整</el-button>
-            <el-button v-if="merchant.subscription_status === 'active'" type="danger" plain @click="stopSubscriptionNow">停用</el-button>
-          </div>
-        </div>
-        <div class="info-list">
-          <div><span>当前套餐</span><strong>{{ planLabel(merchant.subscription_plan) }}</strong></div>
-          <div><span>订阅备注</span><strong>{{ merchant.subscription_note || '-' }}</strong></div>
-          <div><span>注册时间</span><strong>{{ formatTime(merchant.created_at) }}</strong></div>
-        </div>
-      </div>
-
-      <div class="page-card">
-        <div class="toolbar">
-          <div>
-            <h2 class="page-title">收款配置审核</h2>
-            <p class="page-desc">审核商家提交的支付宝、微信或银行卡收款资料。</p>
-          </div>
-          <el-tag :type="paymentAuditType(paymentConfig.audit_status)" size="large">
-            {{ paymentAuditLabel(paymentConfig.audit_status) }}
-          </el-tag>
-        </div>
-        <div class="payment-grid">
-          <div><span>收款渠道</span><strong>{{ paymentChannelLabel(paymentConfig.channel) }}</strong></div>
-          <div><span>收款模式</span><strong>{{ paymentModeLabel(paymentConfig.mode) }}</strong></div>
-          <div><span>账户名称</span><strong>{{ paymentConfig.account_name || '-' }}</strong></div>
-          <div><span>收款账号</span><strong>{{ maskAccount(paymentConfig.account_no) }}</strong></div>
-          <div><span>APPID</span><strong>{{ paymentConfig.app_id || '-' }}</strong></div>
-          <div><span>启用状态</span><strong>{{ paymentConfig.status === 'enabled' ? '已启用' : '未启用' }}</strong></div>
-          <div><span>联系电话</span><strong>{{ paymentConfig.contact_phone || '-' }}</strong></div>
-          <div><span>审核备注</span><strong>{{ paymentConfig.audit_remark || '-' }}</strong></div>
-        </div>
-        <div class="action-row payment-actions">
-          <el-button type="success" :disabled="!paymentConfig.id" @click="reviewPayment('approved')">审核通过</el-button>
-          <el-button type="danger" plain :disabled="!paymentConfig.id" @click="reviewPayment('rejected')">驳回</el-button>
-          <el-button plain :disabled="!paymentConfig.id" @click="reviewPayment('pending')">设为待审核</el-button>
-        </div>
-      </div>
+      <div class="summary-card"><span>联系人手机号</span><strong>{{ merchant.contact_phone || '-' }}</strong></div>
+      <div class="summary-card"><span>订阅状态</span><strong>{{ subscriptionValid ? '订阅中' : '未订阅 / 已过期' }}</strong></div>
+      <div class="summary-card"><span>到期时间</span><strong>{{ formatTime(merchant.subscription_expire_at || merchant.subscription_expired_at) }}</strong></div>
+      <div class="summary-card"><span>门店数量</span><strong>{{ stores.length }}</strong></div>
+      <div class="summary-card"><span>近期开单</span><strong>{{ storeOrders.length }}</strong></div>
+      <div class="summary-card"><span>近期交易额</span><strong>{{ formatMoney(storeOrderAmount) }}</strong></div>
     </section>
 
     <section class="page-card">
-      <div class="toolbar">
-        <div>
-          <h2 class="page-title">AI 经营摘要</h2>
-          <p class="page-desc">基于顾客档案、订单和线索生成的经营提示，后续会继续接入更多真实经营数据。</p>
-        </div>
-      </div>
-      <div class="ai-stats">
-        <div><span>顾客档案</span><strong>{{ aiInsights.customer_summary?.total || 0 }}</strong></div>
-        <div><span>高价值顾客</span><strong>{{ aiInsights.customer_summary?.high_value || 0 }}</strong></div>
-        <div><span>需召回顾客</span><strong>{{ recallCount }}</strong></div>
-        <div><span>线索数量</span><strong>{{ aiInsights.summary?.total_leads || 0 }}</strong></div>
-      </div>
-      <div class="insight-list">
-        <div v-for="(item, index) in aiInsights.insights || []" :key="`${item.title}-${index}`" class="insight-item">
-          <el-tag :type="insightType(item.type)" size="small">{{ insightLabel(item.type) }}</el-tag>
-          <div>
-            <strong>{{ item.title }}</strong>
-            <p>{{ item.content }}</p>
+      <el-tabs v-model="activeTab">
+        <el-tab-pane label="运营概览" name="overview">
+          <div class="grid-2">
+            <div class="inner-card">
+              <div class="toolbar">
+                <div>
+                  <h3>订阅权限</h3>
+                  <p>平台可在测试、售后或商务场景下手动开通、延长或停用订阅。</p>
+                </div>
+                <div class="action-row">
+                  <el-button type="primary" @click="openSubscriptionDialog">开通 / 调整</el-button>
+                  <el-button v-if="merchant.subscription_status === 'active'" type="danger" plain @click="stopSubscriptionNow">停用</el-button>
+                </div>
+              </div>
+              <div class="info-list">
+                <div><span>当前套餐</span><strong>{{ planLabel(merchant.subscription_plan) }}</strong></div>
+                <div><span>订阅备注</span><strong>{{ merchant.subscription_note || '-' }}</strong></div>
+                <div><span>注册时间</span><strong>{{ formatTime(merchant.created_at) }}</strong></div>
+              </div>
+            </div>
+
+            <div class="inner-card">
+              <div class="toolbar">
+                <div>
+                  <h3>收款资料审核</h3>
+                  <p>现阶段仅作为人工结算参考，不自动把顾客支付切到商家账户。</p>
+                </div>
+                <el-tag :type="paymentAuditType(paymentConfig.audit_status)" size="large">
+                  {{ paymentAuditLabel(paymentConfig.audit_status) }}
+                </el-tag>
+              </div>
+              <div class="payment-grid">
+                <div><span>收款渠道</span><strong>{{ paymentChannelLabel(paymentConfig.channel) }}</strong></div>
+                <div><span>收款模式</span><strong>{{ paymentModeLabel(paymentConfig.mode) }}</strong></div>
+                <div><span>账户名称</span><strong>{{ paymentConfig.account_name || '-' }}</strong></div>
+                <div><span>收款账号</span><strong>{{ maskAccount(paymentConfig.account_no) }}</strong></div>
+                <div><span>联系电话</span><strong>{{ paymentConfig.contact_phone || '-' }}</strong></div>
+                <div><span>审核备注</span><strong>{{ paymentConfig.audit_remark || '-' }}</strong></div>
+              </div>
+              <div class="action-row payment-actions">
+                <el-button type="success" :disabled="!paymentConfig.id" @click="reviewPayment('approved')">审核通过</el-button>
+                <el-button type="danger" plain :disabled="!paymentConfig.id" @click="reviewPayment('rejected')">驳回</el-button>
+                <el-button plain :disabled="!paymentConfig.id" @click="reviewPayment('pending')">设为待审核</el-button>
+              </div>
+            </div>
           </div>
-        </div>
-        <el-empty v-if="!(aiInsights.insights || []).length" description="暂无 AI 建议" />
-      </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="结算记录" name="settlements">
+          <div class="toolbar settlement-toolbar">
+            <div>
+              <h3>人工结算</h3>
+              <p>平台统一收款后，按商家生成结算单，线下人工转账后标记已付款。</p>
+            </div>
+            <el-button type="primary" @click="openSettlementDialog">发起结算</el-button>
+          </div>
+
+          <section class="settlement-stats">
+            <div><span>待结算订单</span><strong>{{ settlementPrepare.order_count || 0 }}</strong></div>
+            <div><span>订单实付</span><strong>{{ formatMoney(settlementPrepare.total_amount_cents) }}</strong></div>
+            <div><span>退款金额</span><strong>{{ formatMoney(settlementPrepare.refund_amount_cents) }}</strong></div>
+            <div><span>待结算净额</span><strong>{{ formatMoney(settlementPrepare.net_amount_cents) }}</strong></div>
+          </section>
+
+          <el-table :data="settlements" empty-text="暂无结算记录">
+            <el-table-column prop="id" label="结算ID" width="90" />
+            <el-table-column label="周期" min-width="220">
+              <template #default="{ row }">
+                {{ formatDate(row.settlement_period_start) }} - {{ formatDate(row.settlement_period_end) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="order_count" label="订单数" width="90" />
+            <el-table-column label="实付" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount_cents) }}</template></el-table-column>
+            <el-table-column label="退款" width="120"><template #default="{ row }">{{ formatMoney(row.refund_amount_cents) }}</template></el-table-column>
+            <el-table-column label="净结算" width="130"><template #default="{ row }"><strong>{{ formatMoney(row.net_amount_cents) }}</strong></template></el-table-column>
+            <el-table-column label="状态" width="110">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'paid' ? 'success' : 'warning'">{{ row.status === 'paid' ? '已付款' : '待付款' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="付款时间" min-width="170"><template #default="{ row }">{{ formatTime(row.paid_at) }}</template></el-table-column>
+            <el-table-column label="操作" width="250" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" @click="downloadSettlement(row)">导出</el-button>
+                <el-button v-if="row.status === 'pending'" size="small" type="success" @click="markSettlementPaid(row)">标记已付款</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="门店订单" name="orders">
+          <el-table :data="storeOrders" empty-text="暂无门店订单">
+            <el-table-column prop="order_no" label="订单号" min-width="180" />
+            <el-table-column label="门店" min-width="130"><template #default="{ row }">{{ row.store?.name || '-' }}</template></el-table-column>
+            <el-table-column prop="customer_phone" label="顾客手机号" min-width="130" />
+            <el-table-column label="实付金额" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+            <el-table-column label="已退款" width="110"><template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template></el-table-column>
+            <el-table-column label="结算状态" width="110">
+              <template #default="{ row }">
+                <el-tag :type="row.settlement_id ? 'success' : 'info'">{{ row.settlement_id ? '已归集' : '未结算' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="订单状态" width="110">
+              <template #default="{ row }"><el-tag :type="orderStatusType(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="订阅记录" name="subscriptionOrders">
+          <el-table :data="subscriptionOrders" empty-text="暂无订阅记录">
+            <el-table-column label="套餐" min-width="120"><template #default="{ row }">{{ row.merchant_plan?.name || '-' }}</template></el-table-column>
+            <el-table-column label="金额" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+            <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="orderStatusType(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
+            <el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
     </section>
 
-    <section class="grid-2">
-      <div class="page-card">
-        <div class="toolbar">
-          <h2 class="page-title">门店入口</h2>
-          <el-button type="primary" @click="openCreateStore">新增门店</el-button>
-        </div>
-        <el-table :data="stores" empty-text="暂无门店">
-          <el-table-column prop="name" label="门店" min-width="130" />
-          <el-table-column prop="contact_phone" label="电话" min-width="120" />
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="190">
-            <template #default="{ row }">
-              <el-button size="small" @click="copyStoreLink(row)">复制链接</el-button>
-              <el-button size="small" @click="openEditStore(row)">编辑</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-
-      <div class="page-card">
-        <h2 class="page-title">订阅记录</h2>
-        <el-table :data="subscriptionOrders" empty-text="暂无订阅记录">
-          <el-table-column label="套餐" min-width="100">
-            <template #default="{ row }">{{ row.merchant_plan?.name || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="金额" width="110">
-            <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag :type="orderStatusType(row.status)">{{ orderStatusLabel(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="创建时间" min-width="150">
-            <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </section>
-
-    <section class="page-card">
-      <h2 class="page-title">最近门店订单</h2>
-      <el-table :data="storeOrders" empty-text="暂无门店订单">
+    <el-dialog v-model="settlementDialogVisible" title="发起人工结算" width="760px">
+      <section class="settlement-stats compact">
+        <div><span>订单数</span><strong>{{ settlementPrepare.order_count || 0 }}</strong></div>
+        <div><span>订单实付</span><strong>{{ formatMoney(settlementPrepare.total_amount_cents) }}</strong></div>
+        <div><span>退款金额</span><strong>{{ formatMoney(settlementPrepare.refund_amount_cents) }}</strong></div>
+        <div><span>净结算</span><strong>{{ formatMoney(settlementPrepare.net_amount_cents) }}</strong></div>
+      </section>
+      <el-input v-model="settlementRemark" class="remark-input" placeholder="结算备注，例如：2026年5月第一期人工转账" />
+      <el-table :data="settlementPrepare.orders || []" max-height="320" empty-text="暂无可结算订单">
         <el-table-column prop="order_no" label="订单号" min-width="180" />
-        <el-table-column label="门店" min-width="130">
-          <template #default="{ row }">{{ row.store?.name || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="customer_phone" label="顾客手机号" min-width="130" />
-        <el-table-column label="实付金额" width="120">
-          <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
-        </el-table-column>
-        <el-table-column label="已退款" width="110">
-          <template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="110">
-          <template #default="{ row }">
-            <el-tag :type="orderStatusType(row.status)">{{ orderStatusLabel(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" min-width="170">
-          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-        </el-table-column>
+        <el-table-column label="门店" min-width="120"><template #default="{ row }">{{ row.store?.name || '-' }}</template></el-table-column>
+        <el-table-column label="实付" width="110"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+        <el-table-column label="退款" width="110"><template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }">{{ orderStatusLabel(row.status) }}</template></el-table-column>
       </el-table>
-    </section>
-
-    <section class="page-card">
-      <h2 class="page-title">顾客画像</h2>
-      <el-table :data="aiInsights.customer_profiles || []" empty-text="暂无顾客画像">
-        <el-table-column prop="customer_phone" label="手机号" min-width="130" />
-        <el-table-column prop="store_name" label="最近门店" min-width="140" />
-        <el-table-column prop="order_count" label="消费次数" width="100" />
-        <el-table-column label="累计消费" width="120">
-          <template #default="{ row }">{{ formatMoney(row.total_amount) }}</template>
-        </el-table-column>
-        <el-table-column prop="ai_tag" label="AI 标签" width="130" />
-        <el-table-column prop="ai_suggestion" label="建议" min-width="260" show-overflow-tooltip />
-      </el-table>
-    </section>
+      <template #footer>
+        <el-button @click="settlementDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!settlementPrepare.order_count" @click="createSettlement">确认生成结算单</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="subscriptionDialogVisible" title="开通 / 调整订阅" width="520px">
       <el-form label-width="100px">
@@ -205,33 +174,12 @@
         </el-form-item>
         <el-form-item label="调整天数">
           <el-input-number v-model="subscriptionForm.duration_days" :min="-3650" :max="3650" />
-          <span class="form-tip">正数增加，负数减少，0 按默认周期</span>
         </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="subscriptionForm.note" maxlength="120" />
-        </el-form-item>
+        <el-form-item label="备注"><el-input v-model="subscriptionForm.note" maxlength="120" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="subscriptionDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="submitSubscription">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="storeDialogVisible" :title="editingStore?.id ? '编辑门店' : '新增门店'" width="520px">
-      <el-form label-width="90px">
-        <el-form-item label="门店名称"><el-input v-model="storeForm.name" /></el-form-item>
-        <el-form-item label="地址"><el-input v-model="storeForm.address" /></el-form-item>
-        <el-form-item label="电话"><el-input v-model="storeForm.contact_phone" /></el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="storeForm.status">
-            <el-option label="启用" value="active" />
-            <el-option label="停用" value="inactive" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="storeDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveStore">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -242,63 +190,101 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  createAdminMerchantStore,
-  fetchAdminMerchantAIInsights,
+  createAdminMerchantSettlement,
+  exportAdminMerchantSettlement,
   fetchAdminMerchantPaymentConfig,
+  fetchAdminMerchantSettlementPrepare,
+  fetchAdminMerchantSettlements,
   fetchAdminMerchantStoreOrders,
   fetchAdminMerchantStores,
   fetchAdminMerchantSubscriptionOrders,
   fetchMerchantDetail,
+  markAdminMerchantSettlementPaid,
   openMerchantSubscription,
   reviewAdminMerchantPaymentConfig,
-  stopMerchantSubscription,
-  updateAdminMerchantStore
+  stopMerchantSubscription
 } from '../../api/modules'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
+const activeTab = ref('overview')
 const merchant = ref({})
 const paymentConfig = ref({})
 const stores = ref([])
 const subscriptionOrders = ref([])
 const storeOrders = ref([])
-const aiInsights = ref({})
+const settlements = ref([])
+const settlementPrepare = ref({})
 const subscriptionDialogVisible = ref(false)
-const storeDialogVisible = ref(false)
-const editingStore = ref(null)
-
+const settlementDialogVisible = ref(false)
+const settlementRemark = ref('')
 const subscriptionForm = reactive({ plan: 'month', duration_days: 30, note: '' })
-const storeForm = reactive({ name: '', address: '', contact_phone: '', status: 'active' })
 const merchantID = () => route.params.id
 
 const subscriptionValid = computed(() => {
   const expire = merchant.value.subscription_expire_at || merchant.value.subscription_expired_at
   return merchant.value.subscription_status === 'active' && expire && new Date(expire).getTime() > Date.now()
 })
-const recallCount = computed(() => Number(aiInsights.value.customer_summary?.sleeping || 0) + Number(aiInsights.value.customer_summary?.risk || 0))
 const storeOrderAmount = computed(() => storeOrders.value.reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
 
 const load = async () => {
   loading.value = true
   try {
-    const [merchantRes, paymentRes, storesRes, subscriptionRes, ordersRes, aiRes] = await Promise.all([
+    const [merchantRes, paymentRes, storesRes, subscriptionRes, ordersRes, prepareRes, settlementsRes] = await Promise.all([
       fetchMerchantDetail(merchantID()),
       fetchAdminMerchantPaymentConfig(merchantID()),
       fetchAdminMerchantStores(merchantID(), { page: 1, page_size: 50 }),
       fetchAdminMerchantSubscriptionOrders(merchantID()),
-      fetchAdminMerchantStoreOrders(merchantID(), { limit: 10 }),
-      fetchAdminMerchantAIInsights(merchantID())
+      fetchAdminMerchantStoreOrders(merchantID(), { limit: 50 }),
+      fetchAdminMerchantSettlementPrepare(merchantID()),
+      fetchAdminMerchantSettlements(merchantID())
     ])
     merchant.value = merchantRes.data || {}
     paymentConfig.value = paymentRes.data.config || {}
     stores.value = storesRes.data.list || []
     subscriptionOrders.value = subscriptionRes.data.list || []
     storeOrders.value = ordersRes.data.list || []
-    aiInsights.value = aiRes.data || {}
+    settlementPrepare.value = prepareRes.data || {}
+    settlements.value = settlementsRes.data.list || []
   } finally {
     loading.value = false
   }
+}
+
+const openSettlementDialog = async () => {
+  const res = await fetchAdminMerchantSettlementPrepare(merchantID())
+  settlementPrepare.value = res.data || {}
+  settlementRemark.value = ''
+  settlementDialogVisible.value = true
+}
+
+const createSettlement = async () => {
+  await createAdminMerchantSettlement(merchantID(), { remark: settlementRemark.value })
+  ElMessage.success('结算单已生成')
+  settlementDialogVisible.value = false
+  load()
+}
+
+const markSettlementPaid = async (row) => {
+  const { value } = await ElMessageBox.prompt('请输入人工转账备注，例如付款流水号', '标记已付款', {
+    confirmButtonText: '确认',
+    cancelButtonText: '取消',
+    inputValue: row.remark || ''
+  })
+  await markAdminMerchantSettlementPaid(row.id, { remark: value || '' })
+  ElMessage.success('已标记为已付款')
+  load()
+}
+
+const downloadSettlement = async (row) => {
+  const res = await exportAdminMerchantSettlement(row.id)
+  const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `merchant-settlement-${row.id}.csv`
+  link.click()
+  URL.revokeObjectURL(link.href)
 }
 
 const openSubscriptionDialog = () => {
@@ -325,57 +311,18 @@ const stopSubscriptionNow = async () => {
 const reviewPayment = async (auditStatus) => {
   const status = auditStatus === 'approved' ? 'enabled' : 'disabled'
   const remark = auditStatus === 'approved'
-    ? '平台审核通过，可作为后续直连收款配置'
+    ? '平台审核通过，当前仅作为人工结算资料参考'
     : auditStatus === 'rejected'
       ? '平台审核驳回，请商家修改后重新提交'
       : '平台已重新设为待审核'
-  await reviewAdminMerchantPaymentConfig(merchantID(), {
-    audit_status: auditStatus,
-    status,
-    audit_remark: remark
-  })
-  ElMessage.success('收款配置审核状态已更新')
+  await reviewAdminMerchantPaymentConfig(merchantID(), { audit_status: auditStatus, status, audit_remark: remark })
+  ElMessage.success('收款资料审核状态已更新')
   load()
-}
-
-const openCreateStore = () => {
-  editingStore.value = null
-  Object.assign(storeForm, { name: '', address: '', contact_phone: merchant.value.contact_phone || '', status: 'active' })
-  storeDialogVisible.value = true
-}
-
-const openEditStore = (row) => {
-  editingStore.value = row
-  Object.assign(storeForm, {
-    name: row.name,
-    address: row.address || '',
-    contact_phone: row.contact_phone || '',
-    status: row.status || 'active'
-  })
-  storeDialogVisible.value = true
-}
-
-const saveStore = async () => {
-  if (editingStore.value?.id) {
-    await updateAdminMerchantStore(merchantID(), editingStore.value.id, { ...storeForm })
-  } else {
-    await createAdminMerchantStore(merchantID(), { ...storeForm })
-  }
-  ElMessage.success('门店已保存')
-  storeDialogVisible.value = false
-  load()
-}
-
-const copyStoreLink = async (row) => {
-  await navigator.clipboard.writeText(`${window.location.origin}/customer/store/${row.id}`)
-  ElMessage.success('链接已复制')
 }
 
 const statusLabel = (status) => ({ pending: '待审核', active: '正常', suspended: '已冻结' }[status] || status || '-')
 const statusType = (status) => ({ pending: 'warning', active: 'success', suspended: 'danger' }[status] || 'info')
 const planLabel = (plan) => ({ month: '月付', year: '年付', none: '未开通' }[plan] || '未开通')
-const insightType = (type) => ({ warning: 'warning', action: 'primary', success: 'success', info: 'info' }[type] || 'info')
-const insightLabel = (type) => ({ warning: '风险', action: '建议', success: '亮点', info: '提示' }[type] || '提示')
 const paymentAuditLabel = (value) => ({ pending: '待审核', approved: '审核通过', rejected: '审核驳回' }[value] || '未提交')
 const paymentAuditType = (value) => ({ pending: 'warning', approved: 'success', rejected: 'danger' }[value] || 'info')
 const paymentChannelLabel = (value) => ({ alipay: '支付宝', wechat: '微信支付', bank: '银行卡' }[value] || '-')
@@ -405,6 +352,7 @@ const orderStatusType = (status) => ({
 }[status] || 'info')
 const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const formatTime = (value) => value ? String(value).replace('T', ' ').slice(0, 19) : '-'
+const formatDate = (value) => value ? String(value).slice(0, 10) : '-'
 
 onMounted(load)
 </script>
@@ -436,7 +384,8 @@ onMounted(load)
   letter-spacing: 0.16em;
 }
 
-.page-desc {
+.page-desc,
+.toolbar p {
   margin: 6px 0 0;
   color: var(--muted);
   line-height: 1.7;
@@ -444,27 +393,33 @@ onMounted(load)
 
 .summary-grid,
 .grid-2,
-.ai-stats,
-.payment-grid {
+.payment-grid,
+.settlement-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
 }
 
 .summary-card,
+.inner-card,
 .info-list div,
-.ai-stats div,
-.payment-grid div {
+.payment-grid div,
+.settlement-stats div {
   padding: 16px;
   border: 1px solid #e5edf9;
   border-radius: 14px;
   background: #f8fbff;
 }
 
+.inner-card {
+  display: grid;
+  gap: 14px;
+}
+
 .summary-card span,
 .info-list span,
-.ai-stats span,
-.payment-grid span {
+.payment-grid span,
+.settlement-stats span {
   display: block;
   color: var(--muted);
   font-size: 13px;
@@ -472,15 +427,18 @@ onMounted(load)
 
 .summary-card strong,
 .info-list strong,
-.ai-stats strong,
-.payment-grid strong {
+.payment-grid strong,
+.settlement-stats strong {
   display: block;
   margin-top: 8px;
   font-size: 20px;
 }
 
-.info-list,
-.insight-list {
+.settlement-stats div:last-child strong {
+  color: #16a34a;
+}
+
+.info-list {
   display: grid;
   gap: 12px;
 }
@@ -491,40 +449,23 @@ onMounted(load)
   flex-wrap: wrap;
 }
 
-.payment-actions {
+.payment-actions,
+.remark-input {
   margin-top: 16px;
 }
 
-.insight-list {
-  margin-top: 16px;
+.settlement-toolbar {
+  margin-bottom: 16px;
 }
 
-.insight-item {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid #e5edf9;
-  border-radius: 14px;
-  background: #f8fafc;
+.compact {
+  margin-bottom: 14px;
 }
 
-.insight-item p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  line-height: 1.6;
-}
-
-.form-tip {
-  margin-left: 12px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .hero-card,
   .toolbar {
-    flex-direction: column;
+    display: grid;
   }
 }
 </style>

@@ -42,9 +42,14 @@ type OrderService struct {
 	promotions    *repository.PromotionRepository
 	cards         *repository.CardRepository
 	systems       *repository.SystemRepository
+	alipay        *AlipayService
 }
 
-func NewOrderService(db *gorm.DB) *OrderService {
+func NewOrderService(db *gorm.DB, alipayServices ...*AlipayService) *OrderService {
+	var alipayService *AlipayService
+	if len(alipayServices) > 0 {
+		alipayService = alipayServices[0]
+	}
 	return &OrderService{
 		db:            db,
 		users:         repository.NewUserRepository(db),
@@ -57,6 +62,7 @@ func NewOrderService(db *gorm.DB) *OrderService {
 		promotions:    repository.NewPromotionRepository(db),
 		cards:         repository.NewCardRepository(db),
 		systems:       repository.NewSystemRepository(db),
+		alipay:        alipayService,
 	}
 }
 
@@ -624,6 +630,17 @@ func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderReques
 		return nil, errors.New("refund reason cannot exceed 255 characters")
 	}
 
+	refundNo := fmt.Sprintf("RF%d", time.Now().UnixNano())
+	refundStatus := "success"
+	rawPayload := `{"mode":"manual_record","note":"真实退款需由商家收款账户或支付渠道执行，本记录用于财务核对"}`
+	if order.PaymentChannel == "alipay" && order.TransactionNo != "" && s.alipay != nil && s.alipay.Enabled() {
+		payload, err := s.alipay.Refund(order, refundNo, amount, reason)
+		if err != nil {
+			return nil, err
+		}
+		rawPayload = payload
+	}
+
 	var updated model.Order
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var current model.Order
@@ -638,14 +655,14 @@ func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderReques
 			OrderID:       current.ID,
 			MerchantID:    current.MerchantID,
 			StoreID:       current.StoreID,
-			RefundNo:      fmt.Sprintf("RF%d", time.Now().UnixNano()),
+			RefundNo:      refundNo,
 			TransactionNo: current.TransactionNo,
 			Amount:        amount,
 			Reason:        reason,
 			OperatorRole:  operatorRole,
 			OperatorID:    operatorID,
-			Status:        "success",
-			RawPayload:    `{"mode":"manual_record","note":"真实退款需由商家收款账户或支付渠道执行，本记录用于财务核对"}`,
+			Status:        refundStatus,
+			RawPayload:    rawPayload,
 		}
 		if err := tx.Create(refund).Error; err != nil {
 			return err

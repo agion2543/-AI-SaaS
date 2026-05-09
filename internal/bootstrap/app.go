@@ -57,6 +57,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Merchant{},
 		&model.MerchantPlan{},
 		&model.MerchantPaymentConfig{},
+		&model.MerchantSettlement{},
 		&model.AuditLog{},
 		&model.Store{},
 		&model.StoreProduct{},
