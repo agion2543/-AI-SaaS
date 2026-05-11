@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -1076,6 +1077,7 @@ func (s *AdminService) SecurityCheck() SecurityCheckReport {
 		s.checkSecrets(),
 		s.checkDatabaseConfig(),
 		s.checkAlipayConfig(),
+		s.checkAIConfig(),
 		s.checkBackupScripts(),
 		s.checkRateLimit(),
 		s.checkCORS(),
@@ -1146,6 +1148,16 @@ func (s *AdminService) checkAlipayConfig() SecurityCheckItem {
 		return securityItem("alipay", "支付宝配置", "warning", "支付宝回调地址不是 HTTPS。", "生产环境必须使用公网 HTTPS 回调地址。")
 	}
 	return securityItem("alipay", "支付宝配置", "pass", "支付宝正式配置看起来完整。", "上线前做一笔小额真实支付和退款验证。")
+}
+
+func (s *AdminService) checkAIConfig() SecurityCheckItem {
+	if !s.cfg.AIEnabled {
+		return securityItem("ai", "AI 模型接入", "warning", "AI_ENABLED 当前为 false，商家端会使用模板兜底。", "如果要把 AI 作为核心卖点，建议接入 DeepSeek、通义千问或智谱等兼容 OpenAI 协议的模型。")
+	}
+	if strings.TrimSpace(s.cfg.AIBaseURL) == "" || strings.TrimSpace(s.cfg.AIAPIKey) == "" || strings.TrimSpace(s.cfg.AIModel) == "" {
+		return securityItem("ai", "AI 模型接入", "danger", "AI 已启用，但 BASE_URL、API_KEY 或 MODEL 未完整配置。", "补齐 AI_BASE_URL、AI_API_KEY、AI_MODEL 后重启后端，并测试商家端 AI 经营分析。")
+	}
+	return securityItem("ai", "AI 模型接入", "pass", fmt.Sprintf("AI 已启用，当前模型：%s / %s。", s.cfg.AIProvider, s.cfg.AIModel), "继续监控调用成本、失败率和生成质量；建议给商家端设置日调用额度。")
 }
 
 func (s *AdminService) checkBackupScripts() SecurityCheckItem {
