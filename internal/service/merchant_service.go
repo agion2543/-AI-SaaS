@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -29,7 +30,9 @@ type MerchantService struct {
 	plans      *repository.MerchantPlanRepository
 	orders     *repository.OrderRepository
 	packages   *repository.PackageRepository
+	cards      *repository.CardRepository
 	codes      *repository.VerificationCodeRepository
+	ai         *AIService
 }
 
 func NewMerchantService(cfg *config.Config, db *gorm.DB) *MerchantService {
@@ -45,7 +48,9 @@ func NewMerchantService(cfg *config.Config, db *gorm.DB) *MerchantService {
 		plans:      repository.NewMerchantPlanRepository(db),
 		orders:     repository.NewOrderRepository(db),
 		packages:   repository.NewPackageRepository(db),
+		cards:      repository.NewCardRepository(db),
 		codes:      repository.NewVerificationCodeRepository(db),
+		ai:         NewAIService(cfg),
 	}
 }
 
@@ -174,6 +179,125 @@ func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, 
 
 	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
 	return merchant, user, token, err
+}
+
+func (s *MerchantService) SendPasswordResetCode(req dto.MerchantSendPasswordResetCodeRequest) error {
+	phone := normalizePhone(req.Phone)
+	if !isValidMainlandPhone(phone) {
+		return errors.New("手机号必须为 11 位数字")
+	}
+	user, err := s.users.FindByPhone(phone)
+	if err != nil || user.Role != "merchant_admin" {
+		return errors.New("商家账号不存在")
+	}
+	return s.issueMerchantVerificationCode(phone, "merchant_reset_password", &user.ID)
+}
+
+func (s *MerchantService) ResetPassword(req dto.MerchantResetPasswordRequest) error {
+	phone := normalizePhone(req.Phone)
+	req.SMSCode = strings.TrimSpace(req.SMSCode)
+	if !isValidMainlandPhone(phone) {
+		return errors.New("手机号必须为 11 位数字")
+	}
+	if len(req.NewPassword) < 6 {
+		return errors.New("新密码至少 6 位")
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return errors.New("两次输入的新密码不一致")
+	}
+	if err := s.consumeMerchantVerificationCode(phone, "merchant_reset_password", req.SMSCode); err != nil {
+		return err
+	}
+	user, err := s.users.FindByPhone(phone)
+	if err != nil || user.Role != "merchant_admin" {
+		return errors.New("商家账号不存在")
+	}
+	hash, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+	user.PasswordHash = hash
+	return s.users.Save(user)
+}
+
+func (s *MerchantService) ChangePassword(userID uint, req dto.MerchantChangePasswordRequest) error {
+	if len(req.NewPassword) < 6 {
+		return errors.New("新密码至少 6 位")
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return errors.New("两次输入的新密码不一致")
+	}
+	user, err := s.users.FindByID(userID)
+	if err != nil || user.Role != "merchant_admin" {
+		return errors.New("商家账号不存在")
+	}
+	if !utils.CheckPassword(user.PasswordHash, req.OldPassword) {
+		return errors.New("原密码错误")
+	}
+	hash, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+	user.PasswordHash = hash
+	return s.users.Save(user)
+}
+
+func (s *MerchantService) RedeemSubscriptionCard(userID, merchantID uint, req dto.MerchantRedeemCardRequest) (*model.Merchant, *model.CardCode, error) {
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		return nil, nil, errors.New("请输入卡密")
+	}
+	card, err := s.cards.FindByCode(code)
+	if err != nil {
+		return nil, nil, errors.New("卡密不存在")
+	}
+	if card.Status != "unused" {
+		return nil, nil, errors.New("卡密已被使用或已失效")
+	}
+	if card.ExpiredAt != nil && card.ExpiredAt.Before(time.Now()) {
+		return nil, nil, errors.New("卡密已过期")
+	}
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, nil, errors.New("商家信息不存在")
+	}
+	durationDays := card.Package.DurationDays
+	if durationDays <= 0 && card.Package.IsLifetime {
+		durationDays = 36500
+	}
+	if durationDays <= 0 {
+		durationDays = 30
+	}
+
+	now := time.Now()
+	base := now
+	if merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(now) {
+		base = *merchant.SubscriptionExpireAt
+	}
+	expire := base.AddDate(0, 0, durationDays)
+
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		merchantRepo := repository.NewMerchantRepository(tx)
+		cardRepo := repository.NewCardRepository(tx)
+
+		merchant.SubscriptionStatus = "active"
+		merchant.SubscriptionPlan = card.Package.Code
+		merchant.SubscriptionExpireAt = &expire
+		merchant.SubscriptionExpiredAt = &expire
+		merchant.SubscriptionNote = fmt.Sprintf("卡密兑换：%s，延长 %d 天", card.Code, durationDays)
+		if err := merchantRepo.Save(merchant); err != nil {
+			return err
+		}
+
+		card.Status = "used"
+		card.RedeemedBy = &userID
+		card.RedeemedAt = &now
+		return cardRepo.Save(card)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return merchant, card, nil
 }
 
 func (s *MerchantService) GetInfo(merchantID uint) (*model.Merchant, error) {
@@ -876,6 +1000,171 @@ func (s *MerchantService) CreateCustomerLead(storeID uint, req dto.CreateCustome
 		return nil, err
 	}
 	return lead, nil
+}
+
+func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.GenerateAIMarketingCopyRequest) (*AIResult, error) {
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家不存在")
+	}
+	quota, err := s.AIQuota(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	if intValue(quota["remaining"]) <= 0 {
+		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
+	}
+	stats := s.marketingStatsSummary(merchantID)
+	goal := strings.TrimSpace(req.Goal)
+	if goal == "" {
+		goal = "提升新客到店、复购和转介绍"
+	}
+	customerTag := strings.TrimSpace(req.CustomerTag)
+	if customerTag == "" {
+		customerTag = "新客与复购顾客"
+	}
+	scenario := strings.TrimSpace(req.Scenario)
+	if scenario == "" {
+		scenario = "裂变海报"
+	}
+
+	systemPrompt := "你是本地生活商家AI运营顾问，擅长餐饮、零售、服务业的低成本获客、复购和裂变活动。请输出中文，内容必须可直接用于商家后台。"
+	userPrompt := fmt.Sprintf(`商家名称：%s
+使用场景：%s
+目标人群：%s
+目标：%s
+主推商品：%s
+经营数据摘要：%v
+
+请生成一份可执行的AI营销方案，格式包含：
+1. 活动标题
+2. 海报主文案
+3. 优惠/奖励机制
+4. 顾客分享话术
+5. 商家执行步骤
+6. 风险提醒和成本控制
+要求：短句、适合手机海报、不要夸大承诺。`, merchant.Name, scenario, customerTag, goal, strings.TrimSpace(req.ProductName), stats)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
+	defer cancel()
+	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.recordAIUsage(merchantID, scenario, result)
+	return result, nil
+}
+
+func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, error) {
+	var merchant model.Merchant
+	if err := s.db.Preload("MerchantPlan").First(&merchant, merchantID).Error; err != nil {
+		return nil, errors.New("商家不存在")
+	}
+	limit := s.aiDailyLimit(&merchant)
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	end := start.AddDate(0, 0, 1)
+	var used int64
+	if err := s.db.Model(&model.MerchantAIUsageLog{}).
+		Where("merchant_id = ? AND used_at >= ? AND used_at < ?", merchantID, start, end).
+		Count(&used).Error; err != nil {
+		return nil, err
+	}
+	remaining := limit - int(used)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return map[string]interface{}{
+		"limit":      limit,
+		"used":       used,
+		"remaining":  remaining,
+		"reset_at":   end,
+		"plan":       merchant.SubscriptionPlan,
+		"plan_id":    merchant.SubscriptionPlanID,
+		"ai_enabled": s.cfg.AIEnabled,
+		"provider":   s.cfg.AIProvider,
+		"model":      s.cfg.AIModel,
+	}, nil
+}
+
+func (s *MerchantService) aiDailyLimit(merchant *model.Merchant) int {
+	if merchant == nil {
+		return 5
+	}
+	if merchant.SubscriptionExpireAt == nil || merchant.SubscriptionExpireAt.Before(time.Now()) {
+		return 5
+	}
+	if merchant.MerchantPlan != nil {
+		if merchant.MerchantPlan.DurationDays >= 365 {
+			return 100
+		}
+		if merchant.MerchantPlan.DurationDays >= 30 {
+			return 30
+		}
+	}
+	plan := strings.ToLower(merchant.SubscriptionPlan)
+	if strings.Contains(plan, "year") || strings.Contains(plan, "年") {
+		return 100
+	}
+	if strings.Contains(plan, "month") || strings.Contains(plan, "月") {
+		return 30
+	}
+	return 10
+}
+
+func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result *AIResult) error {
+	if result == nil {
+		return nil
+	}
+	log := &model.MerchantAIUsageLog{
+		MerchantID: merchantID,
+		Scenario:   strings.TrimSpace(scenario),
+		Model:      result.Model,
+		Provider:   result.Provider,
+		Fallback:   result.Fallback,
+		UsedAt:     time.Now(),
+	}
+	return s.db.Create(log).Error
+}
+
+func intValue(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]interface{} {
+	var orderCount int64
+	var tradeAmount int64
+	var refundAmount int64
+	var customerCount int64
+	s.db.Model(&model.Order{}).
+		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
+		Where("status IN ?", []string{"received", "accepted", "completed", "closed"}).
+		Count(&orderCount)
+	s.db.Model(&model.Order{}).
+		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
+		Where("status IN ?", []string{"received", "accepted", "completed", "closed"}).
+		Select("COALESCE(SUM(total_amount),0)").Scan(&tradeAmount)
+	s.db.Model(&model.RefundRecord{}).
+		Where("merchant_id = ? AND status = ?", merchantID, "success").
+		Select("COALESCE(SUM(amount),0)").Scan(&refundAmount)
+	s.db.Model(&model.Order{}).
+		Where("merchant_id = ? AND order_type = ? AND customer_phone <> ''", merchantID, "store_order").
+		Distinct("customer_phone").Count(&customerCount)
+	return map[string]interface{}{
+		"order_count":    orderCount,
+		"trade_amount":   tradeAmount,
+		"refund_amount":  refundAmount,
+		"customer_count": customerCount,
+	}
 }
 
 func (s *MerchantService) issueMerchantVerificationCode(phone, scene string, userID *uint) error {

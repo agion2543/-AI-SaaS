@@ -4,16 +4,17 @@ import "time"
 
 type Merchant struct {
 	BaseModel
-	Name                  string     `gorm:"size:120;uniqueIndex" json:"name"`
-	ContactPhone          string     `gorm:"size:30" json:"contact_phone"`
-	ContactEmail          string     `gorm:"size:120" json:"contact_email"`
-	Status                string     `gorm:"size:20;default:pending" json:"status"`
-	SubscriptionPlan      string     `gorm:"size:40;default:none" json:"subscription_plan"`
-	SubscriptionStatus    string     `gorm:"size:20;default:inactive;index" json:"subscription_status"`
-	SubscriptionExpiredAt *time.Time `json:"subscription_expired_at"`
-	SubscriptionNote      string     `gorm:"size:255" json:"subscription_note"`
-	SubscriptionPlanID    *uint      `gorm:"index" json:"subscription_plan_id"`
-	SubscriptionExpireAt  *time.Time `json:"subscription_expire_at"`
+	Name                  string        `gorm:"size:120;uniqueIndex" json:"name"`
+	ContactPhone          string        `gorm:"size:30" json:"contact_phone"`
+	ContactEmail          string        `gorm:"size:120" json:"contact_email"`
+	Status                string        `gorm:"size:20;default:pending" json:"status"`
+	SubscriptionPlan      string        `gorm:"size:40;default:none" json:"subscription_plan"`
+	SubscriptionStatus    string        `gorm:"size:20;default:inactive;index" json:"subscription_status"`
+	SubscriptionExpiredAt *time.Time    `json:"subscription_expired_at"`
+	SubscriptionNote      string        `gorm:"size:255" json:"subscription_note"`
+	SubscriptionPlanID    *uint         `gorm:"index" json:"subscription_plan_id"`
+	MerchantPlan          *MerchantPlan `gorm:"foreignKey:SubscriptionPlanID" json:"merchant_plan,omitempty"`
+	SubscriptionExpireAt  *time.Time    `json:"subscription_expire_at"`
 }
 
 type MerchantPlan struct {

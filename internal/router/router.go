@@ -89,6 +89,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
 				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
+				merchantProtected.GET("/ai/quota", merchantCtl.AIQuota)
 				merchantProtected.POST("/ai/marketing-copy", merchantCtl.GenerateAIMarketingCopy)
 				merchantProtected.GET("/ai/share-stats", shareCtl.MerchantShareStats)
 				merchantProtected.GET("/coupons", shareCtl.MerchantCoupons)
@@ -217,6 +218,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
 				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
+				merchantProtected.GET("/ai/quota", merchantCtl.AIQuota)
 				merchantProtected.POST("/ai/marketing-copy", merchantCtl.GenerateAIMarketingCopy)
 				merchantProtected.GET("/ai/share-stats", shareCtl.MerchantShareStats)
 				merchantProtected.GET("/coupons", shareCtl.MerchantCoupons)

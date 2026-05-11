@@ -1,7 +1,12 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,6 +79,45 @@ func (ctl *MerchantController) Login(c *gin.Context) {
 		"user":     sanitizeAuthUser(user),
 		"token":    token,
 	})
+}
+
+func (ctl *MerchantController) SendPasswordResetCode(c *gin.Context) {
+	var req dto.MerchantSendPasswordResetCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "璇疯緭鍏?11 浣嶆墜鏈哄彿")
+		return
+	}
+	if err := ctl.merchant.SendPasswordResetCode(req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"sent": true, "scene": "merchant_reset_password"})
+}
+
+func (ctl *MerchantController) ResetPassword(c *gin.Context) {
+	var req dto.MerchantResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "璇峰畬鏁村～鍐欐墜鏈哄彿銆侀獙璇佺爜鍜屾柊瀵嗙爜")
+		return
+	}
+	if err := ctl.merchant.ResetPassword(req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"reset": true})
+}
+
+func (ctl *MerchantController) ChangePassword(c *gin.Context) {
+	var req dto.MerchantChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "璇峰畬鏁村～鍐欏師瀵嗙爜鍜屾柊瀵嗙爜")
+		return
+	}
+	if err := ctl.merchant.ChangePassword(c.GetUint("user_id"), req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"changed": true})
 }
 
 func (ctl *MerchantController) Info(c *gin.Context) {
@@ -160,6 +204,25 @@ func (ctl *MerchantController) SubscriptionOrderStatus(c *gin.Context) {
 		return
 	}
 	utils.Success(c, data)
+}
+
+func (ctl *MerchantController) RedeemSubscriptionCard(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var req dto.MerchantRedeemCardRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "invalid card code")
+		return
+	}
+	merchant, card, err := ctl.merchant.RedeemSubscriptionCard(c.GetUint("user_id"), merchantID, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"merchant": merchant, "card": card, "redeemed": true})
 }
 
 func (ctl *MerchantController) AIInsights(c *gin.Context) {
@@ -252,7 +315,7 @@ func (ctl *MerchantController) SavePaymentConfig(c *gin.Context) {
 	}
 	var req dto.SaveMerchantPaymentConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.Error(c, http.StatusBadRequest, "请完整填写收款账户信息")
+		utils.Error(c, http.StatusBadRequest, "payment account info is required")
 		return
 	}
 	config, err := ctl.merchant.SavePaymentConfig(merchantID, req)
@@ -277,7 +340,7 @@ func (ctl *MerchantController) ReviewPaymentConfig(c *gin.Context) {
 	merchantID := uint(atoi(c.Param("id")))
 	var req dto.ReviewMerchantPaymentConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.Error(c, http.StatusBadRequest, "请填写审核状态")
+		utils.Error(c, http.StatusBadRequest, "audit status is required")
 		return
 	}
 	config, err := ctl.merchant.ReviewPaymentConfig(merchantID, req)
@@ -466,6 +529,48 @@ func (ctl *MerchantController) CreateStoreProduct(c *gin.Context) {
 	utils.Success(c, gin.H{"product": product, "created": true})
 }
 
+func (ctl *MerchantController) UploadProductImage(c *gin.Context) {
+	if _, ok := currentMerchantID(c); !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "璇烽€夋嫨瑕佷笂浼犵殑鍟嗗搧鍥剧墖")
+		return
+	}
+	if file.Size > 3*1024*1024 {
+		utils.Error(c, http.StatusBadRequest, "鍥剧墖涓嶈兘瓒呰繃 3MB")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
+	if !allowed[ext] {
+		utils.Error(c, http.StatusBadRequest, "浠呮敮鎸?jpg銆乸ng銆亀ebp 鍥剧墖")
+		return
+	}
+
+	dir := filepath.Join("uploads", "products")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "鍒涘缓涓婁紶鐩綍澶辫触")
+		return
+	}
+	filename := fmt.Sprintf("product_%d%s", time.Now().UnixNano(), ext)
+	dst := filepath.Join(dir, filename)
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "鍥剧墖淇濆瓨澶辫触")
+		return
+	}
+
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/uploads/products/%s", scheme, c.Request.Host, filename)
+	utils.Success(c, gin.H{"url": url})
+}
+
 func (ctl *MerchantController) UpdateStoreProduct(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
@@ -553,6 +658,37 @@ func (ctl *MerchantController) GeneratePromotionDraft(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"promotion": promotion, "created": true})
+}
+
+func (ctl *MerchantController) GenerateAIMarketingCopy(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var req dto.GenerateAIMarketingCopyRequest
+	_ = c.ShouldBindJSON(&req)
+	result, err := ctl.merchant.GenerateAIMarketingCopy(merchantID, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	quota, _ := ctl.merchant.AIQuota(merchantID)
+	utils.Success(c, gin.H{"result": result, "quota": quota})
+}
+
+func (ctl *MerchantController) AIQuota(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	quota, err := ctl.merchant.AIQuota(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, quota)
 }
 
 func (ctl *MerchantController) UpdatePromotion(c *gin.Context) {
