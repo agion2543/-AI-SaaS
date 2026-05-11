@@ -20,6 +20,7 @@
         <el-menu-item index="/merchant/orders" :disabled="navigationLocked">{{ text.orders }}</el-menu-item>
         <el-menu-item index="/merchant/finance" :disabled="navigationLocked">{{ text.finance }}</el-menu-item>
         <el-menu-item index="/merchant/promotions" :disabled="navigationLocked">{{ text.promotions }}</el-menu-item>
+        <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionAI }}</div>
         <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
         <div class="menu-section">{{ text.sectionSettings }}</div>
@@ -65,9 +66,10 @@ const text = {
   orders: '\u8ba2\u5355\u7ba1\u7406',
   finance: '\u8d22\u52a1\u5bf9\u8d26',
   promotions: '\u4f18\u60e0\u6d3b\u52a8',
+  coupons: '\u5238\u5305/\u6838\u9500',
   ai: 'AI \u7ecf\u8425\u5206\u6790',
   subscription: '\u8ba2\u9605\u4ed8\u8d39',
-  paymentSettings: '收款设置',
+  paymentSettings: '\u6536\u6b3e\u8bbe\u7f6e',
   profile: '\u5546\u5bb6\u4fe1\u606f',
   lockTip: '\u5b8c\u6210\u8ba2\u9605\u540e\u5373\u53ef\u89e3\u9501\u5de5\u4f5c\u53f0\u529f\u80fd',
   title: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
