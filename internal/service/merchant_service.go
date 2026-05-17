@@ -1055,6 +1055,98 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	return result, nil
 }
 
+func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.GenerateAIReferralCopyRequest) (map[string]interface{}, error) {
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家不存在")
+	}
+	quota, err := s.AIQuota(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	if intValue(quota["remaining"]) <= 0 {
+		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
+	}
+
+	shareService := NewShareService(s.db)
+	config, err := shareService.GetActivityConfig(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	stats, campaigns, _, err := shareService.StatsByMerchant(merchantID, ShareStatsParams{})
+	if err != nil {
+		return nil, err
+	}
+	businessStats := s.marketingStatsSummary(merchantID)
+	productName := strings.TrimSpace(req.ProductName)
+	if productName == "" {
+		productName = s.bestProductName(merchantID)
+	}
+	if productName == "" {
+		productName = "门店招牌商品/服务"
+	}
+	tone := strings.TrimSpace(req.Tone)
+	if tone == "" {
+		tone = "亲切、可信、适合本地生活商家"
+	}
+	goal := strings.TrimSpace(req.Goal)
+	if goal == "" {
+		goal = "提升分享扫码、好友首单和老客复购"
+	}
+
+	shareSummary := map[string]interface{}{
+		"campaigns":          stats.TotalCampaigns,
+		"scan_count":         stats.ScanCount,
+		"coupon_count":       stats.RewardCouponCount,
+		"used_coupon_count":  stats.UsedCouponCount,
+		"conversion_count":   stats.ConversionCount,
+		"conversion_amount":  stats.ConversionAmount,
+		"friend_coupon":      config.FriendCouponAmount,
+		"friend_threshold":   config.FriendCouponThreshold,
+		"referrer_coupon":    config.ReferrerCouponAmount,
+		"referrer_threshold": config.ReferrerCouponThreshold,
+		"valid_days":         config.ValidDays,
+	}
+	if len(campaigns) > 0 {
+		shareSummary["best_campaign_scan_count"] = campaigns[0].ScanCount
+		shareSummary["best_campaign_conversion_count"] = campaigns[0].ConversionCount
+	}
+
+	systemPrompt := "你是本地生活商家 AI 增长顾问，擅长把订单、优惠券和裂变数据转化成可直接发布的营销内容。请输出中文，内容要真实克制、可落地，不要夸大承诺。"
+	userPrompt := fmt.Sprintf(`商家名称：%s
+主推商品/服务：%s
+语气要求：%s
+营销目标：%s
+经营数据：%v
+裂变数据和券配置：%v
+
+请生成三套可直接使用的内容，必须按以下标题输出：
+【朋友圈文案】
+【社群话术】
+【短视频口播脚本】
+
+每套内容要求：
+- 朋友圈文案 80-150 字，突出好友券和复购奖励。
+- 社群话术 60-120 字，适合微信群/客户群。
+- 短视频口播脚本 15-30 秒，包含镜头建议和口播词。
+- 明确提醒商家观察扫码、领券、下单和核销数据。`, merchant.Name, productName, tone, goal, businessStats, shareSummary)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
+	defer cancel()
+	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.recordAIUsage(merchantID, "referral_multi_copy", result)
+
+	variants := buildReferralCopyVariants(merchant.Name, productName, config, stats, result.Content)
+	return map[string]interface{}{
+		"variants": variants,
+		"raw":      result,
+		"quota":    mustQuota(s.AIQuota(merchantID)),
+	}, nil
+}
+
 func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, error) {
 	var merchant model.Merchant
 	if err := s.db.Preload("MerchantPlan").First(&merchant, merchantID).Error; err != nil {
@@ -1138,6 +1230,140 @@ func intValue(value interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func (s *MerchantService) bestProductName(merchantID uint) string {
+	var product model.StoreProduct
+	if err := s.db.Joins("JOIN stores ON stores.id = store_products.store_id").
+		Where("stores.merchant_id = ? AND store_products.status = ?", merchantID, "active").
+		Order("store_products.sort ASC, store_products.id DESC").
+		First(&product).Error; err == nil {
+		return strings.TrimSpace(product.Name)
+	}
+	return ""
+}
+
+func buildReferralCopyVariants(merchantName, productName string, config *model.ShareActivityConfig, stats *ShareStats, raw string) []map[string]string {
+	sections := parseReferralSections(raw)
+	if len(sections) >= 3 {
+		return sections
+	}
+
+	friendCoupon := int64(500)
+	friendThreshold := int64(3000)
+	referrerCoupon := int64(500)
+	if config != nil {
+		friendCoupon = config.FriendCouponAmount
+		friendThreshold = config.FriendCouponThreshold
+		referrerCoupon = config.ReferrerCouponAmount
+	}
+	if strings.TrimSpace(merchantName) == "" {
+		merchantName = "本店"
+	}
+	if strings.TrimSpace(productName) == "" {
+		productName = "招牌商品"
+	}
+	scanCount := int64(0)
+	conversionCount := int64(0)
+	if stats != nil {
+		scanCount = stats.ScanCount
+		conversionCount = stats.ConversionCount
+	}
+
+	friend := formatFen(friendCoupon)
+	threshold := formatFen(friendThreshold)
+	referrer := formatFen(referrerCoupon)
+	return []map[string]string{
+		{
+			"type":  "朋友圈版",
+			"title": "老客分享领券",
+			"text":  fmt.Sprintf("%s 最近在做好友福利，推荐 %s。好友扫码可领 %s 优惠券，满 %s 可用；分享人下次复购也能得 %s 奖励券。", merchantName, productName, friend, threshold, referrer),
+			"copy":  fmt.Sprintf("我刚在 %s 发现一个不错的福利：好友扫码领 %s 券，满 %s 可用。推荐先试试%s，适合想省钱又想尝鲜的朋友。", merchantName, friend, threshold, productName),
+		},
+		{
+			"type":  "社群版",
+			"title": "好友券社群话术",
+			"text":  fmt.Sprintf("今天给群友准备了 %s 好友券，满 %s 可用；通过分享海报下单后，老顾客还能得复购券。", friend, threshold),
+			"copy":  fmt.Sprintf("群友福利来了：%s 的 %s 好友券，满 %s 可用。扫码进店即可领取，下单后还有复购奖励，数量有限，先到先得。", merchantName, friend, threshold),
+		},
+		{
+			"type":  "短视频口播版",
+			"title": "30 秒门店种草脚本",
+			"text":  fmt.Sprintf("当前海报扫码 %d 次，转化 %d 单，可围绕热卖品和领券动作拍一条短视频。", scanCount, conversionCount),
+			"copy":  fmt.Sprintf("镜头1：展示%s和门店环境。口播：今天给新朋友准备了一张%s券。\n镜头2：展示扫码海报。口播：扫码进店就能领，满%s可用。\n镜头3：展示出餐或服务过程。口播：老顾客分享后也有复购奖励，想试试%s的朋友可以直接扫码。", productName, friend, threshold, merchantName),
+		},
+	}
+}
+
+func parseReferralSections(raw string) []map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	markers := []struct {
+		Type  string
+		Title string
+		Keys  []string
+	}{
+		{Type: "朋友圈版", Title: "朋友圈裂变文案", Keys: []string{"【朋友圈文案】", "朋友圈文案", "朋友圈版"}},
+		{Type: "社群版", Title: "社群转化话术", Keys: []string{"【社群话术】", "社群话术", "社群版"}},
+		{Type: "短视频口播版", Title: "短视频口播脚本", Keys: []string{"【短视频口播脚本】", "短视频口播脚本", "短视频口播版"}},
+	}
+	var result []map[string]string
+	for i, marker := range markers {
+		start := -1
+		usedKey := ""
+		for _, key := range marker.Keys {
+			if idx := strings.Index(raw, key); idx >= 0 && (start == -1 || idx < start) {
+				start = idx
+				usedKey = key
+			}
+		}
+		if start < 0 {
+			continue
+		}
+		contentStart := start + len(usedKey)
+		end := len(raw)
+		for _, next := range markers[i+1:] {
+			for _, key := range next.Keys {
+				if idx := strings.Index(raw[contentStart:], key); idx >= 0 && contentStart+idx < end {
+					end = contentStart + idx
+				}
+			}
+		}
+		text := strings.TrimSpace(raw[contentStart:end])
+		if text == "" {
+			continue
+		}
+		result = append(result, map[string]string{
+			"type":  marker.Type,
+			"title": marker.Title,
+			"text":  firstLine(text),
+			"copy":  text,
+		})
+	}
+	return result
+}
+
+func firstLine(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	first := strings.TrimSpace(lines[0])
+	if len([]rune(first)) > 90 {
+		runes := []rune(first)
+		return string(runes[:90]) + "..."
+	}
+	return first
+}
+
+func mustQuota(quota map[string]interface{}, err error) map[string]interface{} {
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	return quota
 }
 
 func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]interface{} {

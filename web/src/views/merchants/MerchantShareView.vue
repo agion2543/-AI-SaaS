@@ -189,10 +189,16 @@
               <p class="eyebrow">ACTION PLAYBOOK</p>
               <h2>一键可用营销动作</h2>
             </div>
+            <div class="ai-copy-actions">
+              <small v-if="aiQuota.remaining !== undefined">今日剩余 {{ aiQuota.remaining }} 次</small>
+              <el-button type="primary" :loading="generatingCopy" @click="generateReferralCopy">
+                AI 生成多版本文案
+              </el-button>
+            </div>
           </div>
         </template>
         <div class="action-list">
-          <article v-for="action in actionCards" :key="action.title" class="action-card">
+          <article v-for="action in displayActionCards" :key="action.title" class="action-card">
             <span>{{ action.type }}</span>
             <h3>{{ action.title }}</h3>
             <p>{{ action.text }}</p>
@@ -268,16 +274,20 @@ import { ElMessage } from 'element-plus'
 import {
   fetchMerchantShareConfig,
   fetchMerchantShareStats,
+  generateMerchantAIReferralCopy,
   saveMerchantShareConfig
 } from '../../api/modules'
 
 const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
+const generatingCopy = ref(false)
 const stats = ref({})
 const campaigns = ref([])
 const coupons = ref([])
 const config = ref({})
+const aiVariants = ref([])
+const aiQuota = ref({})
 const defaultCopy = '分享给好友，好友扫码领券下单，你也可以获得复购奖励。'
 
 const today = new Date()
@@ -357,6 +367,11 @@ const actionCards = computed(() => {
   ]
 })
 
+const displayActionCards = computed(() => {
+  if (aiVariants.value.length) return aiVariants.value
+  return actionCards.value
+})
+
 function formatDate(date) {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')
@@ -419,6 +434,30 @@ const save = async () => {
     ElMessage.error(err.response?.data?.message || '活动设置保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+const generateReferralCopy = async () => {
+  generatingCopy.value = true
+  try {
+    const bestCampaign = rankedCampaigns.value[0]
+    const payload = {
+      product_name: bestCampaign?.store?.name || '',
+      goal: `提升裂变扫码、领券、下单和复购转化。当前扫码 ${stats.value.scan_count || 0} 次，发券 ${stats.value.reward_coupon_count || 0} 张，下单 ${stats.value.conversion_count || 0} 单。`,
+      tone: '亲切、可信、适合本地生活商家，文案要能直接复制发布'
+    }
+    const res = await generateMerchantAIReferralCopy(payload)
+    aiVariants.value = res.data?.variants || []
+    aiQuota.value = res.data?.quota || {}
+    if (!aiVariants.value.length) {
+      ElMessage.warning('AI 已返回结果，但暂未解析到多版本文案，已保留默认模板')
+      return
+    }
+    ElMessage.success('已生成朋友圈版、社群版和短视频口播版，并消耗 1 次 AI 额度')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || 'AI 多版本文案生成失败')
+  } finally {
+    generatingCopy.value = false
   }
 }
 
@@ -513,6 +552,19 @@ onMounted(load)
 .hero-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.ai-copy-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-copy-actions small {
+  color: #64748b;
+  font-weight: 700;
 }
 
 .metric-grid,

@@ -13,6 +13,27 @@ type MerchantLoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type MerchantSendPasswordResetCodeRequest struct {
+	Phone string `json:"phone" binding:"required,len=11,numeric"`
+}
+
+type MerchantResetPasswordRequest struct {
+	Phone           string `json:"phone" binding:"required,len=11,numeric"`
+	SMSCode         string `json:"sms_code" binding:"required,len=6,numeric"`
+	NewPassword     string `json:"new_password" binding:"required,min=6"`
+	ConfirmPassword string `json:"confirm_password" binding:"required,min=6"`
+}
+
+type MerchantChangePasswordRequest struct {
+	OldPassword     string `json:"old_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=6"`
+	ConfirmPassword string `json:"confirm_password" binding:"required,min=6"`
+}
+
+type MerchantRedeemCardRequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
 type UpdateMerchantInfoRequest struct {
 	Name         string `json:"name" binding:"required"`
 	ContactPhone string `json:"contact_phone" binding:"required,len=11,numeric"`
@@ -70,6 +91,19 @@ type SavePromotionRequest struct {
 
 type GeneratePromotionDraftRequest struct {
 	CustomerTag string `json:"customer_tag"`
+}
+
+type GenerateAIMarketingCopyRequest struct {
+	Scenario    string `json:"scenario"`
+	CustomerTag string `json:"customer_tag"`
+	Goal        string `json:"goal"`
+	ProductName string `json:"product_name"`
+}
+
+type GenerateAIReferralCopyRequest struct {
+	ProductName string `json:"product_name"`
+	Tone        string `json:"tone"`
+	Goal        string `json:"goal"`
 }
 
 type CreateMerchantSubscriptionOrderRequest struct {
