@@ -1147,6 +1147,62 @@ func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.Gene
 	}, nil
 }
 
+func (s *MerchantService) GenerateAIShareReview(merchantID uint, req dto.GenerateAIShareReviewRequest) (map[string]interface{}, error) {
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家不存在")
+	}
+	quota, err := s.AIQuota(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	if intValue(quota["remaining"]) <= 0 {
+		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
+	}
+
+	params, err := parseAIShareReviewRange(req.StartDate, req.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	shareService := NewShareService(s.db)
+	config, err := shareService.GetActivityConfig(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	stats, campaigns, coupons, err := shareService.StatsByMerchant(merchantID, params)
+	if err != nil {
+		return nil, err
+	}
+
+	review := buildShareReviewDecision(config, stats, campaigns, coupons)
+	systemPrompt := "你是本地生活商家的 AI 活动复盘顾问。请基于裂变海报、扫码、领券、核销、下单和转化金额数据，判断活动是否应该加大优惠、继续观察、优化文案或停用。输出中文，简短、可执行。"
+	userPrompt := fmt.Sprintf(`商家名称：%s
+裂变配置：好友券%s，门槛%s，分享人奖励%s，有效期%d天
+复盘数据：海报%d张，扫码%d次，发券%d张，已核销%d张，过期%d张，作废%d张，转化订单%d单，转化金额%s
+系统初步判断：%v
+
+请给出：
+1. 总体结论
+2. 哪类文案或海报值得继续推
+3. 哪张券核销率高或低
+4. 是否建议加大优惠、降低门槛、继续观察或停用活动
+5. 下一步 3 个动作`, merchant.Name, formatFen(config.FriendCouponAmount), formatFen(config.FriendCouponThreshold), formatFen(config.ReferrerCouponAmount), config.ValidDays, stats.TotalCampaigns, stats.ScanCount, stats.RewardCouponCount, stats.UsedCouponCount, stats.ExpiredCouponCount, stats.VoidedCouponCount, stats.ConversionCount, formatFen(stats.ConversionAmount), review)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
+	defer cancel()
+	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.recordAIUsage(merchantID, "share_campaign_review", result)
+
+	return map[string]interface{}{
+		"review": review,
+		"raw":    result,
+		"quota":  mustQuota(s.AIQuota(merchantID)),
+	}, nil
+}
+
 func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, error) {
 	var merchant model.Merchant
 	if err := s.db.Preload("MerchantPlan").First(&merchant, merchantID).Error; err != nil {
@@ -1364,6 +1420,138 @@ func mustQuota(quota map[string]interface{}, err error) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return quota
+}
+
+func parseAIShareReviewRange(startDate, endDate string) (ShareStatsParams, error) {
+	var params ShareStatsParams
+	startDate = strings.TrimSpace(startDate)
+	endDate = strings.TrimSpace(endDate)
+	if startDate != "" {
+		start, err := time.ParseInLocation("2006-01-02", startDate, time.Local)
+		if err != nil {
+			return params, errors.New("开始日期格式无效")
+		}
+		params.StartAt = &start
+	}
+	if endDate != "" {
+		end, err := time.ParseInLocation("2006-01-02", endDate, time.Local)
+		if err != nil {
+			return params, errors.New("结束日期格式无效")
+		}
+		end = end.AddDate(0, 0, 1).Add(-time.Nanosecond)
+		params.EndAt = &end
+	}
+	return params, nil
+}
+
+func buildShareReviewDecision(config *model.ShareActivityConfig, stats *ShareStats, campaigns []model.ShareCampaign, coupons []model.ReferralCoupon) map[string]interface{} {
+	if stats == nil {
+		stats = &ShareStats{}
+	}
+	scanConversionRate := ratioFloat(stats.ConversionCount, stats.ScanCount)
+	couponUseRate := ratioFloat(stats.UsedCouponCount, stats.RewardCouponCount)
+	expiredRate := ratioFloat(stats.ExpiredCouponCount, stats.RewardCouponCount)
+	avgConversionAmount := int64(0)
+	if stats.ConversionCount > 0 {
+		avgConversionAmount = stats.ConversionAmount / stats.ConversionCount
+	}
+
+	decision := "继续观察"
+	level := "info"
+	if stats.TotalCampaigns == 0 || stats.ScanCount == 0 {
+		decision = "先开启活动并增加曝光"
+		level = "warning"
+	} else if scanConversionRate >= 0.15 && couponUseRate >= 0.2 {
+		decision = "建议加大投放"
+		level = "success"
+	} else if stats.ScanCount >= 10 && stats.ConversionCount == 0 {
+		decision = "建议优化文案和优惠门槛"
+		level = "danger"
+	} else if couponUseRate < 0.08 && stats.RewardCouponCount >= 10 {
+		decision = "建议降低门槛或提高券吸引力"
+		level = "warning"
+	} else if expiredRate > 0.35 {
+		decision = "建议缩短触达链路并增加到期提醒"
+		level = "warning"
+	}
+
+	bestCampaign := map[string]interface{}{}
+	stopCampaign := map[string]interface{}{}
+	if len(campaigns) > 0 {
+		best := campaigns[0]
+		bestCampaign = map[string]interface{}{
+			"title":             best.PosterTitle,
+			"scan_count":        best.ScanCount,
+			"conversion_count":  best.ConversionCount,
+			"conversion_amount": best.ConversionAmount,
+			"suggestion":        "优先复制这张海报的标题、话术和优惠配置，继续投放到朋友圈或社群。",
+		}
+		for i := len(campaigns) - 1; i >= 0; i-- {
+			item := campaigns[i]
+			if item.ScanCount > 0 && item.ConversionCount == 0 {
+				stopCampaign = map[string]interface{}{
+					"title":      item.PosterTitle,
+					"scan_count": item.ScanCount,
+					"suggestion": "这张海报有访问但无下单，建议暂停或重写首屏文案。",
+				}
+				break
+			}
+		}
+	}
+
+	var unused int64
+	var used int64
+	var expired int64
+	for _, coupon := range coupons {
+		switch coupon.Status {
+		case "used":
+			used++
+		case "expired":
+			expired++
+		case "unused":
+			unused++
+		}
+	}
+
+	couponAdvice := "当前券表现正常，建议继续观察核销率和客单价。"
+	if couponUseRate >= 0.25 {
+		couponAdvice = "券核销率较好，可以适当扩大曝光或提高门槛，测试客单价提升。"
+	} else if couponUseRate < 0.08 && stats.RewardCouponCount > 0 {
+		couponAdvice = "券核销率偏低，建议降低使用门槛、增加到期提醒，或把券与热销商品绑定。"
+	}
+	if config != nil && config.FriendCouponAmount > 0 && config.FriendCouponThreshold > 0 {
+		discountRatio := float64(config.FriendCouponAmount) / float64(config.FriendCouponThreshold)
+		if discountRatio > 0.25 {
+			couponAdvice += " 当前优惠力度较大，建议关注毛利，避免为了转化牺牲利润。"
+		}
+	}
+
+	actions := []map[string]string{
+		{"title": "复用最佳海报", "detail": "把扫码和下单最多的海报作为默认版本，继续投放到朋友圈、社群和店内桌贴。"},
+		{"title": "优化低转化链路", "detail": "对有扫码无下单的海报，优先调整首屏标题、券门槛和商品卖点。"},
+		{"title": "追踪券核销", "detail": "每天查看未使用、已核销和过期券，核销偏低时增加提醒或降低门槛。"},
+	}
+
+	return map[string]interface{}{
+		"decision":               decision,
+		"level":                  level,
+		"scan_conversion_rate":   scanConversionRate,
+		"coupon_use_rate":        couponUseRate,
+		"expired_rate":           expiredRate,
+		"avg_conversion_amount":  avgConversionAmount,
+		"best_campaign":          bestCampaign,
+		"stop_campaign":          stopCampaign,
+		"coupon_advice":          couponAdvice,
+		"coupon_status_snapshot": map[string]int64{"unused": unused, "used": used, "expired": expired},
+		"actions":                actions,
+	}
+}
+
+func ratioFloat(value, base int64) float64 {
+	if base <= 0 {
+		return 0
+	}
+	return float64(value) / float64(base)
 }
 
 func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]interface{} {

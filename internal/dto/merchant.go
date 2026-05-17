@@ -106,6 +106,11 @@ type GenerateAIReferralCopyRequest struct {
 	Goal        string `json:"goal"`
 }
 
+type GenerateAIShareReviewRequest struct {
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+}
+
 type CreateMerchantSubscriptionOrderRequest struct {
 	PlanID         uint   `json:"plan_id" binding:"required"`
 	PaymentChannel string `json:"payment_channel"`

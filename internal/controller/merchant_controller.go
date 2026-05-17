@@ -693,6 +693,22 @@ func (ctl *MerchantController) GenerateAIReferralCopy(c *gin.Context) {
 	utils.Success(c, result)
 }
 
+func (ctl *MerchantController) GenerateAIShareReview(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var req dto.GenerateAIShareReviewRequest
+	_ = c.ShouldBindJSON(&req)
+	result, err := ctl.merchant.GenerateAIShareReview(merchantID, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, result)
+}
+
 func (ctl *MerchantController) AIQuota(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {

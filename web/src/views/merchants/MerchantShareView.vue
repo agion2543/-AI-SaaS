@@ -101,6 +101,60 @@
       </el-card>
     </section>
 
+    <section class="review-grid">
+      <el-card class="panel-card review-card" shadow="never">
+        <template #header>
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">AI REVIEW</p>
+              <h2>AI 活动效果复盘</h2>
+            </div>
+            <div class="ai-copy-actions">
+              <small v-if="aiQuota.remaining !== undefined">今日剩余 {{ aiQuota.remaining }} 次</small>
+              <el-button type="primary" :loading="reviewLoading" @click="generateShareReview">
+                AI 复盘当前活动
+              </el-button>
+            </div>
+          </div>
+        </template>
+
+        <div v-if="shareReview" class="review-body">
+          <div class="review-decision">
+            <el-tag :type="reviewTagType(shareReview.level)" size="large">{{ shareReview.decision }}</el-tag>
+            <strong>扫码转化率 {{ percentText(shareReview.scan_conversion_rate) }}</strong>
+            <strong>券核销率 {{ percentText(shareReview.coupon_use_rate) }}</strong>
+            <strong>客单转化 {{ yuan(shareReview.avg_conversion_amount || 0) }}</strong>
+          </div>
+
+          <div class="review-panels">
+            <article>
+              <span>表现最好海报</span>
+              <h3>{{ shareReview.best_campaign?.title || '暂无可复用海报' }}</h3>
+              <p>{{ shareReview.best_campaign?.suggestion || '先开启活动并积累扫码、领券和下单数据。' }}</p>
+            </article>
+            <article>
+              <span>优惠券判断</span>
+              <h3>核销表现</h3>
+              <p>{{ shareReview.coupon_advice }}</p>
+            </article>
+            <article>
+              <span>建议停用/重写</span>
+              <h3>{{ shareReview.stop_campaign?.title || '暂无明显低效海报' }}</h3>
+              <p>{{ shareReview.stop_campaign?.suggestion || '继续观察不同海报和文案的扫码、下单差异。' }}</p>
+            </article>
+          </div>
+
+          <div class="review-actions">
+            <article v-for="item in shareReview.actions || []" :key="item.title">
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.detail }}</span>
+            </article>
+          </div>
+        </div>
+        <el-empty v-else description="点击 AI 复盘后，系统会判断是否加大优惠、继续观察、优化文案或停用活动。" />
+      </el-card>
+    </section>
+
     <section class="content-grid">
       <el-card class="panel-card" shadow="never">
         <template #header>
@@ -288,6 +342,7 @@ import {
   fetchMerchantShareConfig,
   fetchMerchantShareStats,
   generateMerchantAIReferralCopy,
+  generateMerchantAIShareReview,
   saveMerchantShareConfig
 } from '../../api/modules'
 
@@ -296,12 +351,14 @@ const loading = ref(false)
 const saving = ref(false)
 const generatingCopy = ref(false)
 const creatingPromotion = ref(false)
+const reviewLoading = ref(false)
 const stats = ref({})
 const campaigns = ref([])
 const coupons = ref([])
 const config = ref({})
 const aiVariants = ref([])
 const aiQuota = ref({})
+const shareReview = ref(null)
 const defaultCopy = '分享给好友，好友扫码领券下单，你也可以获得复购奖励。'
 
 const today = new Date()
@@ -516,6 +573,24 @@ const copyMaterialPack = async () => {
   await copyText(`【${form.poster_title || '裂变营销素材包'}】\n\n${pack}`)
 }
 
+const generateShareReview = async () => {
+  reviewLoading.value = true
+  try {
+    const payload = {
+      start_date: dateRange.value?.[0],
+      end_date: dateRange.value?.[1]
+    }
+    const res = await generateMerchantAIShareReview(payload)
+    shareReview.value = res.data?.review || null
+    aiQuota.value = res.data?.quota || aiQuota.value
+    ElMessage.success('AI 活动复盘已生成，并消耗 1 次 AI 额度')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || 'AI 活动复盘失败')
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
 const trimText = (value, max) => {
   const text = String(value || '').trim()
   if (text.length <= max) return text
@@ -539,6 +614,13 @@ const percent = (value, base) => {
 const ratio = (value, base) => {
   if (!base) return '0%'
   return `${Math.round((Number(value || 0) / Number(base)) * 100)}%`
+}
+
+const percentText = (value) => `${Math.round(Number(value || 0) * 100)}%`
+
+const reviewTagType = (level) => {
+  const map = { success: 'success', warning: 'warning', danger: 'danger', info: 'info' }
+  return map[level] || 'primary'
 }
 
 const formatTime = (value) => {
@@ -631,6 +713,7 @@ onMounted(load)
 .metric-grid,
 .insight-grid,
 .content-grid,
+.review-grid,
 .table-grid {
   display: grid;
   gap: 14px;
@@ -752,6 +835,66 @@ onMounted(load)
 }
 
 .usage-list strong {
+  color: #0f172a;
+}
+
+.review-card {
+  overflow: hidden;
+}
+
+.review-body {
+  display: grid;
+  gap: 16px;
+}
+
+.review-decision {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #eff6ff, #f8fbff);
+}
+
+.review-decision strong {
+  color: #0f172a;
+}
+
+.review-panels,
+.review-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.review-panels article,
+.review-actions article {
+  padding: 16px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.review-panels span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.review-panels h3 {
+  margin: 8px 0;
+}
+
+.review-panels p,
+.review-actions span {
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.review-actions strong {
+  display: block;
+  margin-bottom: 6px;
   color: #0f172a;
 }
 
@@ -897,6 +1040,11 @@ onMounted(load)
   .content-grid,
   .action-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-panels,
+  .review-actions {
+    grid-template-columns: 1fr;
   }
 }
 
