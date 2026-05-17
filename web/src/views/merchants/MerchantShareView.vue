@@ -202,8 +202,20 @@
             <span>{{ action.type }}</span>
             <h3>{{ action.title }}</h3>
             <p>{{ action.text }}</p>
-            <el-button type="primary" plain @click="copyText(action.copy)">复制内容</el-button>
+            <div class="action-buttons">
+              <el-button type="primary" plain @click="copyText(action.copy)">复制内容</el-button>
+              <el-button type="success" plain :loading="saving" @click="applyToPoster(action)">应用到海报</el-button>
+              <el-button type="warning" plain :loading="creatingPromotion" @click="createPromotionFromAction(action)">转为优惠活动</el-button>
+            </div>
           </article>
+        </div>
+        <div v-if="aiVariants.length" class="material-pack">
+          <div>
+            <p class="eyebrow">MATERIAL PACK</p>
+            <strong>朋友圈素材包</strong>
+            <span>把三版文案合并成一份，方便发给店员、代运营或直接保存到社群素材库。</span>
+          </div>
+          <el-button type="primary" @click="copyMaterialPack">复制整包素材</el-button>
         </div>
       </el-card>
     </section>
@@ -272,6 +284,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
+  createMerchantPromotion,
   fetchMerchantShareConfig,
   fetchMerchantShareStats,
   generateMerchantAIReferralCopy,
@@ -282,6 +295,7 @@ const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
 const generatingCopy = ref(false)
+const creatingPromotion = ref(false)
 const stats = ref({})
 const campaigns = ref([])
 const coupons = ref([])
@@ -459,6 +473,53 @@ const generateReferralCopy = async () => {
   } finally {
     generatingCopy.value = false
   }
+}
+
+const applyToPoster = async (action) => {
+  form.enabled = true
+  form.poster_title = action.title || form.poster_title
+  form.poster_copy = trimText(action.copy || action.text || defaultCopy, 480)
+  await save()
+  ElMessage.success('已把 AI 文案应用到裂变海报，顾客支付成功页会按新海报展示')
+}
+
+const createPromotionFromAction = async (action) => {
+  creatingPromotion.value = true
+  try {
+    const now = new Date()
+    const end = new Date(now)
+    end.setDate(now.getDate() + Number(form.valid_days || 30))
+    const payload = {
+      title: trimText(action.title || 'AI 裂变优惠活动', 60),
+      description: trimText(action.copy || action.text || '由 AI 裂变文案一键生成的优惠活动。', 280),
+      type: 'amount',
+      threshold: yuanToFen(form.friend_coupon_threshold_yuan),
+      discount: yuanToFen(form.friend_coupon_amount_yuan),
+      status: 'published',
+      valid_from: formatDate(now),
+      valid_to: formatDate(end)
+    }
+    await createMerchantPromotion(payload)
+    ElMessage.success('已创建并发布优惠活动，可在“优惠活动”菜单继续调整')
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || '创建优惠活动失败')
+  } finally {
+    creatingPromotion.value = false
+  }
+}
+
+const copyMaterialPack = async () => {
+  const source = displayActionCards.value
+  const pack = source.map((item, index) => {
+    return `${index + 1}. ${item.type}｜${item.title}\n${item.copy || item.text || ''}`
+  }).join('\n\n')
+  await copyText(`【${form.poster_title || '裂变营销素材包'}】\n\n${pack}`)
+}
+
+const trimText = (value, max) => {
+  const text = String(value || '').trim()
+  if (text.length <= max) return text
+  return `${text.slice(0, max - 1)}…`
 }
 
 const copyText = async (text) => {
@@ -799,6 +860,35 @@ onMounted(load)
 .action-card p {
   color: #64748b;
   line-height: 1.7;
+}
+
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.material-pack {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 20px;
+  background: linear-gradient(135deg, #eff6ff, #f8fbff);
+}
+
+.material-pack strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #0f172a;
+}
+
+.material-pack span {
+  color: #64748b;
 }
 
 @media (max-width: 1200px) {
