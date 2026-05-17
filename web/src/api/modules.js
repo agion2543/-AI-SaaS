@@ -42,7 +42,7 @@ export const redeemMerchantSubscriptionCard = (payload) => http.post('/merchant/
 export const fetchMerchantAIInsights = () => http.get('/merchant/ai/insights')
 export const fetchMerchantAIQuota = () => http.get('/merchant/ai/quota')
 export const generateMerchantAIMarketingCopy = (payload = {}) => http.post('/merchant/ai/marketing-copy', payload)
-export const fetchMerchantShareStats = () => http.get('/merchant/ai/share-stats')
+export const fetchMerchantShareStats = (params) => http.get('/merchant/ai/share-stats', { params })
 export const fetchMerchantShareConfig = () => http.get('/merchant/share/config')
 export const saveMerchantShareConfig = (payload) => http.put('/merchant/share/config', payload)
 export const fetchMerchantCoupons = (params) => http.get('/merchant/coupons', { params })

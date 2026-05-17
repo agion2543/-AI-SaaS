@@ -17,13 +17,21 @@ type ShareService struct {
 }
 
 type ShareStats struct {
-	TotalCampaigns    int64 `json:"total_campaigns"`
-	ScanCount         int64 `json:"scan_count"`
-	LeadCount         int64 `json:"lead_count"`
-	ConversionCount   int64 `json:"conversion_count"`
-	ConversionAmount  int64 `json:"conversion_amount"`
-	RewardCouponCount int64 `json:"reward_coupon_count"`
-	UnusedCouponCount int64 `json:"unused_coupon_count"`
+	TotalCampaigns     int64 `json:"total_campaigns"`
+	ScanCount          int64 `json:"scan_count"`
+	LeadCount          int64 `json:"lead_count"`
+	ConversionCount    int64 `json:"conversion_count"`
+	ConversionAmount   int64 `json:"conversion_amount"`
+	RewardCouponCount  int64 `json:"reward_coupon_count"`
+	UnusedCouponCount  int64 `json:"unused_coupon_count"`
+	UsedCouponCount    int64 `json:"used_coupon_count"`
+	ExpiredCouponCount int64 `json:"expired_coupon_count"`
+	VoidedCouponCount  int64 `json:"voided_coupon_count"`
+}
+
+type ShareStatsParams struct {
+	StartAt *time.Time
+	EndAt   *time.Time
 }
 
 type CouponListParams struct {
@@ -233,11 +241,17 @@ func (s *ShareService) FindByCode(code string) (*model.ShareCampaign, error) {
 	return &campaign, nil
 }
 
-func (s *ShareService) StatsByMerchant(merchantID uint) (*ShareStats, []model.ShareCampaign, []model.ReferralCoupon, error) {
+func (s *ShareService) StatsByMerchant(merchantID uint, params ShareStatsParams) (*ShareStats, []model.ShareCampaign, []model.ReferralCoupon, error) {
 	var stats ShareStats
 	var campaigns []model.ShareCampaign
 	var coupons []model.ReferralCoupon
 	query := s.db.Model(&model.ShareCampaign{}).Where("merchant_id = ?", merchantID)
+	if params.StartAt != nil {
+		query = query.Where("created_at >= ?", *params.StartAt)
+	}
+	if params.EndAt != nil {
+		query = query.Where("created_at <= ?", *params.EndAt)
+	}
 	query.Count(&stats.TotalCampaigns)
 	query.Select("COALESCE(SUM(scan_count),0)").Scan(&stats.ScanCount)
 	query.Select("COALESCE(SUM(lead_count),0)").Scan(&stats.LeadCount)
@@ -245,13 +259,46 @@ func (s *ShareService) StatsByMerchant(merchantID uint) (*ShareStats, []model.Sh
 	query.Select("COALESCE(SUM(conversion_amount),0)").Scan(&stats.ConversionAmount)
 
 	couponQuery := s.db.Model(&model.ReferralCoupon{}).Where("merchant_id = ?", merchantID)
+	if params.StartAt != nil {
+		couponQuery = couponQuery.Where("created_at >= ?", *params.StartAt)
+	}
+	if params.EndAt != nil {
+		couponQuery = couponQuery.Where("created_at <= ?", *params.EndAt)
+	}
 	couponQuery.Count(&stats.RewardCouponCount)
-	couponQuery.Where("status = ?", "unused").Count(&stats.UnusedCouponCount)
+	couponStatusQuery := func(status string) *gorm.DB {
+		q := s.db.Model(&model.ReferralCoupon{}).Where("merchant_id = ? AND status = ?", merchantID, status)
+		if params.StartAt != nil {
+			q = q.Where("created_at >= ?", *params.StartAt)
+		}
+		if params.EndAt != nil {
+			q = q.Where("created_at <= ?", *params.EndAt)
+		}
+		return q
+	}
+	couponStatusQuery("unused").Count(&stats.UnusedCouponCount)
+	couponStatusQuery("used").Count(&stats.UsedCouponCount)
+	couponStatusQuery("expired").Count(&stats.ExpiredCouponCount)
+	couponStatusQuery("voided").Count(&stats.VoidedCouponCount)
 
-	if err := s.db.Preload("Store").Where("merchant_id = ?", merchantID).Order("id desc").Limit(20).Find(&campaigns).Error; err != nil {
+	campaignQuery := s.db.Preload("Store").Where("merchant_id = ?", merchantID)
+	if params.StartAt != nil {
+		campaignQuery = campaignQuery.Where("created_at >= ?", *params.StartAt)
+	}
+	if params.EndAt != nil {
+		campaignQuery = campaignQuery.Where("created_at <= ?", *params.EndAt)
+	}
+	if err := campaignQuery.Order("conversion_count desc, scan_count desc, id desc").Limit(50).Find(&campaigns).Error; err != nil {
 		return nil, nil, nil, err
 	}
-	if err := s.db.Preload("Store").Where("merchant_id = ?", merchantID).Order("id desc").Limit(30).Find(&coupons).Error; err != nil {
+	recentCouponQuery := s.db.Preload("Store").Where("merchant_id = ?", merchantID)
+	if params.StartAt != nil {
+		recentCouponQuery = recentCouponQuery.Where("created_at >= ?", *params.StartAt)
+	}
+	if params.EndAt != nil {
+		recentCouponQuery = recentCouponQuery.Where("created_at <= ?", *params.EndAt)
+	}
+	if err := recentCouponQuery.Order("id desc").Limit(50).Find(&coupons).Error; err != nil {
 		return nil, nil, nil, err
 	}
 	return &stats, campaigns, coupons, nil

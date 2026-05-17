@@ -2,13 +2,23 @@
   <div class="share-page">
     <section class="share-hero">
       <div>
-        <p class="eyebrow">REFERRAL GROWTH</p>
+        <p class="eyebrow light">REFERRAL GROWTH</p>
         <h1>营销裂变看板</h1>
         <p class="hero-copy">
-          开启后，顾客支付成功页会展示分享海报与好友券；关闭时顾客端不展示任何裂变活动内容。
+          用分享海报、好友券和复购奖励把一次下单变成二次传播，持续观察扫码、领券、下单和复购转化。
         </p>
       </div>
       <div class="hero-actions">
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          :clearable="false"
+          @change="load"
+        />
         <el-tag :type="config.enabled ? 'success' : 'info'" size="large">
           {{ config.enabled ? '活动已开启' : '活动未开启' }}
         </el-tag>
@@ -18,30 +28,77 @@
 
     <section class="metric-grid">
       <article class="metric-card">
-        <span>海报活动</span>
+        <span>分享海报</span>
         <strong>{{ stats.total_campaigns || 0 }}</strong>
-        <small>顾客订单生成的分享海报数</small>
+        <small>顾客支付成功后生成的海报</small>
       </article>
       <article class="metric-card">
         <span>扫码访问</span>
         <strong>{{ stats.scan_count || 0 }}</strong>
-        <small>好友通过海报进入门店页次数</small>
+        <small>好友通过海报进入门店页</small>
       </article>
       <article class="metric-card">
         <span>发券数量</span>
         <strong>{{ stats.reward_coupon_count || 0 }}</strong>
-        <small>好友券与复购奖励券合计</small>
+        <small>好友券与分享人奖励券</small>
       </article>
       <article class="metric-card">
         <span>转化订单</span>
         <strong>{{ stats.conversion_count || 0 }}</strong>
-        <small>通过分享码完成下单的订单</small>
+        <small>通过分享码完成支付的订单</small>
       </article>
       <article class="metric-card accent">
         <span>转化金额</span>
         <strong>{{ yuan(stats.conversion_amount || 0) }}</strong>
-        <small>裂变带来的顾客交易额</small>
+        <small>裂变活动带来的交易额</small>
       </article>
+    </section>
+
+    <section class="insight-grid">
+      <el-card class="panel-card" shadow="never">
+        <template #header>
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">CONVERSION FUNNEL</p>
+              <h2>扫码转化漏斗</h2>
+            </div>
+            <el-tag type="primary" effect="plain">当前筛选区间</el-tag>
+          </div>
+        </template>
+        <div class="funnel">
+          <div v-for="step in funnelSteps" :key="step.label" class="funnel-step">
+            <div class="funnel-main">
+              <span>{{ step.label }}</span>
+              <strong>{{ step.value }}</strong>
+            </div>
+            <el-progress :percentage="step.percent" :stroke-width="12" :show-text="false" />
+            <small>{{ step.tip }}</small>
+          </div>
+        </div>
+      </el-card>
+
+      <el-card class="panel-card" shadow="never">
+        <template #header>
+          <div>
+            <p class="eyebrow">COUPON ROI</p>
+            <h2>优惠券使用率</h2>
+          </div>
+        </template>
+        <div class="coupon-usage">
+          <el-progress type="dashboard" :percentage="couponUsageRate" :width="154">
+            <template #default="{ percentage }">
+              <div class="usage-rate">{{ percentage }}%</div>
+              <small>已核销</small>
+            </template>
+          </el-progress>
+          <div class="usage-list">
+            <div><span>未使用</span><strong>{{ stats.unused_coupon_count || 0 }}</strong></div>
+            <div><span>已核销</span><strong>{{ stats.used_coupon_count || 0 }}</strong></div>
+            <div><span>已过期</span><strong>{{ stats.expired_coupon_count || 0 }}</strong></div>
+            <div><span>已作废</span><strong>{{ stats.voided_coupon_count || 0 }}</strong></div>
+          </div>
+        </div>
+      </el-card>
     </section>
 
     <section class="content-grid">
@@ -50,19 +107,15 @@
           <div class="panel-title">
             <div>
               <p class="eyebrow">ACTIVITY SETUP</p>
-              <h2>活动设置</h2>
+              <h2>裂变活动设置</h2>
             </div>
-            <el-switch
-              v-model="form.enabled"
-              active-text="开启"
-              inactive-text="关闭"
-            />
+            <el-switch v-model="form.enabled" active-text="开启" inactive-text="关闭" />
           </div>
         </template>
 
         <el-form label-position="top" class="share-form">
           <el-form-item label="海报标题">
-            <el-input v-model="form.poster_title" placeholder="例如：好友扫码领券" maxlength="120" show-word-limit />
+            <el-input v-model="form.poster_title" maxlength="120" show-word-limit placeholder="例如：好友扫码领券" />
           </el-form-item>
           <el-form-item label="海报文案">
             <el-input
@@ -99,7 +152,7 @@
 
           <div class="form-actions">
             <el-button type="primary" :loading="saving" @click="save">保存活动设置</el-button>
-            <el-button @click="router.push('/merchant/coupons')">查看券包/核销</el-button>
+            <el-button @click="router.push('/merchant/coupons')">券包/核销管理</el-button>
           </div>
         </el-form>
       </el-card>
@@ -108,13 +161,13 @@
         <template #header>
           <div>
             <p class="eyebrow">POSTER PREVIEW</p>
-            <h2>顾客端展示预览</h2>
+            <h2>顾客端海报预览</h2>
           </div>
         </template>
         <div class="poster-preview" :class="{ disabled: !form.enabled }">
-          <div class="poster-badge">{{ form.enabled ? '好友专享' : '未开启' }}</div>
+          <div class="poster-badge">{{ form.enabled ? '好友专享' : '活动未开启' }}</div>
           <h3>{{ form.poster_title || '好友扫码领券' }}</h3>
-          <p>{{ form.poster_copy || '分享给好友，好友扫码领券下单，你也可以获得复购奖励。' }}</p>
+          <p>{{ form.poster_copy || defaultCopy }}</p>
           <div class="coupon-ticket">
             <span>好友券</span>
             <strong>{{ yuan(yuanToFen(form.friend_coupon_amount_yuan)) }}</strong>
@@ -128,22 +181,49 @@
       </el-card>
     </section>
 
+    <section class="action-grid">
+      <el-card class="panel-card" shadow="never">
+        <template #header>
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">ACTION PLAYBOOK</p>
+              <h2>一键可用营销动作</h2>
+            </div>
+          </div>
+        </template>
+        <div class="action-list">
+          <article v-for="action in actionCards" :key="action.title" class="action-card">
+            <span>{{ action.type }}</span>
+            <h3>{{ action.title }}</h3>
+            <p>{{ action.text }}</p>
+            <el-button type="primary" plain @click="copyText(action.copy)">复制内容</el-button>
+          </article>
+        </div>
+      </el-card>
+    </section>
+
     <section class="table-grid">
       <el-card class="panel-card" shadow="never">
         <template #header>
           <div class="panel-title">
             <div>
-              <p class="eyebrow">CAMPAIGNS</p>
-              <h2>最近海报活动</h2>
+              <p class="eyebrow">RANKING</p>
+              <h2>海报贡献排行</h2>
             </div>
+            <small>默认按下单数、扫码数排序</small>
           </div>
         </template>
-        <el-table v-loading="loading" :data="campaigns" empty-text="暂无海报活动">
+        <el-table v-loading="loading" :data="rankedCampaigns" empty-text="暂无海报活动">
+          <el-table-column label="排名" width="78">
+            <template #default="{ $index }">#{{ $index + 1 }}</template>
+          </el-table-column>
           <el-table-column prop="store.name" label="门店" min-width="140" />
           <el-table-column prop="poster_title" label="海报标题" min-width="180" show-overflow-tooltip />
-          <el-table-column prop="scan_count" label="扫码" width="90" />
-          <el-table-column prop="conversion_count" label="下单" width="90" />
-          <el-table-column label="转化金额" width="120">
+          <el-table-column prop="customer_phone" label="分享人" min-width="130" />
+          <el-table-column prop="scan_count" label="扫码" width="90" sortable />
+          <el-table-column prop="lead_count" label="发券" width="90" sortable />
+          <el-table-column prop="conversion_count" label="下单" width="90" sortable />
+          <el-table-column label="转化金额" width="120" sortable>
             <template #default="{ row }">{{ yuan(row.conversion_amount || 0) }}</template>
           </el-table-column>
           <el-table-column prop="created_at" label="创建时间" min-width="160">
@@ -182,7 +262,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -198,11 +278,17 @@ const stats = ref({})
 const campaigns = ref([])
 const coupons = ref([])
 const config = ref({})
+const defaultCopy = '分享给好友，好友扫码领券下单，你也可以获得复购奖励。'
+
+const today = new Date()
+const thirtyDaysAgo = new Date(today)
+thirtyDaysAgo.setDate(today.getDate() - 29)
+const dateRange = ref([formatDate(thirtyDaysAgo), formatDate(today)])
 
 const form = reactive({
   enabled: false,
   poster_title: '好友扫码领券',
-  poster_copy: '分享给好友，好友扫码领券下单，你也可以获得复购奖励。',
+  poster_copy: defaultCopy,
   friend_coupon_amount_yuan: 5,
   friend_coupon_threshold_yuan: 30,
   referrer_coupon_amount_yuan: 5,
@@ -214,11 +300,75 @@ const yuan = (cents) => `¥${(Number(cents || 0) / 100).toFixed(2)}`
 const yuanToFen = (amount) => Math.round(Number(amount || 0) * 100)
 const fenToYuan = (amount) => Number(((Number(amount || 0)) / 100).toFixed(2))
 
+const couponUsageRate = computed(() => {
+  const total = Number(stats.value.reward_coupon_count || 0)
+  if (!total) return 0
+  return Math.round((Number(stats.value.used_coupon_count || 0) / total) * 100)
+})
+
+const rankedCampaigns = computed(() => {
+  return [...campaigns.value].sort((a, b) => {
+    const orderDiff = Number(b.conversion_count || 0) - Number(a.conversion_count || 0)
+    if (orderDiff !== 0) return orderDiff
+    const scanDiff = Number(b.scan_count || 0) - Number(a.scan_count || 0)
+    if (scanDiff !== 0) return scanDiff
+    return Number(b.conversion_amount || 0) - Number(a.conversion_amount || 0)
+  })
+})
+
+const funnelSteps = computed(() => {
+  const posters = Number(stats.value.total_campaigns || 0)
+  const scans = Number(stats.value.scan_count || 0)
+  const couponsIssued = Number(stats.value.reward_coupon_count || 0)
+  const orders = Number(stats.value.conversion_count || 0)
+  return [
+    { label: '生成海报', value: posters, percent: 100, tip: '顾客支付成功后生成可分享海报' },
+    { label: '好友扫码', value: scans, percent: percent(scans, Math.max(posters, 1)), tip: `扫码/海报：${ratio(scans, posters)}` },
+    { label: '自动发券', value: couponsIssued, percent: percent(couponsIssued, Math.max(scans * 2, 1)), tip: `发券/扫码：${ratio(couponsIssued, scans)}` },
+    { label: '转化下单', value: orders, percent: percent(orders, Math.max(scans, 1)), tip: `下单/扫码：${ratio(orders, scans)}` }
+  ]
+})
+
+const actionCards = computed(() => {
+  const bestCampaign = rankedCampaigns.value[0]
+  const posterTitle = form.poster_title || '好友扫码领券'
+  const friendCoupon = yuan(yuanToFen(form.friend_coupon_amount_yuan))
+  const threshold = yuan(yuanToFen(form.friend_coupon_threshold_yuan))
+  const bestStore = bestCampaign?.store?.name || '本店'
+  return [
+    {
+      type: '朋友圈文案',
+      title: '老客分享领券',
+      text: `突出 ${friendCoupon} 好友券，引导老顾客把门店推荐给朋友。`,
+      copy: `${posterTitle}\n我在${bestStore}刚下单，体验不错。好友扫码可领${friendCoupon}优惠券，满${threshold}可用，适合第一次来试试。`
+    },
+    {
+      type: '社群话术',
+      title: '沉睡顾客召回',
+      text: '适合发到微信群或私域群，强调限时和朋友一起用。',
+      copy: `本周福利：好友扫码领${friendCoupon}券，满${threshold}可用。带朋友来下单，分享人也有复购奖励，数量有限，先到先得。`
+    },
+    {
+      type: '短视频脚本',
+      title: '15 秒门店引流脚本',
+      text: '给商家拍手机短视频用，低成本执行。',
+      copy: `镜头1：展示门店招牌和热销商品。\n旁白：今天给老顾客准备了一个隐藏福利。\n镜头2：展示扫码海报。\n旁白：把海报发给朋友，朋友扫码领${friendCoupon}券下单。\n镜头3：展示出餐或服务过程。\n旁白：朋友省钱，你也能拿复购奖励，来店直接用。`
+    }
+  ]
+})
+
+function formatDate(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 const applyConfig = (next = {}) => {
   config.value = next
   form.enabled = Boolean(next.enabled)
   form.poster_title = next.poster_title || '好友扫码领券'
-  form.poster_copy = next.poster_copy || '分享给好友，好友扫码领券下单，你也可以获得复购奖励。'
+  form.poster_copy = next.poster_copy || defaultCopy
   form.friend_coupon_amount_yuan = fenToYuan(next.friend_coupon_amount || 500)
   form.friend_coupon_threshold_yuan = fenToYuan(next.friend_coupon_threshold || 3000)
   form.referrer_coupon_amount_yuan = fenToYuan(next.referrer_coupon_amount || 500)
@@ -229,8 +379,12 @@ const applyConfig = (next = {}) => {
 const load = async () => {
   loading.value = true
   try {
+    const params = {
+      start_date: dateRange.value?.[0],
+      end_date: dateRange.value?.[1]
+    }
     const [statsRes, configRes] = await Promise.all([
-      fetchMerchantShareStats(),
+      fetchMerchantShareStats(params),
       fetchMerchantShareConfig()
     ])
     stats.value = statsRes.data?.stats || {}
@@ -266,6 +420,25 @@ const save = async () => {
   } finally {
     saving.value = false
   }
+}
+
+const copyText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制，可直接发朋友圈、社群或短视频脚本')
+  } catch {
+    ElMessage.error('复制失败，请手动选择内容复制')
+  }
+}
+
+const percent = (value, base) => {
+  if (!base) return 0
+  return Math.max(0, Math.min(100, Math.round((Number(value || 0) / Number(base)) * 100)))
+}
+
+const ratio = (value, base) => {
+  if (!base) return '0%'
+  return `${Math.round((Number(value || 0) / Number(base)) * 100)}%`
 }
 
 const formatTime = (value) => {
@@ -337,17 +510,33 @@ onMounted(load)
   gap: 12px;
 }
 
-.metric-grid {
+.hero-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.metric-grid,
+.insight-grid,
+.content-grid,
+.table-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.insight-grid,
+.content-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
 }
 
 .metric-card,
 .panel-card {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.06);
 }
 
@@ -358,8 +547,7 @@ onMounted(load)
 }
 
 .metric-card span,
-.metric-card small,
-.hero-copy {
+.metric-card small {
   color: #64748b;
 }
 
@@ -370,17 +558,6 @@ onMounted(load)
 
 .metric-card.accent {
   background: linear-gradient(135deg, #ecfeff 0%, #eff6ff 100%);
-}
-
-.content-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
-  gap: 18px;
-}
-
-.table-grid {
-  display: grid;
-  gap: 18px;
 }
 
 .panel-card :deep(.el-card__header) {
@@ -400,6 +577,71 @@ onMounted(load)
   letter-spacing: 0.16em;
 }
 
+.eyebrow.light {
+  color: #a7f3d0;
+}
+
+.funnel {
+  display: grid;
+  gap: 16px;
+}
+
+.funnel-step {
+  padding: 14px;
+  border-radius: 18px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+}
+
+.funnel-main {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: #475569;
+}
+
+.funnel-main strong {
+  color: #0f172a;
+  font-size: 22px;
+}
+
+.funnel-step small {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.coupon-usage {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+  gap: 18px;
+}
+
+.usage-rate {
+  font-size: 24px;
+  font-weight: 900;
+  color: #1d4ed8;
+}
+
+.usage-list {
+  display: grid;
+  gap: 10px;
+}
+
+.usage-list div {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fbff;
+  color: #64748b;
+}
+
+.usage-list strong {
+  color: #0f172a;
+}
+
 .share-form {
   display: grid;
   gap: 10px;
@@ -413,10 +655,6 @@ onMounted(load)
 
 .form-actions {
   justify-content: flex-start;
-}
-
-.preview-card {
-  overflow: hidden;
 }
 
 .poster-preview {
@@ -483,9 +721,39 @@ onMounted(load)
   font-weight: 900;
 }
 
+.action-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.action-card {
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(135deg, #f8fbff, #eef6ff);
+}
+
+.action-card span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.action-card h3 {
+  margin: 8px 0;
+}
+
+.action-card p {
+  color: #64748b;
+  line-height: 1.7;
+}
+
 @media (max-width: 1200px) {
   .metric-grid,
-  .content-grid {
+  .insight-grid,
+  .content-grid,
+  .action-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -498,8 +766,11 @@ onMounted(load)
   }
 
   .metric-grid,
+  .insight-grid,
   .content-grid,
-  .form-row {
+  .form-row,
+  .action-list,
+  .coupon-usage {
     grid-template-columns: 1fr;
   }
 }
