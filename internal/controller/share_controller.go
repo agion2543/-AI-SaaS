@@ -42,12 +42,50 @@ func (ctl *ShareController) MerchantShareStats(c *gin.Context) {
 		utils.Error(c, http.StatusForbidden, "merchant context missing")
 		return
 	}
+	config, err := ctl.shares.GetActivityConfig(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	stats, campaigns, coupons, err := ctl.shares.StatsByMerchant(merchantID)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"stats": stats, "list": campaigns, "coupons": coupons})
+	utils.Success(c, gin.H{"stats": stats, "list": campaigns, "coupons": coupons, "config": config})
+}
+
+func (ctl *ShareController) MerchantShareConfig(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	config, err := ctl.shares.GetActivityConfig(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"config": config})
+}
+
+func (ctl *ShareController) SaveMerchantShareConfig(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var req service.ShareActivityConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	config, err := ctl.shares.UpdateActivityConfig(merchantID, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"config": config})
 }
 
 func (ctl *ShareController) MerchantCoupons(c *gin.Context) {

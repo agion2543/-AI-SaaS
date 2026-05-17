@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS share_activity_configs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  deleted_at DATETIME(3) NULL,
+  merchant_id BIGINT UNSIGNED NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 0,
+  poster_title VARCHAR(120) DEFAULT '',
+  poster_copy VARCHAR(500) DEFAULT '',
+  friend_coupon_amount BIGINT NOT NULL DEFAULT 500,
+  friend_coupon_threshold BIGINT NOT NULL DEFAULT 3000,
+  referrer_coupon_amount BIGINT NOT NULL DEFAULT 500,
+  referrer_coupon_threshold BIGINT NOT NULL DEFAULT 3000,
+  valid_days BIGINT NOT NULL DEFAULT 30,
+  status VARCHAR(20) DEFAULT 'active',
+  PRIMARY KEY (id),
+  UNIQUE KEY idx_share_activity_configs_merchant_id (merchant_id),
+  KEY idx_share_activity_configs_deleted_at (deleted_at),
+  KEY idx_share_activity_configs_enabled (enabled),
+  KEY idx_share_activity_configs_status (status),
+  CONSTRAINT fk_share_activity_configs_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

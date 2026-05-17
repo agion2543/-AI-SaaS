@@ -59,8 +59,72 @@ type CouponManageStats struct {
 	Voided  int64 `json:"voided"`
 }
 
+type ShareActivityConfigRequest struct {
+	Enabled                 bool   `json:"enabled"`
+	PosterTitle             string `json:"poster_title"`
+	PosterCopy              string `json:"poster_copy"`
+	FriendCouponAmount      int64  `json:"friend_coupon_amount"`
+	FriendCouponThreshold   int64  `json:"friend_coupon_threshold"`
+	ReferrerCouponAmount    int64  `json:"referrer_coupon_amount"`
+	ReferrerCouponThreshold int64  `json:"referrer_coupon_threshold"`
+	ValidDays               int    `json:"valid_days"`
+}
+
 func NewShareService(db *gorm.DB) *ShareService {
 	return &ShareService{db: db}
+}
+
+func (s *ShareService) GetActivityConfig(merchantID uint) (*model.ShareActivityConfig, error) {
+	var config model.ShareActivityConfig
+	if err := s.db.Where("merchant_id = ?", merchantID).First(&config).Error; err == nil {
+		return &config, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	config = model.ShareActivityConfig{
+		MerchantID:              merchantID,
+		Enabled:                 false,
+		PosterTitle:             "好友扫码领券",
+		PosterCopy:              "分享给好友，好友扫码领券下单，你也可获得复购奖励。",
+		FriendCouponAmount:      500,
+		FriendCouponThreshold:   3000,
+		ReferrerCouponAmount:    500,
+		ReferrerCouponThreshold: 3000,
+		ValidDays:               30,
+		Status:                  "active",
+	}
+	if err := s.db.Create(&config).Error; err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+func (s *ShareService) UpdateActivityConfig(merchantID uint, req ShareActivityConfigRequest) (*model.ShareActivityConfig, error) {
+	config, err := s.GetActivityConfig(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	if req.ValidDays <= 0 || req.ValidDays > 365 {
+		return nil, errors.New("valid days must be between 1 and 365")
+	}
+	if req.FriendCouponAmount < 0 || req.ReferrerCouponAmount < 0 || req.FriendCouponThreshold < 0 || req.ReferrerCouponThreshold < 0 {
+		return nil, errors.New("coupon amount and threshold cannot be negative")
+	}
+	updates := map[string]interface{}{
+		"enabled":                   req.Enabled,
+		"poster_title":              strings.TrimSpace(req.PosterTitle),
+		"poster_copy":               strings.TrimSpace(req.PosterCopy),
+		"friend_coupon_amount":      req.FriendCouponAmount,
+		"friend_coupon_threshold":   req.FriendCouponThreshold,
+		"referrer_coupon_amount":    req.ReferrerCouponAmount,
+		"referrer_coupon_threshold": req.ReferrerCouponThreshold,
+		"valid_days":                req.ValidDays,
+		"status":                    "active",
+	}
+	if err := s.db.Model(config).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	return s.GetActivityConfig(merchantID)
 }
 
 func (s *ShareService) EnsureCampaignForOrder(orderNo string) (*model.ShareCampaign, error) {
@@ -70,6 +134,14 @@ func (s *ShareService) EnsureCampaignForOrder(orderNo string) (*model.ShareCampa
 	}
 	if order.MerchantID == nil || order.StoreID == nil {
 		return nil, errors.New("订单缺少商家或门店信息")
+	}
+
+	config, err := s.GetActivityConfig(*order.MerchantID)
+	if err != nil {
+		return nil, err
+	}
+	if !config.Enabled || config.Status != "active" {
+		return nil, errors.New("share activity is not enabled")
 	}
 
 	var campaign model.ShareCampaign
@@ -92,6 +164,12 @@ func (s *ShareService) EnsureCampaignForOrder(orderNo string) (*model.ShareCampa
 		PosterTitle:   fmt.Sprintf("%s 好友领券", storeName),
 		PosterCopy:    fmt.Sprintf("我刚在 %s 下单，体验不错。扫码领取好友专属优惠，下次一起试试。", storeName),
 		Status:        "active",
+	}
+	if title := strings.TrimSpace(config.PosterTitle); title != "" {
+		campaign.PosterTitle = title
+	}
+	if copy := strings.TrimSpace(config.PosterCopy); copy != "" {
+		campaign.PosterCopy = copy
 	}
 	if err := s.db.Create(&campaign).Error; err != nil {
 		return nil, err
@@ -394,8 +472,20 @@ func (s *ShareService) issueRewardCoupons(campaign *model.ShareCampaign, order *
 		return nil
 	}
 
+	config, err := s.GetActivityConfig(campaign.MerchantID)
+	if err != nil {
+		return err
+	}
+	if !config.Enabled || config.Status != "active" {
+		return nil
+	}
+	validDays := config.ValidDays
+	if validDays <= 0 {
+		validDays = 30
+	}
+
 	now := time.Now()
-	validTo := now.AddDate(0, 0, 30)
+	validTo := now.AddDate(0, 0, validDays)
 	coupons := make([]model.ReferralCoupon, 0, 2)
 	if order.CustomerPhone != "" {
 		coupons = append(coupons, model.ReferralCoupon{
@@ -407,8 +497,8 @@ func (s *ShareService) issueRewardCoupons(campaign *model.ShareCampaign, order *
 			OwnerPhone:      order.CustomerPhone,
 			OwnerType:       "new_customer",
 			Title:           "好友新客下次到店券",
-			Amount:          500,
-			Threshold:       3000,
+			Amount:          config.FriendCouponAmount,
+			Threshold:       config.FriendCouponThreshold,
 			Status:          "unused",
 			ValidFrom:       &now,
 			ValidTo:         &validTo,
@@ -425,8 +515,8 @@ func (s *ShareService) issueRewardCoupons(campaign *model.ShareCampaign, order *
 			OwnerPhone:      campaign.CustomerPhone,
 			OwnerType:       "referrer",
 			Title:           "分享奖励复购券",
-			Amount:          500,
-			Threshold:       3000,
+			Amount:          config.ReferrerCouponAmount,
+			Threshold:       config.ReferrerCouponThreshold,
 			Status:          "unused",
 			ValidFrom:       &now,
 			ValidTo:         &validTo,

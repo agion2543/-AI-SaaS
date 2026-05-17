@@ -63,6 +63,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Store{},
 		&model.StoreProduct{},
 		&model.CustomerLead{},
+		&model.ShareActivityConfig{},
 		&model.ShareCampaign{},
 		&model.ReferralCoupon{},
 		&model.Promotion{},

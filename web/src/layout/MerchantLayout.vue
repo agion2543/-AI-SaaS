@@ -23,6 +23,7 @@
         <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionAI }}</div>
         <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
+        <el-menu-item index="/merchant/share" :disabled="navigationLocked">{{ text.share }}</el-menu-item>
         <div class="menu-section">{{ text.sectionSettings }}</div>
         <el-menu-item index="/merchant/subscription">{{ text.subscription }}</el-menu-item>
         <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
@@ -68,6 +69,7 @@ const text = {
   promotions: '\u4f18\u60e0\u6d3b\u52a8',
   coupons: '\u5238\u5305/\u6838\u9500',
   ai: 'AI \u7ecf\u8425\u5206\u6790',
+  share: '\u88c2\u53d8\u770b\u677f',
   subscription: '\u8ba2\u9605\u4ed8\u8d39',
   paymentSettings: '\u6536\u6b3e\u8bbe\u7f6e',
   profile: '\u5546\u5bb6\u4fe1\u606f',
@@ -112,15 +114,16 @@ onMounted(refreshSubscriptionState)
   grid-template-columns: 248px minmax(0, 1fr);
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 24%),
-    linear-gradient(135deg, #f8fbff 0%, #eef6fb 100%);
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.16), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(6, 182, 212, 0.12), transparent 26%),
+    linear-gradient(135deg, #f8fbff 0%, #eef4fb 100%);
 }
 
 .merchant-sidebar {
   padding: 24px 16px;
   background:
-    radial-gradient(circle at top, rgba(14, 165, 233, 0.18), transparent 28%),
-    linear-gradient(180deg, #0f2534 0%, #143447 100%);
+    radial-gradient(circle at top, rgba(37, 99, 235, 0.28), transparent 30%),
+    linear-gradient(180deg, #07182e 0%, #0f2747 100%);
   color: #fff;
   border-right: 1px solid rgba(148, 163, 184, 0.12);
 }
@@ -132,6 +135,7 @@ onMounted(refreshSubscriptionState)
 .merchant-brand-title {
   font-size: 30px;
   font-weight: 900;
+  letter-spacing: -0.04em;
 }
 
 .merchant-brand-subtitle {
@@ -145,22 +149,22 @@ onMounted(refreshSubscriptionState)
 }
 
 .merchant-menu :deep(.el-menu-item) {
-  height: 46px;
-  margin: 4px 0;
-  border-radius: 8px;
+  height: 48px;
+  margin: 5px 0;
+  border-radius: 14px;
   font-size: 15px;
   font-weight: 700;
 }
 
 .merchant-menu :deep(.el-menu-item:hover) {
-  background: rgba(14, 165, 233, 0.14);
+  background: rgba(37, 99, 235, 0.18);
   color: #ffffff !important;
 }
 
 .merchant-menu :deep(.el-menu-item.is-active) {
-  background: linear-gradient(90deg, #0ea5e9 0%, #38bdf8 100%);
+  background: linear-gradient(90deg, #2563eb 0%, #06b6d4 100%);
   color: #ffffff !important;
-  box-shadow: 0 12px 24px rgba(14, 165, 233, 0.24);
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.3);
 }
 
 .merchant-menu :deep(.el-menu-item.is-disabled) {
@@ -189,7 +193,7 @@ onMounted(refreshSubscriptionState)
 }
 
 .merchant-main {
-  padding: 20px;
+  padding: 20px 24px 30px;
   display: grid;
   gap: 20px;
 }
@@ -200,6 +204,7 @@ onMounted(refreshSubscriptionState)
   align-items: center;
   gap: 16px;
   padding: 20px 24px;
+  border-radius: 26px;
 }
 
 .merchant-title {

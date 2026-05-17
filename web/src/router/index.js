@@ -28,6 +28,7 @@ import MerchantProfileView from '../views/merchants/MerchantProfileView.vue'
 import MerchantAIView from '../views/merchants/MerchantAIView.vue'
 import MerchantPromotionsView from '../views/merchants/MerchantPromotionsView.vue'
 import MerchantCouponsView from '../views/merchants/MerchantCouponsView.vue'
+import MerchantShareView from '../views/merchants/MerchantShareView.vue'
 import MerchantStoresView from '../views/merchants/MerchantStoresView.vue'
 import MerchantStoreProductsView from '../views/merchants/MerchantStoreProductsView.vue'
 import MerchantOrdersView from '../views/merchants/MerchantOrdersView.vue'
@@ -77,6 +78,7 @@ const routes = [
           { path: 'dashboard', component: MerchantDashboardView, meta: { requiresMerchantAuth: true } },
           { path: 'promotions', component: MerchantPromotionsView, meta: { requiresMerchantAuth: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
+          { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
           { path: 'subscription', component: MerchantSubscriptionView, meta: { requiresMerchantAuth: true, allowExpiredSubscription: true } },
           { path: 'profile', component: MerchantProfileView, meta: { requiresMerchantAuth: true } },
           { path: 'stores', component: MerchantStoresView, meta: { requiresMerchantAuth: true } },
