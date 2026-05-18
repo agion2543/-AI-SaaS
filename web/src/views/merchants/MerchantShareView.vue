@@ -150,6 +150,18 @@
               <span>{{ item.detail }}</span>
             </article>
           </div>
+
+          <div class="review-execute">
+            <el-button type="success" :loading="executingAction === 'amplify'" @click="executeReviewAction('amplify')">
+              一键加大优惠
+            </el-button>
+            <el-button type="primary" :loading="executingAction === 'optimize'" @click="executeReviewAction('optimize')">
+              一键优化海报
+            </el-button>
+            <el-button type="danger" plain :loading="executingAction === 'disable'" @click="executeReviewAction('disable')">
+              停用低效海报
+            </el-button>
+          </div>
         </div>
         <el-empty v-else description="点击 AI 复盘后，系统会判断是否加大优惠、继续观察、优化文案或停用活动。" />
       </el-card>
@@ -338,11 +350,14 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
+  amplifyMerchantShareOffer,
   createMerchantPromotion,
+  disableLowMerchantShareCampaign,
   fetchMerchantShareConfig,
   fetchMerchantShareStats,
   generateMerchantAIReferralCopy,
   generateMerchantAIShareReview,
+  optimizeMerchantSharePoster,
   saveMerchantShareConfig
 } from '../../api/modules'
 
@@ -352,6 +367,7 @@ const saving = ref(false)
 const generatingCopy = ref(false)
 const creatingPromotion = ref(false)
 const reviewLoading = ref(false)
+const executingAction = ref('')
 const stats = ref({})
 const campaigns = ref([])
 const coupons = ref([])
@@ -588,6 +604,31 @@ const generateShareReview = async () => {
     ElMessage.error(err.response?.data?.message || 'AI 活动复盘失败')
   } finally {
     reviewLoading.value = false
+  }
+}
+
+const executeReviewAction = async (action) => {
+  executingAction.value = action
+  try {
+    if (action === 'amplify') {
+      const res = await amplifyMerchantShareOffer()
+      applyConfig(res.data?.config || {})
+      ElMessage.success('已加大好友券和分享人奖励，新的顾客海报会使用更新后的优惠')
+    }
+    if (action === 'optimize') {
+      const res = await optimizeMerchantSharePoster()
+      applyConfig(res.data?.config || {})
+      ElMessage.success('已优化裂变海报文案，可在海报预览中查看')
+    }
+    if (action === 'disable') {
+      await disableLowMerchantShareCampaign()
+      ElMessage.success('已停用一张有扫码但无下单的低效海报')
+    }
+    await load()
+  } catch (err) {
+    ElMessage.error(err.response?.data?.message || '执行复盘动作失败')
+  } finally {
+    executingAction.value = ''
   }
 }
 
@@ -896,6 +937,16 @@ onMounted(load)
   display: block;
   margin-bottom: 6px;
   color: #0f172a;
+}
+
+.review-execute {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border-radius: 18px;
+  background: #f8fbff;
+  border: 1px dashed rgba(37, 99, 235, 0.22);
 }
 
 .share-form {

@@ -135,6 +135,77 @@ func (s *ShareService) UpdateActivityConfig(merchantID uint, req ShareActivityCo
 	return s.GetActivityConfig(merchantID)
 }
 
+func (s *ShareService) AmplifyActivityOffer(merchantID uint) (*model.ShareActivityConfig, error) {
+	config, err := s.GetActivityConfig(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	nextFriend := increaseByPercent(config.FriendCouponAmount, 20)
+	nextReferrer := increaseByPercent(config.ReferrerCouponAmount, 20)
+	if nextFriend == config.FriendCouponAmount {
+		nextFriend += 100
+	}
+	if nextReferrer == config.ReferrerCouponAmount {
+		nextReferrer += 100
+	}
+	req := ShareActivityConfigRequest{
+		Enabled:                 true,
+		PosterTitle:             config.PosterTitle,
+		PosterCopy:              config.PosterCopy,
+		FriendCouponAmount:      minInt64(nextFriend, 5000),
+		FriendCouponThreshold:   config.FriendCouponThreshold,
+		ReferrerCouponAmount:    minInt64(nextReferrer, 5000),
+		ReferrerCouponThreshold: config.ReferrerCouponThreshold,
+		ValidDays:               config.ValidDays,
+	}
+	return s.UpdateActivityConfig(merchantID, req)
+}
+
+func (s *ShareService) OptimizeActivityPoster(merchantID uint) (*model.ShareActivityConfig, error) {
+	config, err := s.GetActivityConfig(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	title := strings.TrimSpace(config.PosterTitle)
+	if title == "" {
+		title = "好友扫码领券，分享人得复购奖励"
+	}
+	copy := fmt.Sprintf("把本店分享给好友，好友扫码可领 %s 优惠券，满 %s 可用；好友完成下单后，分享人也可获得 %s 复购奖励。适合发朋友圈、社群和店内桌贴，记得观察扫码、领券和核销数据。",
+		formatShareFen(config.FriendCouponAmount),
+		formatShareFen(config.FriendCouponThreshold),
+		formatShareFen(config.ReferrerCouponAmount),
+	)
+	req := ShareActivityConfigRequest{
+		Enabled:                 true,
+		PosterTitle:             title,
+		PosterCopy:              copy,
+		FriendCouponAmount:      config.FriendCouponAmount,
+		FriendCouponThreshold:   config.FriendCouponThreshold,
+		ReferrerCouponAmount:    config.ReferrerCouponAmount,
+		ReferrerCouponThreshold: config.ReferrerCouponThreshold,
+		ValidDays:               config.ValidDays,
+	}
+	return s.UpdateActivityConfig(merchantID, req)
+}
+
+func (s *ShareService) DisableLowPerformanceCampaign(merchantID uint) (*model.ShareCampaign, error) {
+	var campaign model.ShareCampaign
+	err := s.db.Where("merchant_id = ? AND status = ? AND scan_count > 0 AND conversion_count = 0", merchantID, "active").
+		Order("scan_count DESC, id DESC").
+		First(&campaign).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("暂无需要停用的低效海报")
+		}
+		return nil, err
+	}
+	if err := s.db.Model(&campaign).Update("status", "inactive").Error; err != nil {
+		return nil, err
+	}
+	campaign.Status = "inactive"
+	return &campaign, nil
+}
+
 func (s *ShareService) EnsureCampaignForOrder(orderNo string) (*model.ShareCampaign, error) {
 	var order model.Order
 	if err := s.db.Preload("Store").Preload("Merchant").Where("order_no = ? AND order_type = ?", orderNo, "store_order").First(&order).Error; err != nil {
@@ -593,4 +664,22 @@ func newCouponNo(prefix string) string {
 		raw = raw[:16]
 	}
 	return fmt.Sprintf("%s%s", prefix, strings.ToUpper(raw))
+}
+
+func increaseByPercent(value int64, percent int64) int64 {
+	if value <= 0 {
+		return 100
+	}
+	return value + value*percent/100
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func formatShareFen(value int64) string {
+	return fmt.Sprintf("%.2f 元", float64(value)/100)
 }

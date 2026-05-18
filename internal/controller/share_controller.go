@@ -114,6 +114,48 @@ func (ctl *ShareController) SaveMerchantShareConfig(c *gin.Context) {
 	utils.Success(c, gin.H{"config": config})
 }
 
+func (ctl *ShareController) AmplifyShareOffer(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	config, err := ctl.shares.AmplifyActivityOffer(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"config": config})
+}
+
+func (ctl *ShareController) OptimizeSharePoster(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	config, err := ctl.shares.OptimizeActivityPoster(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"config": config})
+}
+
+func (ctl *ShareController) DisableLowShareCampaign(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	campaign, err := ctl.shares.DisableLowPerformanceCampaign(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"campaign": campaign})
+}
+
 func (ctl *ShareController) MerchantCoupons(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
