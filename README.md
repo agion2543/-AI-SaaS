@@ -80,7 +80,7 @@ npm run dev
 
 ```text
 账号：admin
-密码：Admin@123456
+密码：SaasAdmin@2026!
 ```
 
 ## 生产部署
@@ -88,6 +88,10 @@ npm run dev
 生产部署说明见：
 
 [docs/production-deploy.md](docs/production-deploy.md)
+
+生产上线、升级、回滚和每日巡检手册：
+
+[docs/production-runbook.md](docs/production-runbook.md)
 
 快速启动：
 
@@ -100,6 +104,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 - `JWT_SECRET`
 - `AES_SECRET`
+- `INITIAL_ADMIN_PASSWORD`
 - MySQL 密码
 - 管理员默认密码
 - 支付宝 APPID、公钥、私钥、回调地址
@@ -127,7 +132,7 @@ index.js
 ## 后续重点
 
 - 顾客订单状态页和支付失败重试
-- 商家真实收款账户接入
+- 商家自有收款账户对账和直连能力完善
 - 支付宝/微信真实退款接口
 - 商品分类和图片上传
 - 更完整的财务导出和对账

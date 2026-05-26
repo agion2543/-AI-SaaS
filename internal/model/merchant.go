@@ -33,6 +33,8 @@ type MerchantPaymentConfig struct {
 	Mode         string   `gorm:"size:30;default:direct" json:"mode"`
 	AccountName  string   `gorm:"size:120" json:"account_name"`
 	AccountNo    string   `gorm:"size:120" json:"account_no"`
+	AlipayQRCode string   `gorm:"size:1000" json:"alipay_qr_code"`
+	WechatQRCode string   `gorm:"size:1000" json:"wechat_qr_code"`
 	AppID        string   `gorm:"size:120" json:"app_id"`
 	Status       string   `gorm:"size:20;default:disabled;index" json:"status"`
 	AuditStatus  string   `gorm:"size:20;default:pending;index" json:"audit_status"`
@@ -54,4 +56,21 @@ type MerchantSettlement struct {
 	Status                string     `gorm:"size:20;default:pending;index" json:"status"`
 	PaidAt                *time.Time `json:"paid_at"`
 	Remark                string     `gorm:"size:255" json:"remark"`
+}
+
+type MerchantFollowUp struct {
+	BaseModel
+	MerchantID   uint       `gorm:"index;not null" json:"merchant_id"`
+	Merchant     Merchant   `json:"merchant,omitempty"`
+	Type         string     `gorm:"size:30;default:risk;index" json:"type"`
+	Priority     string     `gorm:"size:20;default:normal;index" json:"priority"`
+	Status       string     `gorm:"size:20;default:open;index" json:"status"`
+	Content      string     `gorm:"size:1000" json:"content"`
+	Source       string     `gorm:"size:40;index" json:"source"`
+	SourceID     uint       `gorm:"index" json:"source_id"`
+	OrderID      *uint      `gorm:"index" json:"order_id"`
+	OrderNo      string     `gorm:"size:60;index" json:"order_no"`
+	NextFollowAt *time.Time `json:"next_follow_at"`
+	OperatorID   uint       `gorm:"index" json:"operator_id"`
+	OperatorRole string     `gorm:"size:30" json:"operator_role"`
 }

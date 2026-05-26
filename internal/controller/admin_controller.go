@@ -1,9 +1,13 @@
 package controller
 
 import (
-	"encoding/csv"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,17 +39,32 @@ func (ctl *AdminController) Dashboard(c *gin.Context) {
 func (ctl *AdminController) AuditLogs(c *gin.Context) {
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
 	logs, total, err := ctl.audit.List(service.AuditListFilter{
-		Action:     c.Query("action"),
-		ActorType:  c.Query("actor_type"),
-		TargetType: c.Query("target_type"),
-		Keyword:    c.Query("keyword"),
-		MerchantID: uint(atoi(c.Query("merchant_id"))),
+		Action:       c.Query("action"),
+		ActorType:    c.Query("actor_type"),
+		TargetType:   c.Query("target_type"),
+		ReviewStatus: c.Query("review_status"),
+		Keyword:      c.Query("keyword"),
+		MerchantID:   uint(atoi(c.Query("merchant_id"))),
 	}, page, pageSize)
 	if err != nil {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	utils.Success(c, gin.H{"list": logs, "total": total})
+}
+
+func (ctl *AdminController) ReviewAuditLog(c *gin.Context) {
+	var req struct {
+		Remark string `json:"remark"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	logID := uint(atoi(c.Param("id")))
+	log, err := ctl.audit.MarkReviewed(logID, c.GetUint("user_id"), req.Remark)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"log": log, "reviewed": true})
 }
 
 func (ctl *AdminController) Users(c *gin.Context) {
@@ -217,11 +236,10 @@ func (ctl *AdminController) ExportMerchantSettlement(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", "attachment; filename=merchant-settlement-"+strconv.Itoa(int(settlement.ID))+".csv")
-	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
-	writer := csv.NewWriter(c.Writer)
-	_ = writer.Write([]string{"结算ID", "商家", "订单号", "门店", "订单实付(元)", "退款金额(元)", "净收入(元)", "订单状态", "创建时间"})
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", "attachment; filename=merchant-settlement-"+strconv.Itoa(int(settlement.ID))+".xlsx")
+	headers := []string{"Settlement ID", "Merchant", "Order No", "Store", "Paid Amount (Yuan)", "Refund Amount (Yuan)", "Net Income (Yuan)", "Order Status", "Created At"}
+	rows := make([][]string, 0, len(orders))
 	for _, order := range orders {
 		total := order.TotalAmount
 		if total <= 0 {
@@ -239,7 +257,7 @@ func (ctl *AdminController) ExportMerchantSettlement(c *gin.Context) {
 		if settlement.Merchant.Name != "" {
 			merchantName = settlement.Merchant.Name
 		}
-		_ = writer.Write([]string{
+		rows = append(rows, []string{
 			strconv.Itoa(int(settlement.ID)),
 			merchantName,
 			order.OrderNo,
@@ -251,7 +269,10 @@ func (ctl *AdminController) ExportMerchantSettlement(c *gin.Context) {
 			order.CreatedAt.Format("2006-01-02 15:04:05"),
 		})
 	}
-	writer.Flush()
+	if err := utils.WriteXLSX(c.Writer, "Merchant Settlement", headers, rows); err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 }
 
 func (ctl *AdminController) MerchantStores(c *gin.Context) {
@@ -378,6 +399,86 @@ func (ctl *AdminController) UpdateMerchantStatus(c *gin.Context) {
 		Detail:     gin.H{"status": req.Status},
 	})
 	utils.Success(c, gin.H{"updated": true})
+}
+
+func (ctl *AdminController) MerchantFollowUps(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	rows, err := ctl.admin.ListMerchantFollowUps(id)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": rows})
+}
+
+func (ctl *AdminController) MerchantFollowUpTodos(c *gin.Context) {
+	rows, err := ctl.admin.ListAllMerchantFollowUps(c.Query("status"), c.Query("priority"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": rows})
+}
+
+func (ctl *AdminController) CreateMerchantFollowUp(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.CreateMerchantFollowUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	role, _ := c.Get("role")
+	operatorRole, _ := role.(string)
+	row, err := ctl.admin.CreateMerchantFollowUp(id, c.GetUint("user_id"), operatorRole, req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	merchant, _ := ctl.admin.GetMerchant(id)
+	targetName := ""
+	if merchant != nil {
+		targetName = merchant.Name
+	}
+	ctl.audit.Record(c, service.AuditRecordInput{
+		Action:     "merchant_follow_up_create",
+		TargetType: "merchant_follow_up",
+		TargetID:   row.ID,
+		TargetName: targetName,
+		MerchantID: &id,
+		Detail: gin.H{
+			"type":           row.Type,
+			"priority":       row.Priority,
+			"content":        row.Content,
+			"source":         row.Source,
+			"source_id":      row.SourceID,
+			"order_id":       row.OrderID,
+			"order_no":       row.OrderNo,
+			"next_follow_at": row.NextFollowAt,
+		},
+	})
+	utils.Success(c, gin.H{"follow_up": row})
+}
+
+func (ctl *AdminController) UpdateMerchantFollowUpStatus(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.UpdateMerchantFollowUpStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	row, err := ctl.admin.UpdateMerchantFollowUpStatus(id, req.Status)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctl.audit.Record(c, service.AuditRecordInput{
+		Action:     "merchant_follow_up_status_update",
+		TargetType: "merchant_follow_up",
+		TargetID:   row.ID,
+		MerchantID: &row.MerchantID,
+		Detail:     gin.H{"status": req.Status},
+	})
+	utils.Success(c, gin.H{"follow_up": row, "updated": true})
 }
 
 func (ctl *AdminController) OpenMerchantSubscription(c *gin.Context) {
@@ -533,8 +634,59 @@ func (ctl *AdminController) Configs(c *gin.Context) {
 	utils.Success(c, list)
 }
 
+func (ctl *AdminController) UploadPaymentQRCode(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "请选择要上传的收款码图片")
+		return
+	}
+	if file.Size > 3*1024*1024 {
+		utils.Error(c, http.StatusBadRequest, "收款码图片不能超过 3MB")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
+	if !allowed[ext] {
+		utils.Error(c, http.StatusBadRequest, "仅支持 jpg、png、webp 图片")
+		return
+	}
+
+	dir := filepath.Join("uploads", "platform-payment")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "创建上传目录失败")
+		return
+	}
+	filename := fmt.Sprintf("platform_qr_%d%s", time.Now().UnixNano(), ext)
+	dst := filepath.Join(dir, filename)
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "收款码保存失败")
+		return
+	}
+
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/uploads/platform-payment/%s", scheme, c.Request.Host, filename)
+	utils.Success(c, gin.H{"url": url})
+}
+
 func (ctl *AdminController) SecurityCheck(c *gin.Context) {
 	utils.Success(c, ctl.admin.SecurityCheck())
+}
+
+func (ctl *AdminController) AIConfigStatus(c *gin.Context) {
+	utils.Success(c, ctl.admin.AIConfigStatus())
+}
+
+func (ctl *AdminController) AIUsageOverview(c *gin.Context) {
+	data, err := ctl.admin.AIUsageOverview()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.Success(c, data)
 }
 
 func atoi(v string) int {

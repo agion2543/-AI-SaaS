@@ -1,7 +1,9 @@
 package bootstrap
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/mysql"
@@ -33,7 +35,7 @@ func NewApplication() (*Application, error) {
 	if err := autoMigrate(db); err != nil {
 		return nil, err
 	}
-	if err := seedInitialData(db); err != nil {
+	if err := seedInitialData(db, cfg); err != nil {
 		return nil, err
 	}
 
@@ -58,6 +60,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.MerchantPlan{},
 		&model.MerchantPaymentConfig{},
 		&model.MerchantSettlement{},
+		&model.MerchantFollowUp{},
 		&model.MerchantAIUsageLog{},
 		&model.AuditLog{},
 		&model.Store{},
@@ -82,7 +85,7 @@ func autoMigrate(db *gorm.DB) error {
 	)
 }
 
-func seedInitialData(db *gorm.DB) error {
+func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 	role := model.AdminRole{
 		Name:        "Super Admin",
 		Code:        "super_admin",
@@ -92,19 +95,7 @@ func seedInitialData(db *gorm.DB) error {
 		return err
 	}
 
-	passwordHash, err := utils.HashPassword("Admin@123456")
-	if err != nil {
-		return err
-	}
-
-	admin := model.AdminUser{
-		Username:     "admin",
-		PasswordHash: passwordHash,
-		DisplayName:  "System Admin",
-		Status:       "active",
-		RoleID:       role.ID,
-	}
-	if err := db.Where(model.AdminUser{Username: admin.Username}).Assign(admin).FirstOrCreate(&admin).Error; err != nil {
+	if err := seedAdminUser(db, cfg, role.ID); err != nil {
 		return err
 	}
 
@@ -134,8 +125,59 @@ func seedInitialData(db *gorm.DB) error {
 		}
 	}
 
-	if err := db.Model(&model.Merchant{}).Where("status = ?", "pending").Update("status", "active").Error; err != nil {
+	if cfg.AppEnv != "production" {
+		if err := db.Model(&model.Merchant{}).Where("status = ?", "pending").Update("status", "active").Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func seedAdminUser(db *gorm.DB, cfg *config.Config, roleID uint) error {
+	username := strings.TrimSpace(cfg.InitialAdminUser)
+	if username == "" {
+		username = "admin"
+	}
+	password := strings.TrimSpace(cfg.InitialAdminPass)
+	if password == "" {
+		password = "SaasAdmin@2026!"
+	}
+
+	var admin model.AdminUser
+	err := db.Where("username = ?", username).First(&admin).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		passwordHash, hashErr := utils.HashPassword(password)
+		if hashErr != nil {
+			return hashErr
+		}
+		admin = model.AdminUser{
+			Username:     username,
+			PasswordHash: passwordHash,
+			DisplayName:  "System Admin",
+			Status:       "active",
+			RoleID:       roleID,
+		}
+		return db.Create(&admin).Error
+	}
+	if err != nil {
 		return err
+	}
+
+	if utils.CheckPassword(admin.PasswordHash, "Admin@123456") {
+		passwordHash, hashErr := utils.HashPassword(password)
+		if hashErr != nil {
+			return hashErr
+		}
+		admin.PasswordHash = passwordHash
+		admin.RoleID = roleID
+		if admin.DisplayName == "" {
+			admin.DisplayName = "System Admin"
+		}
+		if admin.Status == "" {
+			admin.Status = "active"
+		}
+		return db.Save(&admin).Error
 	}
 
 	return nil

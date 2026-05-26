@@ -11,6 +11,10 @@ dist/
 # Local database/runtime data
 mysql-data/
 mysql-run/
+uploads/
+outputs/
+.github-upload-tmp/
+github-upload-source-*.zip
 *.pid
 
 # Compiled binaries

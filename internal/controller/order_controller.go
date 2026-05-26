@@ -62,6 +62,16 @@ func (ctl *OrderController) PublicStoreProducts(c *gin.Context) {
 	utils.Success(c, gin.H{"list": products})
 }
 
+func (ctl *OrderController) PublicStoreCoupons(c *gin.Context) {
+	storeID := uint(atoi(c.Param("storeId")))
+	coupons, err := ctl.service.PublicStoreCoupons(storeID, c.Query("phone"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": coupons})
+}
+
 func (ctl *OrderController) CreateCustomerOrder(c *gin.Context) {
 	var req dto.CreateCustomerOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -79,10 +89,18 @@ func (ctl *OrderController) CreateCustomerOrder(c *gin.Context) {
 		utils.Success(c, gin.H{"order": serializeOrder(order)})
 		return
 	}
+	if order.Status != "pending" {
+		utils.Success(c, gin.H{"order": serializeOrder(order), "payment_required": false})
+		return
+	}
 
 	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode)
 	if err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
+		utils.Success(c, gin.H{
+			"order":         serializeOrder(order),
+			"payment_error": err.Error(),
+			"retry_path":    "/customer/orders/" + url.PathEscape(order.OrderNo),
+		})
 		return
 	}
 
@@ -95,7 +113,38 @@ func (ctl *OrderController) CustomerOrderDetail(c *gin.Context) {
 		utils.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order)})
+	paymentConfig, err := ctl.service.PublicPaymentConfigForOrder(order)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig)})
+}
+
+func (ctl *OrderController) MarkCustomerOrderPaid(c *gin.Context) {
+	order, err := ctl.service.MarkCustomerStoreOrderPaid(c.Param("orderNo"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	paymentConfig, _ := ctl.service.PublicPaymentConfigForOrder(order)
+	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "marked": true})
+}
+
+func (ctl *OrderController) AppendCustomerOrderItems(c *gin.Context) {
+	var req dto.AppendCustomerOrderItemsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	order, err := ctl.service.AppendCustomerStoreOrderItems(c.Param("orderNo"), req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	paymentConfig, _ := ctl.service.PublicPaymentConfigForOrder(order)
+	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "appended": true})
 }
 
 func (ctl *OrderController) RetryCustomerOrderPayment(c *gin.Context) {
@@ -115,6 +164,21 @@ func (ctl *OrderController) RetryCustomerOrderPayment(c *gin.Context) {
 	}
 
 	utils.Success(c, gin.H{"order": serializeOrder(order), "payment": payment})
+}
+
+func (ctl *OrderController) ReviewCustomerOrder(c *gin.Context) {
+	var req dto.ReviewCustomerOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	order, err := ctl.service.ReviewCustomerOrder(c.Param("orderNo"), req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"order": serializeOrder(order), "reviewed": true})
 }
 
 func (ctl *OrderController) ListMine(c *gin.Context) {
@@ -177,6 +241,19 @@ func (ctl *OrderController) PaymentCallback(c *gin.Context) {
 	tradeStatus := values.Get("trade_status")
 	if !service.IsAlipaySuccessStatus(tradeStatus) {
 		if service.IsAlipayClosedStatus(tradeStatus) {
+			amount, _ := utils.YuanToFen(values.Get("total_amount"))
+			transactionNo := values.Get("trade_no")
+			if transactionNo == "" {
+				transactionNo = values.Get("out_trade_no") + "-closed"
+			}
+			_, _ = ctl.service.HandlePaymentCallback(dto.PaymentCallbackRequest{
+				OrderNo:        values.Get("out_trade_no"),
+				TransactionNo:  transactionNo,
+				PaymentChannel: "alipay",
+				Amount:         amount,
+				Status:         "failed",
+				RawPayload:     values,
+			})
 			alipay.AckNotification(c.Writer)
 			return
 		}
@@ -260,6 +337,22 @@ func (ctl *OrderController) AcceptMerchantOrder(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"accepted": true})
+}
+
+func (ctl *OrderController) ConfirmMerchantOrderPayment(c *gin.Context) {
+	merchantID, ok := currentMerchantOrderMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+
+	orderID := uint(atoi(c.Param("id")))
+	order, err := ctl.service.ConfirmMerchantOrderPayment(merchantID, orderID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"order": serializeOrder(order), "confirmed": true})
 }
 
 func (ctl *OrderController) CompleteMerchantOrder(c *gin.Context) {
@@ -391,6 +484,35 @@ func (ctl *OrderController) Payments(c *gin.Context) {
 	utils.Success(c, list)
 }
 
+func (ctl *OrderController) ConfirmMerchantSubscriptionPayment(c *gin.Context) {
+	var req dto.ConfirmSubscriptionPaymentRequest
+	_ = c.ShouldBindJSON(&req)
+	orderID := uint(atoi(c.Param("id")))
+	order, err := ctl.service.ConfirmMerchantSubscriptionPayment(orderID, req.Remark)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctl.audit.Record(c, service.AuditRecordInput{
+		Action:     "merchant_subscription_payment_confirm",
+		TargetType: "order",
+		TargetID:   order.ID,
+		TargetName: order.OrderNo,
+		MerchantID: order.MerchantID,
+		Detail: gin.H{
+			"amount":       order.TotalAmount,
+			"merchant":     order.Merchant,
+			"plan":         order.MerchantPlan,
+			"order_no":     order.OrderNo,
+			"payment_mode": "platform_qr",
+			"remark":       req.Remark,
+			"expire_at":    order.SubscriptionEndAt,
+			"result":       "subscription_opened",
+		},
+	})
+	utils.Success(c, gin.H{"order": serializeOrder(order), "confirmed": true})
+}
+
 func (ctl *OrderController) Refunds(c *gin.Context) {
 	list, err := ctl.service.AllRefunds()
 	if err != nil {
@@ -414,6 +536,20 @@ func (ctl *OrderController) MerchantRefunds(c *gin.Context) {
 	utils.Success(c, list)
 }
 
+func (ctl *OrderController) MerchantSettlements(c *gin.Context) {
+	merchantID, ok := currentMerchantOrderMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	summary, list, err := ctl.service.MerchantSettlements(merchantID)
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"summary": summary, "list": list})
+}
+
 func serializeOrders(orders []model.Order) []gin.H {
 	rows := make([]gin.H, 0, len(orders))
 	for _, order := range orders {
@@ -430,6 +566,7 @@ func serializeOrder(order *model.Order) gin.H {
 		"order_type":          order.OrderType,
 		"user_id":             order.UserID,
 		"merchant_id":         order.MerchantID,
+		"settlement_id":       order.SettlementID,
 		"store_id":            order.StoreID,
 		"customer_phone":      order.CustomerPhone,
 		"package_id":          order.PackageID,
@@ -440,9 +577,14 @@ func serializeOrder(order *model.Order) gin.H {
 		"refunded_amount":     order.RefundedAmount,
 		"refund_status":       order.RefundStatus,
 		"promotion_id":        order.PromotionID,
+		"referral_coupon_id":  order.CouponID,
+		"coupon_no":           order.CouponNo,
 		"items":               parseOrderItems(order.Items),
 		"customer_note":       order.CustomerNote,
 		"merchant_note":       order.MerchantNote,
+		"customer_rating":     order.CustomerRating,
+		"customer_review":     order.CustomerReview,
+		"reviewed_at":         order.ReviewedAt,
 		"operation_logs":      parseOrderLogs(order.OperationLogs),
 		"status":              order.Status,
 		"payment_channel":     order.PaymentChannel,
@@ -458,6 +600,23 @@ func serializeOrder(order *model.Order) gin.H {
 		"package":             order.Package,
 		"merchant_plan":       order.MerchantPlan,
 		"promotion":           order.Promotion,
+	}
+}
+
+func serializePublicPaymentConfig(config *model.MerchantPaymentConfig) gin.H {
+	if config == nil {
+		return gin.H{}
+	}
+	return gin.H{
+		"mode":           config.Mode,
+		"channel":        config.Channel,
+		"account_name":   config.AccountName,
+		"account_no":     config.AccountNo,
+		"alipay_qr_code": config.AlipayQRCode,
+		"wechat_qr_code": config.WechatQRCode,
+		"contact_phone":  config.ContactPhone,
+		"status":         config.Status,
+		"audit_status":   config.AuditStatus,
 	}
 }
 

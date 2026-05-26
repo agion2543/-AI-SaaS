@@ -14,12 +14,14 @@ import UserProfileView from '../views/users/UserProfileView.vue'
 import PackagesView from '../views/packages/PackagesView.vue'
 import UserPackagesView from '../views/packages/UserPackagesView.vue'
 import OrdersView from '../views/orders/OrdersView.vue'
+import SubscriptionRevenueView from '../views/orders/SubscriptionRevenueView.vue'
 import UserOrdersView from '../views/orders/UserOrdersView.vue'
 import UserPayView from '../views/orders/UserPayView.vue'
 import PaymentReturnView from '../views/orders/PaymentReturnView.vue'
 import CardsView from '../views/cards/CardsView.vue'
 import SystemView from '../views/system/SystemView.vue'
 import AuditLogsView from '../views/system/AuditLogsView.vue'
+import FollowUpTodosView from '../views/system/FollowUpTodosView.vue'
 import MerchantsView from '../views/merchants/MerchantsView.vue'
 import MerchantDetailView from '../views/merchants/MerchantDetailView.vue'
 import MerchantLoginView from '../views/merchants/MerchantLoginView.vue'
@@ -56,10 +58,12 @@ const routes = [
     children: [
       { path: '', redirect: '/admin/dashboard' },
       { path: 'dashboard', component: DashboardView },
+      { path: 'todos', component: FollowUpTodosView },
       { path: 'merchants', component: MerchantsView },
       { path: 'merchants/:id', component: MerchantDetailView },
       { path: 'users', component: UsersView },
       { path: 'packages', component: PackagesView },
+      { path: 'subscriptions', component: SubscriptionRevenueView },
       { path: 'orders', component: OrdersView },
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },

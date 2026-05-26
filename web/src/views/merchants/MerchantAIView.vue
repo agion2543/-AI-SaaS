@@ -1,195 +1,299 @@
 <template>
-  <div class="ai-stack">
-    <section class="page-card hero-card">
-      <div class="hero-row">
-        <div>
-          <div class="eyebrow">AI GROWTH ENGINE</div>
-          <h2 class="page-title">AI Growth Center</h2>
-          <p class="muted">
-            Turn order, product, customer and coupon data into practical actions:
-            campaign copy, short-video scripts, referral posters and coupon ideas.
-          </p>
-        </div>
-        <div class="hero-actions">
-          <el-button @click="load">Refresh</el-button>
-          <el-button type="primary" :loading="videoLoading" @click="generateVideoScript">Video Script</el-button>
-          <el-button type="success" :loading="generating" @click="generateDraft()">Create Campaign</el-button>
+  <div class="ai-page">
+    <section class="ai-cockpit">
+      <div class="cockpit-copy">
+        <div class="eyebrow">AI OPERATING COPILOT</div>
+        <h1>AI 智能经营驾驶舱</h1>
+        <p>
+          用真实订单、商品、顾客和券包数据，自动给出今日可执行的经营动作。
+          重点不是“看报表”，而是帮助商家马上做引流、复购和内容营销。
+        </p>
+        <div class="cockpit-actions">
+          <el-button class="ghost-button" @click="load">刷新分析</el-button>
+          <el-button type="primary" :loading="copyLoading" @click="generateMarketingCopy('referral_poster')">生成裂变方案</el-button>
+          <el-button type="success" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
         </div>
       </div>
 
-      <div class="summary-grid">
-        <div class="summary-item"><span>Orders</span><strong>{{ insights.order_stats?.order_count || 0 }}</strong></div>
-        <div class="summary-item"><span>Revenue</span><strong>¥{{ formatYuan(insights.order_stats?.trade_amount) }}</strong></div>
-        <div class="summary-item"><span>Cancel Rate</span><strong>{{ cancelRate }}</strong></div>
-        <div class="summary-item"><span>Customers</span><strong>{{ insights.customer_summary?.total || 0 }}</strong></div>
-        <div class="summary-item"><span>High Value</span><strong>{{ insights.customer_summary?.high_value || 0 }}</strong></div>
-        <div class="summary-item quota-item">
-          <span>AI Daily Quota</span>
-          <strong>{{ aiQuota.remaining ?? 0 }} / {{ aiQuota.limit ?? 0 }}</strong>
-          <small>Used {{ aiQuota.used ?? 0 }} times today. Quota follows subscription plan.</small>
+      <div class="quota-orb">
+        <span>今日 AI 可用额度</span>
+        <strong>{{ aiQuota.remaining ?? 0 }}</strong>
+        <small>/ {{ aiQuota.limit ?? 0 }} 次</small>
+        <p>已使用 {{ aiQuota.used ?? 0 }} 次，套餐越高额度越多。</p>
+      </div>
+    </section>
+
+    <section class="module-grid">
+      <button
+        v-for="item in aiModules"
+        :key="item.key"
+        type="button"
+        :class="['module-card', { active: activeModule === item.key }]"
+        @click="activateAIModule(item)"
+      >
+        <span>{{ item.label }}</span>
+        <strong>{{ item.title }}</strong>
+        <small>{{ item.desc }}</small>
+      </button>
+    </section>
+
+    <section v-if="scenarioContext.visible" class="scenario-context">
+      <div>
+        <span>{{ scenarioContext.label }}</span>
+        <strong>{{ scenarioContext.title }}</strong>
+        <p>{{ scenarioContext.desc }}</p>
+      </div>
+      <el-button type="primary" :loading="scenarioContext.loading" @click="runCurrentScenario">
+        {{ scenarioContext.button }}
+      </el-button>
+    </section>
+
+    <section class="execution-strip">
+      <div>
+        <span>1</span>
+        <strong>看经营数据</strong>
+        <small>订单、顾客、商品、券包统一进驾驶舱</small>
+      </div>
+      <div>
+        <span>2</span>
+        <strong>选 AI 场景</strong>
+        <small>复盘、文案、海报、脚本、商品优化</small>
+      </div>
+      <div>
+        <span>3</span>
+        <strong>生成执行素材</strong>
+        <small>直接复制或生成活动草稿</small>
+      </div>
+      <div>
+        <span>4</span>
+        <strong>回到裂变追踪</strong>
+        <small>观察扫码、领券、下单和核销</small>
+      </div>
+    </section>
+
+    <section class="metric-grid">
+      <div class="metric-card primary">
+        <span>今日交易额</span>
+        <strong>¥{{ formatYuan(insights.order_stats?.trade_amount) }}</strong>
+        <small>顾客扫码点单收入</small>
+      </div>
+      <div class="metric-card">
+        <span>订单数</span>
+        <strong>{{ insights.order_stats?.order_count || 0 }}</strong>
+        <small>用于判断今日经营活跃度</small>
+      </div>
+      <div class="metric-card">
+        <span>取消率</span>
+        <strong>{{ cancelRate }}</strong>
+        <small>偏高时建议检查履约体验</small>
+      </div>
+      <div class="metric-card">
+        <span>顾客档案</span>
+        <strong>{{ insights.customer_summary?.total || 0 }}</strong>
+        <small>已沉淀手机号和消费记录</small>
+      </div>
+      <div class="metric-card accent">
+        <span>高价值顾客</span>
+        <strong>{{ insights.customer_summary?.high_value || 0 }}</strong>
+        <small>适合投放专属券</small>
+      </div>
+    </section>
+
+    <section class="workbench-grid">
+      <div class="left-stack">
+        <div class="panel-card">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow dark">NEXT BEST ACTION</div>
+              <h2>今日 AI 行动清单</h2>
+              <p>每一条建议都对应一个可执行按钮，方便商家直接落地。</p>
+            </div>
+          </div>
+          <div class="action-list">
+            <div v-for="item in todayActions" :key="item.title" class="action-card" :class="item.tone">
+              <div class="action-icon">{{ item.icon }}</div>
+              <div>
+                <span>{{ item.label }}</span>
+                <strong>{{ item.title }}</strong>
+                <p>{{ item.desc }}</p>
+              </div>
+              <el-button size="small" type="primary" text :loading="item.loading" @click="item.action">{{ item.button }}</el-button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-card loop-card">
+          <div class="section-head compact">
+            <div>
+              <div class="eyebrow dark">REFERRAL LOOP</div>
+              <h2>裂变海报闭环</h2>
+              <p>付款后分享海报，好友领券下单，下次消费自动抵扣。</p>
+            </div>
+            <el-button @click="router.push('/merchant/coupons')">券包/核销</el-button>
+          </div>
+          <div class="poster-grid">
+            <div class="poster-card">
+              <span>分享次数</span>
+              <strong>{{ shareStats.summary?.total_shares || 0 }}</strong>
+              <small>海报或链接访问</small>
+            </div>
+            <div class="poster-card">
+              <span>发券数量</span>
+              <strong>{{ shareStats.summary?.issued_coupons || 0 }}</strong>
+              <small>裂变奖励券</small>
+            </div>
+            <div class="poster-card">
+              <span>核销数量</span>
+              <strong>{{ shareStats.summary?.used_coupons || 0 }}</strong>
+              <small>订单抵扣券</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="right-stack">
+        <div class="panel-card generator-card">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow dark">AI CAMPAIGN STUDIO</div>
+              <h2>AI 营销方案生成器</h2>
+              <p>生成裂变海报、召回券、朋友圈和门店推广话术。</p>
+            </div>
+          </div>
+          <el-form label-position="top" class="studio-form">
+            <div class="form-row">
+              <el-form-item label="使用场景">
+                <el-select v-model="copyForm.scenario">
+                  <el-option label="裂变海报" value="referral_poster" />
+                  <el-option label="新客引流" value="new_customer" />
+                  <el-option label="沉睡顾客召回" value="dormant_recall" />
+                  <el-option label="高价值顾客专属活动" value="vip_campaign" />
+                  <el-option label="朋友圈短文案" value="social_post" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="目标人群">
+                <el-select v-model="copyForm.customer_tag">
+                  <el-option label="新顾客" value="new_customer" />
+                  <el-option label="复购顾客" value="repeat_customer" />
+                  <el-option label="沉睡顾客" value="dormant_customer" />
+                  <el-option label="高价值顾客" value="high_value_customer" />
+                  <el-option label="附近潜在顾客" value="nearby_customer" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <el-form-item label="主推商品 / 服务">
+              <el-input v-model="copyForm.product_name" placeholder="例如：招牌烤串、双人套餐、到店服务" />
+            </el-form-item>
+            <el-form-item label="营销目标">
+              <el-input v-model="copyForm.goal" type="textarea" :rows="3" />
+            </el-form-item>
+            <div class="form-actions">
+              <el-button type="primary" :loading="copyLoading" @click="generateMarketingCopy()">生成 AI 方案</el-button>
+              <el-button :loading="generating" @click="generateDraft()">生成活动草稿</el-button>
+            </div>
+          </el-form>
+        </div>
+
+        <div class="panel-card result-card">
+          <div class="section-head compact">
+            <div>
+              <div class="eyebrow dark">AI OUTPUT</div>
+              <h2>生成结果</h2>
+            </div>
+            <el-tag v-if="aiResult.provider">{{ aiResult.fallback ? '模板兜底' : aiResult.provider }}</el-tag>
+          </div>
+          <div v-if="aiResult.content" class="copy-box">
+            <pre>{{ aiResult.content }}</pre>
+            <div class="inline-actions">
+              <el-button type="primary" @click="copyText(aiResult.content)">复制文案</el-button>
+              <el-button type="success" :loading="generating" @click="createPromotionFromAI">一键生成活动草稿</el-button>
+              <el-button v-if="route.query.promotion_id" type="warning" plain @click="backToPromotionEdit">
+                按建议调整活动
+              </el-button>
+              <el-button @click="copySocialPack(aiResult.content)">复制朋友圈素材</el-button>
+              <el-button @click="router.push('/merchant/coupons')">查看券包核销</el-button>
+            </div>
+          </div>
+          <div v-else class="empty-result">
+            <strong>等待生成 AI 方案</strong>
+            <p>选择场景后，系统会结合经营数据生成一份可执行的营销动作。</p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="page-card">
-      <div class="section-title">
-        <div>
-          <h2>Today AI Action List</h2>
-          <p class="muted">Focus on actions that can bring repeat purchase, traffic and conversion.</p>
-        </div>
-      </div>
-      <div class="action-card-grid">
-        <div v-for="item in todayActions" :key="item.title" class="action-card" :class="item.tone">
-          <span>{{ item.label }}</span>
-          <strong>{{ item.title }}</strong>
-          <p>{{ item.desc }}</p>
-          <el-button size="small" type="primary" text :loading="item.loading" @click="item.action">{{ item.button }}</el-button>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid-2">
-      <div class="page-card">
-        <div class="section-title">
+    <section class="bottom-grid">
+      <div class="panel-card video-card">
+        <div class="section-head">
           <div>
-            <h2>Marketing Copy Generator</h2>
-            <p class="muted">Create referral poster copy, recall coupon copy and store promotion scripts.</p>
+            <div class="eyebrow dark">SHORT VIDEO SCRIPT</div>
+            <h2>AI 短视频营销脚本</h2>
+            <p>生成手机就能拍的短视频脚本，适合抖音、视频号、小红书和快手。</p>
           </div>
         </div>
-        <el-form label-position="top">
-          <el-form-item label="Scenario">
-            <el-select v-model="copyForm.scenario">
-              <el-option label="Referral poster" value="referral_poster" />
-              <el-option label="New customer campaign" value="new_customer" />
-              <el-option label="Dormant customer recall" value="dormant_recall" />
-              <el-option label="VIP customer campaign" value="vip_campaign" />
-              <el-option label="Social post" value="social_post" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Customer Segment">
-            <el-select v-model="copyForm.customer_tag">
-              <el-option label="New customer" value="new_customer" />
-              <el-option label="Repeat customer" value="repeat_customer" />
-              <el-option label="Dormant customer" value="dormant_customer" />
-              <el-option label="High value customer" value="high_value_customer" />
-              <el-option label="Nearby potential customer" value="nearby_customer" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Main Product / Service">
-            <el-input v-model="copyForm.product_name" placeholder="Example: signature BBQ skewers, set meal, in-store service" />
-          </el-form-item>
-          <el-form-item label="Goal">
-            <el-input v-model="copyForm.goal" type="textarea" :rows="3" />
-          </el-form-item>
-          <el-button type="primary" :loading="copyLoading" @click="generateMarketingCopy()">Generate AI Plan</el-button>
-        </el-form>
-      </div>
-
-      <div class="page-card">
-        <div class="section-title">
-          <div>
-            <h2>Generated Plan</h2>
-            <p class="muted">Copy it to posters, activity pages, social posts or customer groups.</p>
-          </div>
-          <el-tag v-if="aiResult.provider">{{ aiResult.fallback ? 'Template fallback' : aiResult.provider }}</el-tag>
-        </div>
-        <div v-if="aiResult.content" class="copy-box">
-          <pre>{{ aiResult.content }}</pre>
-          <div class="action-row">
-            <el-button type="primary" @click="copyText(aiResult.content)">Copy</el-button>
-            <el-button @click="router.push('/merchant/promotions')">Go Campaigns</el-button>
-          </div>
-        </div>
-        <el-empty v-else description="Choose a scenario and generate an actionable AI plan." />
-      </div>
-    </section>
-
-    <section class="page-card video-card">
-      <div class="section-title">
-        <div>
-          <div class="eyebrow">SHORT VIDEO MVP</div>
-          <h2>AI Short Video Script</h2>
-          <p class="muted">Generate a script ordinary merchants can shoot right away: hook, scenes, narration, title and hashtags.</p>
-        </div>
-      </div>
-      <div class="video-grid">
         <el-form label-position="top">
           <div class="form-row">
-            <el-form-item label="Platform">
+            <el-form-item label="发布平台">
               <el-select v-model="videoForm.platform">
-                <el-option label="Douyin" value="douyin" />
-                <el-option label="WeChat Channels" value="wechat_channels" />
-                <el-option label="Xiaohongshu" value="xiaohongshu" />
-                <el-option label="Kuaishou" value="kuaishou" />
+                <el-option label="抖音" value="douyin" />
+                <el-option label="视频号" value="wechat_channels" />
+                <el-option label="小红书" value="xiaohongshu" />
+                <el-option label="快手" value="kuaishou" />
               </el-select>
             </el-form-item>
-            <el-form-item label="Duration">
+            <el-form-item label="视频时长">
               <el-select v-model="videoForm.duration">
-                <el-option label="15 seconds" value="15s" />
-                <el-option label="30 seconds" value="30s" />
-                <el-option label="60 seconds" value="60s" />
+                <el-option label="15 秒" value="15s" />
+                <el-option label="30 秒" value="30s" />
+                <el-option label="60 秒" value="60s" />
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="Topic">
-            <el-input v-model="videoForm.topic" placeholder="Example: BBQ dinner set for office workers" />
+          <el-form-item label="视频主题">
+            <el-input v-model="videoForm.topic" placeholder="例如：适合下班聚餐的烧烤双人套餐" />
           </el-form-item>
-          <el-form-item label="Selling Points">
+          <el-form-item label="核心卖点">
             <el-input v-model="videoForm.selling_points" type="textarea" :rows="3" />
           </el-form-item>
-          <el-button type="primary" :loading="videoLoading" @click="generateVideoScript">Generate Video Script</el-button>
+          <el-button type="primary" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
         </el-form>
-        <div class="copy-box video-result" v-if="videoResult.content">
+      </div>
+
+      <div class="panel-card">
+        <div class="section-head compact">
+          <div>
+            <div class="eyebrow dark">VIDEO RESULT</div>
+            <h2>短视频脚本结果</h2>
+          </div>
+        </div>
+        <div v-if="videoResult.content" class="copy-box">
           <pre>{{ videoResult.content }}</pre>
-          <div class="action-row">
-            <el-button type="primary" @click="copyText(videoResult.content)">Copy Script</el-button>
+          <div class="inline-actions">
+            <el-button type="primary" @click="copyText(videoResult.content)">复制脚本</el-button>
+            <el-button @click="copyVideoPack(videoResult.content)">复制短视频素材包</el-button>
+            <el-button @click="router.push('/merchant/share')">去裂变海报</el-button>
           </div>
         </div>
-        <el-empty v-else description="Generate a short-video script from your real business data." />
-      </div>
-    </section>
-
-    <section class="grid-2">
-      <div class="page-card">
-        <div class="section-title">
-          <div>
-            <h2>Referral Poster Loop</h2>
-            <p class="muted">Customer pays, shares a poster, friend claims coupon, next order gets discount.</p>
-          </div>
-          <el-button size="small" @click="router.push('/merchant/coupons')">Coupon Wallet</el-button>
-        </div>
-        <div class="poster-grid">
-          <div class="poster-card">
-            <span>Share Events</span>
-            <strong>{{ shareStats.summary?.total_shares || 0 }}</strong>
-            <small>Referral links or poster visits.</small>
-          </div>
-          <div class="poster-card">
-            <span>Coupons Issued</span>
-            <strong>{{ shareStats.summary?.issued_coupons || 0 }}</strong>
-            <small>Reward coupons from referral actions.</small>
-          </div>
-          <div class="poster-card">
-            <span>Coupons Used</span>
-            <strong>{{ shareStats.summary?.used_coupons || 0 }}</strong>
-            <small>Coupons deducted in customer orders.</small>
-          </div>
+        <div v-else class="empty-result">
+          <strong>还没有生成脚本</strong>
+          <p>填写主题和卖点后，AI 会输出开头钩子、分镜、口播和发布标题。</p>
         </div>
       </div>
 
-      <div class="page-card">
-        <div class="section-title">
+      <div class="panel-card">
+        <div class="section-head compact">
           <div>
-            <h2>Product Signals</h2>
-            <p class="muted">Use hot and slow-moving products to decide promotion focus.</p>
+            <div class="eyebrow dark">PRODUCT SIGNALS</div>
+            <h2>商品经营信号</h2>
+            <p>根据热销商品判断下一步主推方向。</p>
           </div>
         </div>
         <div class="signal-list">
-          <div v-for="item in hotProducts.slice(0, 4)" :key="item.name" class="signal-row">
+          <div v-for="item in hotProducts.slice(0, 5)" :key="item.name" class="signal-row">
             <span>{{ item.name }}</span>
-            <strong>{{ item.quantity || item.sales || 0 }} sold</strong>
+            <strong>已售 {{ item.quantity || item.sales || 0 }}</strong>
           </div>
-          <el-empty v-if="!hotProducts.length" description="No product sales data yet." />
+          <el-empty v-if="!hotProducts.length" description="暂无商品销售数据。" />
         </div>
       </div>
     </section>
@@ -197,18 +301,20 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   fetchMerchantAIInsights,
   fetchMerchantAIQuota,
   fetchMerchantShareStats,
+  createMerchantPromotion,
   generateMerchantAIMarketingCopy,
   generateMerchantPromotionDraft
 } from '../../api/modules'
 
 const router = useRouter()
+const route = useRoute()
 const insights = ref({})
 const shareStats = ref({})
 const aiQuota = ref({})
@@ -217,22 +323,138 @@ const copyLoading = ref(false)
 const videoLoading = ref(false)
 const aiResult = ref({})
 const videoResult = ref({})
+const activeModule = ref('review')
 
 const copyForm = reactive({
   scenario: 'referral_poster',
   customer_tag: 'new_customer',
   product_name: '',
-  goal: 'Increase store visits and repeat purchases this week.'
+  goal: '提升本周到店转化和复购率。'
 })
 
 const videoForm = reactive({
   platform: 'douyin',
   duration: '30s',
   topic: '',
-  selling_points: 'Affordable, tasty, convenient, suitable for friends or office workers.'
+  selling_points: '实惠、好吃、方便，适合朋友聚餐或下班消费。'
 })
 
+const scenarioPresets = {
+  campaign: {
+    scenario: 'referral_poster',
+    customer_tag: 'repeat_customer',
+    product_name: '',
+    goal: '根据今日订单和顾客数据，生成一套能提升复购和到店转化的优惠活动方案。'
+  },
+  product_optimize: {
+    scenario: 'social_post',
+    customer_tag: 'nearby_customer',
+    product_name: '',
+    goal: '针对缺图、缺描述、低动销或排序靠后的商品，生成商品标题、描述、主推理由和扫码页优化建议。'
+  },
+  refund_review: {
+    scenario: 'dormant_recall',
+    customer_tag: 'repeat_customer',
+    product_name: '',
+    goal: '复盘近期退款和售后原因，输出降低退款率、优化履约沟通、补偿券设置和顾客挽回建议。'
+  },
+  finance_review: {
+    scenario: 'vip_campaign',
+    customer_tag: 'high_value_customer',
+    product_name: '',
+    goal: '根据经营流水、退款和净收入情况，给出本周提客单价、控退款和提升利润的行动建议。'
+  },
+  daily_report: {
+    scenario: 'social_post',
+    customer_tag: 'repeat_customer',
+    product_name: '',
+    goal: '根据今日经营日报，输出今日复盘、明日行动建议、适合投放的优惠活动和朋友圈/社群话术。'
+  },
+  promotion_review: {
+    scenario: 'vip_campaign',
+    customer_tag: 'repeat_customer',
+    product_name: '',
+    goal: '复盘当前优惠活动的订单、实收、让利和转化表现，判断是否应该继续投放、提高门槛、降低让利或改成复购券。'
+  },
+  short_video: {
+    scenario: 'social_post',
+    customer_tag: 'nearby_customer',
+    product_name: '',
+    goal: '生成适合门店本周引流的短视频选题、口播脚本和发布标题。',
+    video: true
+  }
+}
+
 const hotProducts = computed(() => insights.value.hot_products || insights.value.top_products || [])
+const aiModules = computed(() => [
+  { key: 'review', label: '经营复盘', title: '今日复盘建议', desc: '总结订单、退款、客单价和明日动作', scenario: 'daily_report' },
+  { key: 'campaign', label: '营销文案', title: '活动方案生成', desc: '输出朋友圈、社群、到店转化文案', scenario: 'campaign' },
+  { key: 'share', label: '裂变活动', title: '海报和券包闭环', desc: '保留裂变活动为独立子模块', path: '/merchant/share' },
+  { key: 'video', label: '短视频', title: '手机拍摄脚本', desc: '生成钩子、分镜、口播和标题', scenario: 'short_video' },
+  { key: 'product', label: '商品优化', title: '菜单商品优化', desc: '补标题、描述、卖点和主推方向', scenario: 'product_optimize' }
+])
+const moduleByScenario = computed(() => Object.fromEntries(
+  aiModules.value
+    .filter((item) => item.scenario)
+    .map((item) => [item.scenario, item])
+))
+const scenarioContext = computed(() => {
+  const scenario = String(route.query.scenario || '')
+  const contextMap = {
+    daily_report: {
+      label: '来自经营看板',
+      title: '今日经营日报 AI 建议',
+      desc: '已带入今日订单、实收、退款、客单价和当前经营结论，可直接生成复盘和明日动作。',
+      button: '生成日报建议',
+      loading: copyLoading.value
+    },
+    product_optimize: {
+      label: '来自商品管理',
+      title: '菜单商品优化建议',
+      desc: '已带入商品缺图、缺描述、售罄、低库存和菜单健康度，可直接生成菜单优化方案。',
+      button: '生成菜单优化',
+      loading: copyLoading.value
+    },
+    refund_review: {
+      label: '来自售后/财务',
+      title: '退款与履约复盘建议',
+      desc: '用于复盘退款原因、履约沟通和补偿券设置，帮助降低售后风险。',
+      button: '生成退款复盘',
+      loading: copyLoading.value
+    },
+    finance_review: {
+      label: '来自财务对账',
+      title: '经营收入优化建议',
+      desc: '用于根据实收、退款和客单价生成提客单、控退款和提升利润的动作。',
+      button: '生成财务建议',
+      loading: copyLoading.value
+    },
+    short_video: {
+      label: '来自经营建议',
+      title: '短视频脚本建议',
+      desc: '已切换到短视频场景，可生成手机就能拍的选题、分镜、口播和标题。',
+      button: '生成脚本',
+      loading: videoLoading.value
+    },
+    campaign: {
+      label: '来自经营建议',
+      title: '营销活动方案建议',
+      desc: '已切换到营销方案场景，可结合订单、顾客和热销商品生成活动草稿。',
+      button: '生成营销方案',
+      loading: copyLoading.value
+    },
+    dormant_recall: {
+      label: '来自顾客经营',
+      title: '沉睡顾客召回建议',
+      desc: '用于生成召回券、社群话术和复购提醒，适合近期下单减少时使用。',
+      button: '生成召回方案',
+      loading: copyLoading.value
+    }
+  }
+  const context = contextMap[scenario]
+  if (!context) return { visible: false }
+  return { visible: true, ...context }
+})
 const cancelRate = computed(() => {
   const stats = insights.value.order_stats || {}
   const total = Number(stats.order_count || 0)
@@ -243,28 +465,31 @@ const cancelRate = computed(() => {
 
 const todayActions = computed(() => [
   {
-    label: 'Traffic',
-    title: 'Create a referral poster',
-    desc: 'Use store code and reward coupon to encourage customers to share.',
-    button: 'Generate Copy',
+    icon: '↗',
+    label: '引流',
+    title: '生成裂变海报',
+    desc: '结合门店码和奖励券，引导顾客分享给好友。',
+    button: '生成文案',
     tone: 'blue',
     loading: copyLoading.value,
     action: () => generateMarketingCopy('referral_poster')
   },
   {
-    label: 'Retention',
-    title: 'Recall dormant customers',
-    desc: 'Turn silent customers into coupon targets with a clear reason to return.',
-    button: 'Generate Recall',
+    icon: '⟳',
+    label: '复购',
+    title: '召回沉睡顾客',
+    desc: '把近期未下单顾客转成优惠券触达对象。',
+    button: '生成召回',
     tone: 'orange',
     loading: copyLoading.value,
     action: () => generateMarketingCopy('dormant_recall')
   },
   {
-    label: 'Content',
-    title: 'Shoot one short video',
-    desc: 'Generate an easy script for a phone-shot video.',
-    button: 'Generate Script',
+    icon: '▶',
+    label: '内容',
+    title: '拍一条短视频',
+    desc: '生成普通手机就能拍的短视频脚本。',
+    button: '生成脚本',
     tone: 'green',
     loading: videoLoading.value,
     action: generateVideoScript
@@ -272,6 +497,26 @@ const todayActions = computed(() => [
 ])
 
 const formatYuan = (value) => (Number(value || 0) / 100).toFixed(2)
+const scenarioTitle = (scenario) => ({
+  referral_poster: 'AI裂变引流活动',
+  new_customer: 'AI新客到店活动',
+  dormant_recall: 'AI沉睡顾客召回券',
+  vip_campaign: 'AI高价值顾客专属活动',
+  social_post: 'AI朋友圈转化活动'
+}[scenario] || 'AI经营活动草稿')
+
+const dateString = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const addDays = (days) => {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return dateString(date)
+}
 
 async function load() {
   const [insightRes, shareRes, quotaRes] = await Promise.all([
@@ -288,8 +533,34 @@ async function generateDraft() {
   generating.value = true
   try {
     await generateMerchantPromotionDraft({})
-    ElMessage.success('Campaign draft created.')
+    ElMessage.success('优惠活动草稿已生成')
     router.push('/merchant/promotions')
+  } finally {
+    generating.value = false
+  }
+}
+
+async function createPromotionFromAI() {
+  generating.value = true
+  try {
+    const content = aiResult.value.content || copyForm.goal
+    const isVip = copyForm.scenario === 'vip_campaign'
+    await createMerchantPromotion({
+      store_id: null,
+      title: scenarioTitle(copyForm.scenario),
+      description: String(content || '').slice(0, 500),
+      type: isVip ? 'discount' : 'amount',
+      threshold: isVip ? 8800 : 5000,
+      discount: isVip ? 0 : 800,
+      discount_rate: isVip ? 88 : 0,
+      status: 'draft',
+      valid_from: dateString(new Date()),
+      valid_to: addDays(14)
+    })
+    ElMessage.success('已生成优惠活动草稿，可继续编辑后发布')
+    router.push('/merchant/promotions?ai_draft=1')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '生成活动草稿失败')
   } finally {
     generating.value = false
   }
@@ -302,9 +573,9 @@ async function generateMarketingCopy(scenario) {
     const res = await generateMerchantAIMarketingCopy(copyForm)
     aiResult.value = res.data?.result || res.data || {}
     if (res.data?.quota) aiQuota.value = res.data.quota
-    ElMessage.success('AI plan generated.')
+    ElMessage.success('AI 营销方案已生成')
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || 'AI quota may be exhausted. Please try again later.')
+    ElMessage.error(error?.response?.data?.message || 'AI 今日额度可能已用完，请稍后再试')
   } finally {
     copyLoading.value = false
   }
@@ -317,142 +588,500 @@ async function generateVideoScript() {
       scenario: 'short_video_script',
       customer_tag: copyForm.customer_tag,
       product_name: videoForm.topic || copyForm.product_name,
-      goal: `Platform: ${videoForm.platform}; duration: ${videoForm.duration}; selling points: ${videoForm.selling_points}`
+      goal: `发布平台：${videoForm.platform}；视频时长：${videoForm.duration}；核心卖点：${videoForm.selling_points}`
     })
     videoResult.value = res.data?.result || res.data || {}
     if (res.data?.quota) aiQuota.value = res.data.quota
-    ElMessage.success('Short-video script generated.')
+    ElMessage.success('短视频脚本已生成')
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || 'AI generation failed.')
+    ElMessage.error(error?.response?.data?.message || 'AI 生成失败，请稍后再试')
   } finally {
     videoLoading.value = false
   }
 }
 
-async function copyText(text) {
-  await navigator.clipboard.writeText(text)
-  ElMessage.success('Copied.')
+async function runCurrentScenario() {
+  const scenario = String(route.query.scenario || copyForm.scenario)
+  if (scenario === 'short_video' || scenarioPresets[scenario]?.video) {
+    await generateVideoScript()
+    return
+  }
+  await generateMarketingCopy()
 }
 
-onMounted(load)
+async function copyText(text) {
+  await navigator.clipboard.writeText(text)
+  ElMessage.success('已复制')
+}
+
+async function copySocialPack(text) {
+  const pack = [
+    '【朋友圈/社群素材包】',
+    `主推：${copyForm.product_name || hotProducts.value[0]?.name || '门店招牌商品'}`,
+    `人群：${copyForm.customer_tag}`,
+    '',
+    String(text || '').trim(),
+    '',
+    '发布建议：配门店环境图、爆款商品图或裂变海报，评论区引导“扫码领券/到店使用”。'
+  ].join('\n')
+  await copyText(pack)
+}
+
+async function copyVideoPack(text) {
+  const pack = [
+    '【短视频素材包】',
+    `平台：${videoForm.platform}`,
+    `时长：${videoForm.duration}`,
+    `主题：${videoForm.topic || copyForm.product_name || '门店本周主推'}`,
+    '',
+    String(text || '').trim(),
+    '',
+    '拍摄建议：前三秒展示成品或优惠，镜头包含门头、制作过程、顾客取餐/用餐和扫码领券。'
+  ].join('\n')
+  await copyText(pack)
+}
+
+function backToPromotionEdit() {
+  if (aiResult.value?.content) {
+    sessionStorage.setItem('ai_promotion_review_note', aiResult.value.content)
+  }
+  router.push({
+    path: '/merchant/promotions',
+    query: {
+      edit_id: route.query.promotion_id,
+      ai_review: '1'
+    }
+  })
+}
+
+function applyScenarioPreset(scenario) {
+  const preset = scenarioPresets[scenario]
+  if (!preset) {
+    if (['referral_poster', 'new_customer', 'dormant_recall', 'vip_campaign', 'social_post'].includes(scenario)) {
+      activeModule.value = 'campaign'
+      copyForm.scenario = scenario
+      copyForm.customer_tag = scenario === 'dormant_recall' ? 'dormant_customer' : copyForm.customer_tag
+      copyForm.goal = scenario === 'dormant_recall'
+        ? '根据近期顾客沉淀和下单情况，生成一套沉睡顾客召回券、社群话术和复购提醒。'
+        : '根据门店经营数据，生成一套可以马上使用的营销活动方案。'
+      ElMessage.info('已根据来源页面预填 AI 经营场景')
+    }
+    return
+  }
+  const module = moduleByScenario.value[scenario]
+  if (module) activeModule.value = module.key
+  copyForm.scenario = preset.scenario
+  copyForm.customer_tag = preset.customer_tag
+  copyForm.product_name = preset.product_name
+  copyForm.goal = preset.goal
+  if (scenario === 'promotion_review') {
+    copyForm.product_name = String(route.query.promotion || '')
+    copyForm.goal = [
+      `请复盘优惠活动：${route.query.promotion || '未命名活动'}。`,
+      `活动带单 ${route.query.orders || 0} 笔，其中有效支付 ${route.query.paid || 0} 笔。`,
+      `优惠让利 ¥${route.query.discount || '0.00'}，活动实收 ¥${route.query.revenue || '0.00'}。`,
+      '请判断活动是否值得继续，并给出下一步动作：继续投放、调整门槛、减少让利、改成复购券或停用。'
+    ].join('\n')
+  }
+  if (scenario === 'daily_report') {
+    copyForm.product_name = String(route.query.product || '')
+    copyForm.goal = [
+      `请基于 ${route.query.date || '今日'} 的商家经营日报生成一份可执行复盘。`,
+      `今日订单：${route.query.orders || 0} 单，净实收：${route.query.net || '¥0.00'}，退款：${route.query.refund || '¥0.00'}，客单价：${route.query.avg || '¥0.00'}。`,
+      `热销商品：${route.query.product || '暂无热销商品'}，待接单：${route.query.pending || 0} 单。`,
+      `系统当前结论：${route.query.brief || '暂无'}。`,
+      '请输出：1）今日经营结论；2）明日三条优先动作；3）适合发给顾客的朋友圈/社群文案；4）是否需要做优惠活动或裂变海报。'
+    ].join('\n')
+  }
+  if (scenario === 'product_optimize') {
+    copyForm.product_name = String(route.query.product || hotProducts.value[0]?.name || '')
+    copyForm.goal = [
+      '请根据当前门店商品管理情况，生成一份可执行的菜单优化建议。',
+      `商品总数：${route.query.total || 0} 个，上架：${route.query.active || 0} 个，分类：${route.query.categories || 0} 个。`,
+      `缺图：${route.query.missing_image || 0} 个，缺描述：${route.query.missing_desc || 0} 个，售罄：${route.query.sold_out || 0} 个，低库存：${route.query.low_stock || 0} 个。`,
+      `菜单健康度：${route.query.health || '0%'}，当前结论：${route.query.brief || '暂无'}。`,
+      '请输出：1）最先处理的 3 个菜单问题；2）商品标题/描述优化方向；3）哪些商品适合排前；4）适合做套餐或活动的建议。'
+    ].join('\n')
+  }
+  if (preset.video) {
+    videoForm.topic = preset.goal
+    videoForm.selling_points = '突出门店特色、爆款商品、优惠券和到店体验。'
+  }
+  ElMessage.info('已根据来源页面预填 AI 经营场景')
+}
+
+function activateAIModule(item) {
+  activeModule.value = item.key
+  if (item.path) {
+    router.push(item.path)
+    return
+  }
+  applyScenarioPreset(item.scenario)
+}
+
+onMounted(async () => {
+  const scenario = String(route.query.scenario || '')
+  await load()
+  applyScenarioPreset(scenario)
+  if (!copyForm.product_name && hotProducts.value[0]?.name) {
+    copyForm.product_name = hotProducts.value[0].name
+  }
+  if (route.query.auto === '1') {
+    await runCurrentScenario()
+  }
+})
+
+watch(() => route.query.scenario, (scenario) => {
+  applyScenarioPreset(String(scenario || ''))
+})
 </script>
 
 <style scoped>
-.ai-stack {
+.ai-page {
+  width: min(100%, 1680px);
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
-.hero-card {
-  background: radial-gradient(circle at top right, rgba(43, 194, 123, 0.2), transparent 34%),
-    linear-gradient(135deg, #082f49, #0f766e);
-  color: white;
+.ai-cockpit {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 24px;
+  min-height: 260px;
+  padding: 30px;
+  overflow: hidden;
+  border: 1px solid rgba(147, 197, 253, 0.34);
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at 72% 16%, rgba(56, 189, 248, 0.42), transparent 28%),
+    radial-gradient(circle at 8% 88%, rgba(37, 99, 235, 0.35), transparent 32%),
+    linear-gradient(135deg, #061a33 0%, #0f4da8 56%, #06b6d4 100%);
+  box-shadow: 0 28px 70px rgba(15, 39, 71, 0.18);
+  color: #fff;
 }
 
-.hero-row,
-.section-title,
-.action-row {
+.ai-cockpit::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+
+.cockpit-copy,
+.quota-orb {
+  position: relative;
+  z-index: 1;
+}
+
+.cockpit-copy {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 840px;
 }
 
-.hero-actions,
-.action-row {
-  flex-wrap: wrap;
+.eyebrow {
+  color: #a7f3d0;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
-.hero-card .muted {
+.eyebrow.dark {
+  color: #2563eb;
+}
+
+.cockpit-copy h1 {
+  margin: 12px 0;
+  font-size: clamp(32px, 4vw, 54px);
+  line-height: 1.05;
+  letter-spacing: -0.06em;
+}
+
+.cockpit-copy p {
+  max-width: 760px;
+  margin: 0;
   color: rgba(255, 255, 255, 0.78);
+  font-size: 16px;
+  line-height: 1.9;
 }
 
-.summary-grid,
-.poster-grid,
-.action-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  margin-top: 20px;
-}
-
-.summary-item,
-.poster-card,
-.action-card {
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #0f172a;
-}
-
-.summary-item span,
-.poster-card span,
-.action-card span {
-  display: block;
-  color: #64748b;
-  font-size: 13px;
-  margin-bottom: 8px;
-}
-
-.summary-item strong,
-.poster-card strong {
-  font-size: 28px;
-}
-
-.quota-item {
-  background: #ecfdf5;
-  border-color: #bbf7d0;
-}
-
-.quota-item small,
-.poster-card small {
-  display: block;
-  margin-top: 6px;
-  color: #64748b;
-}
-
-.grid-2,
-.video-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 18px;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.copy-box {
-  background: #0f172a;
-  color: #e2e8f0;
-  border-radius: 18px;
-  padding: 16px;
-  min-height: 220px;
-}
-
-.copy-box pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.7;
-  margin: 0 0 16px;
-  font-family: inherit;
-}
-
-.signal-list {
+.cockpit-actions,
+.form-actions,
+.inline-actions {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
-.signal-row {
+.cockpit-actions {
+  margin-top: 24px;
+}
+
+.ghost-button {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.quota-orb {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: 28px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.quota-orb span,
+.metric-card span,
+.poster-card span,
+.action-card span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.quota-orb strong {
+  margin-top: 8px;
+  font-size: 64px;
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+}
+
+.quota-orb small {
+  margin-top: 6px;
+  color: #2563eb;
+  font-weight: 800;
+}
+
+.quota-orb p {
+  margin: 12px 0 0;
+  color: #64748b;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1.25fr repeat(4, 1fr);
+  gap: 14px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.module-card {
+  min-height: 126px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid #dce8f5;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgba(15, 39, 71, 0.06);
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.module-card:hover,
+.module-card.active {
+  transform: translateY(-2px);
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 18px 42px rgba(37, 99, 235, 0.12);
+}
+
+.module-card span,
+.module-card strong,
+.module-card small {
+  display: block;
+}
+
+.module-card span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.module-card strong {
+  margin: 7px 0 6px;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.module-card small {
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.scenario-context {
   display: flex;
   justify-content: space-between;
-  padding: 12px 0;
-  border-bottom: 1px solid #e2e8f0;
+  gap: 16px;
+  align-items: center;
+  padding: 18px 20px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(14, 165, 233, 0.13), transparent 34%),
+    #eff6ff;
+}
+
+.scenario-context span,
+.scenario-context strong,
+.scenario-context p {
+  display: block;
+}
+
+.scenario-context span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.scenario-context strong {
+  margin-top: 6px;
+  color: #0f2747;
+  font-size: 20px;
+}
+
+.scenario-context p {
+  margin: 7px 0 0;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.execution-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.execution-strip div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid #dce8f5;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.execution-strip span {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #2563eb;
+  font-weight: 900;
+}
+
+.execution-strip strong {
+  color: #0f172a;
+}
+
+.execution-strip small {
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.metric-card,
+.panel-card {
+  border: 1px solid #dce8f5;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 46px rgba(15, 39, 71, 0.07);
+}
+
+.metric-card {
+  min-height: 138px;
+  padding: 18px;
+}
+
+.metric-card.primary {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+}
+
+.metric-card.accent {
+  background: linear-gradient(135deg, #ecfeff, #e0f2fe);
+}
+
+.metric-card strong {
+  display: block;
+  margin: 12px 0 8px;
+  color: #0f172a;
+  font-size: 30px;
+  letter-spacing: -0.04em;
+}
+
+.metric-card small {
+  color: #64748b;
+}
+
+.workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.25fr);
+  gap: 18px;
+}
+
+.left-stack,
+.right-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.panel-card {
+  padding: 22px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.section-head.compact {
+  align-items: center;
+}
+
+.section-head h2 {
+  margin: 6px 0 8px;
+  color: #0f172a;
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+.section-head p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.75;
+}
+
+.action-list {
+  display: grid;
+  gap: 12px;
+}
+
+.action-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #dce8f5;
+  border-radius: 20px;
+  padding: 16px;
 }
 
 .action-card.blue {
@@ -467,18 +1096,166 @@ onMounted(load)
   background: #f0fdf4;
 }
 
-@media (max-width: 900px) {
-  .hero-row,
-  .section-title,
-  .grid-2,
-  .video-grid,
-  .form-row {
-    display: block;
+.action-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 16px;
+  color: #fff;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.action-card strong {
+  display: block;
+  margin: 4px 0;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.action-card p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.generator-card {
+  background:
+    radial-gradient(circle at right top, rgba(37, 99, 235, 0.08), transparent 34%),
+    #fff;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.studio-form :deep(.el-input__wrapper),
+.studio-form :deep(.el-textarea__inner),
+.video-card :deep(.el-input__wrapper),
+.video-card :deep(.el-textarea__inner) {
+  border-radius: 14px;
+}
+
+.result-card {
+  min-height: 360px;
+}
+
+.copy-box {
+  min-height: 260px;
+  border-radius: 22px;
+  padding: 18px;
+  color: #dbeafe;
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.36), transparent 26%),
+    #0f172a;
+}
+
+.copy-box pre {
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.75;
+  font-family: inherit;
+}
+
+.empty-result {
+  display: grid;
+  min-height: 240px;
+  place-content: center;
+  border: 1px dashed #bfd4ef;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #f8fbff, #eef6ff);
+  text-align: center;
+  color: #64748b;
+}
+
+.empty-result strong {
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(320px, 0.8fr);
+  gap: 18px;
+}
+
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.poster-card {
+  border-radius: 18px;
+  padding: 16px;
+  border: 1px solid #dce8f5;
+  background: #f8fbff;
+}
+
+.poster-card strong {
+  display: block;
+  margin: 8px 0;
+  color: #0f172a;
+  font-size: 28px;
+}
+
+.poster-card small {
+  color: #64748b;
+}
+
+.signal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.signal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.signal-row strong {
+  color: #2563eb;
+}
+
+@media (max-width: 1320px) {
+  .metric-grid,
+  .bottom-grid,
+  .module-grid,
+  .execution-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .hero-actions,
-  .action-row {
-    margin-top: 12px;
+  .workbench-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .ai-cockpit,
+  .metric-grid,
+  .bottom-grid,
+  .module-grid,
+  .execution-strip,
+  .form-row,
+  .poster-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-cockpit {
+    padding: 22px;
+  }
+
+  .action-card {
+    grid-template-columns: 44px minmax(0, 1fr);
   }
 }
 </style>

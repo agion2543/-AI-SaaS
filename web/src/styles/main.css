@@ -1,12 +1,17 @@
 :root {
-  --bg: #f3f6fb;
+  --bg: #f4f8fc;
   --panel: #ffffff;
-  --brand: #1f6feb;
-  --brand-soft: #dfeafe;
-  --text: #1f2937;
-  --muted: #6b7280;
-  --success: #059669;
-  --warning: #d97706;
+  --brand: #2563eb;
+  --brand-strong: #0f4da8;
+  --brand-soft: #dbeafe;
+  --brand-cyan: #06b6d4;
+  --text: #0f172a;
+  --muted: #64748b;
+  --success: #22c55e;
+  --warning: #f97316;
+  --danger: #ef4444;
+  --border: #dce8f5;
+  --shadow-soft: 0 18px 48px rgba(15, 39, 71, 0.08);
 }
 
 * {
@@ -18,8 +23,9 @@ body {
   font-family: "Segoe UI", "PingFang SC", sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, #dbeafe 0%, transparent 30%),
-    linear-gradient(135deg, #f8fbff 0%, #eef3f9 100%);
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.14) 0%, transparent 30%),
+    radial-gradient(circle at bottom right, rgba(6, 182, 212, 0.12) 0%, transparent 26%),
+    linear-gradient(135deg, #f8fbff 0%, #eef4fb 100%);
 }
 
 a {
@@ -28,10 +34,11 @@ a {
 }
 
 .page-card {
-  background: var(--panel);
-  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 24px;
   padding: 20px;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-soft);
 }
 
 .page-title {
@@ -55,9 +62,10 @@ a {
 
 .stat-card {
   padding: 20px;
-  border-radius: 18px;
-  background: linear-gradient(145deg, #ffffff, #eef5ff);
-  border: 1px solid #e5edf9;
+  border-radius: 22px;
+  background: linear-gradient(145deg, #ffffff, #eef6ff);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 34px rgba(15, 39, 71, 0.06);
 }
 
 .stat-label {
@@ -68,4 +76,36 @@ a {
 .stat-value {
   font-size: 28px;
   font-weight: 700;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--brand);
+  --el-button-border-color: var(--brand);
+  --el-button-hover-bg-color: var(--brand-strong);
+  --el-button-hover-border-color: var(--brand-strong);
+}
+
+.el-table {
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.el-table th.el-table__cell {
+  background: #f1f6fd !important;
+  color: #334155;
+  font-weight: 800;
+}
+
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  border-radius: 12px !important;
+  box-shadow: 0 0 0 1px #d8e5f5 inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--brand) inset, 0 0 0 4px rgba(37, 99, 235, 0.1) !important;
 }

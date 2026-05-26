@@ -26,9 +26,15 @@ type Order struct {
 	RefundStatus      string              `gorm:"size:20;default:none;index" json:"refund_status"`
 	PromotionID       *uint               `gorm:"index" json:"promotion_id"`
 	Promotion         *Promotion          `json:"promotion,omitempty"`
+	CouponID          *uint               `gorm:"column:referral_coupon_id;index" json:"referral_coupon_id"`
+	CouponNo          string              `gorm:"size:60;index" json:"coupon_no"`
 	Items             string              `gorm:"type:json" json:"items"`
 	CustomerNote      string              `gorm:"size:500" json:"customer_note"`
 	MerchantNote      string              `gorm:"size:500" json:"merchant_note"`
+	CustomerRating    int                 `gorm:"default:0" json:"customer_rating"`
+	CustomerReview    string              `gorm:"size:1000" json:"customer_review"`
+	ReviewedAt        *time.Time          `json:"reviewed_at"`
+	ShareCode         string              `gorm:"size:40;index" json:"share_code"`
 	OperationLogs     string              `gorm:"type:text" json:"operation_logs"`
 	Status            string              `gorm:"size:20;default:pending" json:"status"`
 	PaymentChannel    string              `gorm:"size:40" json:"payment_channel"`

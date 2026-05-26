@@ -32,13 +32,30 @@
         <el-button type="primary" @click="submit">{{ text.save }}</el-button>
       </el-form>
     </div>
+
+    <div class="page-card">
+      <h2 class="page-title">修改登录密码</h2>
+      <p class="muted">建议定期修改密码。忘记密码时，可在商家登录页通过手机号验证码重置。</p>
+      <el-form :model="passwordForm" label-position="top">
+        <el-form-item label="原密码">
+          <el-input v-model="passwordForm.old_password" type="password" show-password placeholder="请输入当前密码" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="至少 6 位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="passwordForm.confirm_password" type="password" show-password placeholder="再次输入新密码" />
+        </el-form-item>
+        <el-button type="primary" @click="submitPassword">保存新密码</el-button>
+      </el-form>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchMerchantInfo, updateMerchantInfo } from '../../api/modules'
+import { changeMerchantPassword, fetchMerchantInfo, updateMerchantInfo } from '../../api/modules'
 import { useMerchantAuthStore } from '../../stores/merchantAuth'
 
 const text = {
@@ -67,6 +84,11 @@ const form = reactive({
   name: '',
   contact_phone: '',
   contact_email: ''
+})
+const passwordForm = reactive({
+  old_password: '',
+  new_password: '',
+  confirm_password: ''
 })
 
 const statusLabel = (status) => ({
@@ -101,6 +123,18 @@ const submit = async () => {
   }
 }
 
+const submitPassword = async () => {
+  try {
+    await changeMerchantPassword(passwordForm)
+    passwordForm.old_password = ''
+    passwordForm.new_password = ''
+    passwordForm.confirm_password = ''
+    ElMessage.success('登录密码已修改')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '密码修改失败')
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -121,6 +155,12 @@ onMounted(load)
   gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid #eef2f7;
+}
+
+.muted {
+  color: #64748b;
+  line-height: 1.7;
+  margin: 0 0 16px;
 }
 
 @media (max-width: 960px) {

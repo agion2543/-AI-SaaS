@@ -11,5 +11,8 @@ type MerchantAIUsageLog struct {
 	Model      string    `gorm:"size:120" json:"model"`
 	Provider   string    `gorm:"size:80" json:"provider"`
 	Fallback   bool      `gorm:"default:false" json:"fallback"`
+	Success    bool      `gorm:"default:true" json:"success"`
+	Error      string    `gorm:"size:500" json:"error"`
+	DurationMS int       `gorm:"default:0" json:"duration_ms"`
 	UsedAt     time.Time `gorm:"index" json:"used_at"`
 }

@@ -8,6 +8,32 @@
       <el-button type="primary" @click="openCreate">新增门店</el-button>
     </div>
 
+    <section class="store-health-grid">
+      <article v-for="item in storeHealthCards" :key="item.label" :class="['store-health-card', item.tone]">
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
+        <small>{{ item.hint }}</small>
+      </article>
+    </section>
+
+    <section class="store-mode-guide">
+      <article>
+        <span>顾客端展示</span>
+        <strong>暂停接单仍可浏览菜单</strong>
+        <small>暂停接单时顾客能看到商品、营业时间和暂停原因，但不能提交订单。</small>
+      </article>
+      <article>
+        <span>下单流程</span>
+        <strong>先提交后结算 / 下单即付款</strong>
+        <small>前者适合先确认需求，后者适合快速成交；会影响顾客端主按钮和订单初始状态。</small>
+      </article>
+      <article>
+        <span>接单方式</span>
+        <strong>自动接单 / 手动接单</strong>
+        <small>自动接单会让订单直接进入处理中，手动接单则进入待接单。</small>
+      </article>
+    </section>
+
     <el-table :data="stores">
       <el-table-column prop="name" label="门店名称" min-width="160" />
       <el-table-column prop="address" label="地址" min-width="200" />
@@ -21,6 +47,15 @@
       </el-table-column>
       <el-table-column prop="business_hours" label="营业时间" min-width="150">
         <template #default="{ row }">{{ row.business_hours || '未设置' }}</template>
+      </el-table-column>
+      <el-table-column label="下单流程" min-width="170">
+        <template #default="{ row }">
+          <div class="mode-cell">
+            <el-tag effect="plain">{{ orderModeLabel(row.order_mode) }}</el-tag>
+            <small>{{ row.auto_accept ? '自动接单' : '手动接单' }}</small>
+            <small class="mode-impact">{{ storeCustomerImpact(row) }}</small>
+          </div>
+        </template>
       </el-table-column>
       <el-table-column label="顾客入口" min-width="230">
         <template #default="{ row }">
@@ -80,9 +115,26 @@
         <el-form-item label="营业时间">
           <el-input v-model="form.business_hours" placeholder="例如：周一至周日 09:00-22:00" maxlength="120" />
         </el-form-item>
+        <el-form-item label="下单流程">
+          <el-radio-group v-model="form.order_mode">
+            <el-radio-button label="submit_later">先提交后结算</el-radio-button>
+            <el-radio-button label="pay_first">下单即付款</el-radio-button>
+          </el-radio-group>
+          <small class="field-tip">先提交后结算适合需要分阶段确认的服务；下单即付款适合快速成交和带走类服务。</small>
+        </el-form-item>
+        <el-form-item label="接单方式">
+          <el-switch v-model="form.auto_accept" active-text="自动接单" inactive-text="手动接单" />
+          <small class="field-tip">自动接单会在顾客提交后直接进入处理中；手动接单需要商家确认。</small>
+        </el-form-item>
         <el-form-item label="暂停原因">
           <el-input v-model="form.pause_reason" type="textarea" :rows="2" placeholder="暂停接单时给顾客看的说明" maxlength="255" />
         </el-form-item>
+        <section class="setting-preview" :class="settingPreview.tone">
+          <span>配置生效后</span>
+          <strong>{{ settingPreview.title }}</strong>
+          <p>{{ settingPreview.text }}</p>
+          <small>{{ settingPreview.orderText }}</small>
+        </section>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -93,7 +145,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { createMerchantStore, deleteMerchantStore, fetchMerchantStores, updateMerchantStore } from '../../api/modules'
@@ -113,7 +165,52 @@ const form = reactive({
   status: 'active',
   is_open: true,
   business_hours: '',
-  pause_reason: ''
+  pause_reason: '',
+  order_mode: 'submit_later',
+  auto_accept: true
+})
+
+const enabledStores = computed(() => stores.value.filter((item) => item.status === 'active'))
+const openStores = computed(() => enabledStores.value.filter((item) => item.is_open !== false))
+const pausedStores = computed(() => enabledStores.value.filter((item) => item.is_open === false))
+const manualAcceptStores = computed(() => enabledStores.value.filter((item) => !item.auto_accept))
+const storeHealthCards = computed(() => [
+  { label: '门店总数', value: stores.value.length, hint: '当前商家已维护门店。', tone: 'primary' },
+  { label: '接单中', value: openStores.value.length, hint: '顾客端可提交订单。', tone: 'success' },
+  { label: '暂停接单', value: pausedStores.value.length, hint: '顾客可浏览，但不能下单。', tone: pausedStores.value.length ? 'warning' : 'muted' },
+  { label: '手动接单', value: manualAcceptStores.value.length, hint: '订单需要商家确认后处理。', tone: manualAcceptStores.value.length ? 'warning' : 'muted' }
+])
+const settingPreview = computed(() => {
+  if (form.status !== 'active') {
+    return {
+      tone: 'muted',
+      title: '顾客端暂不可访问该门店',
+      text: '门店禁用后，顾客扫码会看到不可访问提示，适合长期停用或测试门店。',
+      orderText: '不会创建新的顾客订单。'
+    }
+  }
+  if (!form.is_open) {
+    return {
+      tone: 'warning',
+      title: '顾客可浏览菜单，但不能提交订单',
+      text: form.pause_reason.trim() || '顾客端会展示暂停接单提示，建议填写清晰原因。',
+      orderText: '不会创建新的顾客订单。'
+    }
+  }
+  if (form.order_mode === 'submit_later') {
+    return {
+      tone: 'success',
+      title: '顾客点击“提交订单”',
+      text: '订单先进入系统，顾客可在订单状态页查看进度，后续再结算。',
+      orderText: form.auto_accept ? '订单创建后直接进入处理中。' : '订单创建后进入待接单。'
+    }
+  }
+  return {
+    tone: 'primary',
+    title: '顾客点击“提交并付款”',
+    text: '订单创建后进入付款流程，适合快速成交和标准商品。',
+    orderText: form.auto_accept ? '付款确认后订单进入处理中。' : '付款确认后订单进入待接单。'
+  }
 })
 
 const resetForm = () => {
@@ -124,7 +221,9 @@ const resetForm = () => {
     status: 'active',
     is_open: true,
     business_hours: '',
-    pause_reason: ''
+    pause_reason: '',
+    order_mode: 'submit_later',
+    auto_accept: true
   })
   editingId.value = null
 }
@@ -163,7 +262,9 @@ const openEdit = (row) => {
     status: row.status || 'active',
     is_open: row.is_open !== false,
     business_hours: row.business_hours || '',
-    pause_reason: row.pause_reason || ''
+    pause_reason: row.pause_reason || '',
+    order_mode: row.order_mode || 'pay_first',
+    auto_accept: Boolean(row.auto_accept)
   })
   dialogVisible.value = true
 }
@@ -175,7 +276,9 @@ const payload = () => ({
   status: form.status,
   is_open: form.is_open,
   business_hours: form.business_hours.trim(),
-  pause_reason: form.pause_reason.trim()
+  pause_reason: form.pause_reason.trim(),
+  order_mode: form.order_mode,
+  auto_accept: form.auto_accept
 })
 
 const submit = async () => {
@@ -207,7 +310,9 @@ const toggleOpen = async (row, isOpen) => {
     status: row.status,
     is_open: isOpen,
     business_hours: row.business_hours || '',
-    pause_reason: isOpen ? '' : (row.pause_reason || '商家暂停接单')
+    pause_reason: isOpen ? '' : (row.pause_reason || '商家暂停接单'),
+    order_mode: row.order_mode || 'pay_first',
+    auto_accept: Boolean(row.auto_accept)
   })
   ElMessage.success(isOpen ? '已恢复接单' : '已暂停接单')
   load()
@@ -225,6 +330,18 @@ const changePage = async (nextPage) => {
 }
 
 onMounted(load)
+
+const orderModeLabel = (value) => ({
+  submit_later: '先提交后结算',
+  pay_first: '下单即付款'
+}[value] || '下单即付款')
+
+const storeCustomerImpact = (row) => {
+  if (row.status !== 'active') return '顾客端不可访问'
+  if (row.is_open === false) return '可浏览，不可下单'
+  if (row.order_mode === 'submit_later') return row.auto_accept ? '提交后进入处理中' : '提交后等待接单'
+  return row.auto_accept ? '付款后进入处理中' : '付款后等待接单'
+}
 </script>
 
 <style scoped>
@@ -247,15 +364,185 @@ onMounted(load)
   margin-top: 18px;
 }
 
+.store-health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.store-health-card {
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.store-health-card.success {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+}
+
+.store-health-card.warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.store-health-card.muted {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.store-health-card span,
+.store-health-card strong,
+.store-health-card small {
+  display: block;
+}
+
+.store-health-card span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.store-health-card strong {
+  margin-top: 5px;
+  color: #0f2747;
+  font-size: 24px;
+}
+
+.store-health-card small {
+  margin-top: 4px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.store-mode-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.store-mode-guide article {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.store-mode-guide span,
+.store-mode-guide strong,
+.store-mode-guide small {
+  display: block;
+}
+
+.store-mode-guide span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.store-mode-guide strong {
+  margin-top: 5px;
+  color: #0f2747;
+  font-size: 16px;
+}
+
+.store-mode-guide small {
+  margin-top: 6px;
+  color: #64748b;
+  line-height: 1.55;
+}
+
 .action-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
+.mode-cell {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+}
+
+.mode-cell small,
+.field-tip {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.mode-cell .mode-impact {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.field-tip {
+  display: block;
+  margin-top: 6px;
+}
+
+.setting-preview {
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.setting-preview.success {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+}
+
+.setting-preview.warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.setting-preview.muted {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.setting-preview span,
+.setting-preview strong,
+.setting-preview p,
+.setting-preview small {
+  display: block;
+}
+
+.setting-preview span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.setting-preview strong {
+  margin-top: 5px;
+  color: #0f2747;
+  font-size: 17px;
+}
+
+.setting-preview p {
+  margin: 6px 0 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.setting-preview small {
+  margin-top: 6px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
 @media (max-width: 720px) {
   .stores-toolbar {
     flex-direction: column;
+  }
+
+  .store-health-grid,
+  .store-mode-guide {
+    grid-template-columns: 1fr;
   }
 }
 </style>

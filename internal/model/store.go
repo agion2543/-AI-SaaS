@@ -11,6 +11,8 @@ type Store struct {
 	IsOpen        bool     `gorm:"default:true;index" json:"is_open"`
 	BusinessHours string   `gorm:"size:120" json:"business_hours"`
 	PauseReason   string   `gorm:"size:255" json:"pause_reason"`
+	OrderMode     string   `gorm:"size:30;default:pay_first;index" json:"order_mode"`
+	AutoAccept    bool     `gorm:"default:false;index" json:"auto_accept"`
 }
 
 type StoreProduct struct {
@@ -23,5 +25,6 @@ type StoreProduct struct {
 	ImageURL    string `gorm:"size:500" json:"image_url"`
 	Category    string `gorm:"size:80;default:默认分类;index" json:"category"`
 	Status      string `gorm:"size:20;default:active;index" json:"status"`
+	Stock       *int   `gorm:"default:null" json:"stock"`
 	Sort        int    `gorm:"default:100;index" json:"sort"`
 }

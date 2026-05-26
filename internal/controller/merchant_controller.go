@@ -206,6 +206,20 @@ func (ctl *MerchantController) SubscriptionOrderStatus(c *gin.Context) {
 	utils.Success(c, data)
 }
 
+func (ctl *MerchantController) MarkSubscriptionOrderPaid(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	order, err := ctl.merchant.MarkSubscriptionOrderPaid(merchantID, c.Param("orderNo"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"order": order, "marked": true})
+}
+
 func (ctl *MerchantController) RedeemSubscriptionCard(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
@@ -389,6 +403,8 @@ func (ctl *MerchantController) Stores(c *gin.Context) {
 			"is_open":        item.IsOpen,
 			"business_hours": item.BusinessHours,
 			"pause_reason":   item.PauseReason,
+			"order_mode":     item.OrderMode,
+			"auto_accept":    item.AutoAccept,
 			"qr_url":         ctl.merchant.CustomerStoreURL(item.ID),
 			"created_at":     item.CreatedAt,
 			"updated_at":     item.UpdatedAt,
@@ -428,6 +444,8 @@ func (ctl *MerchantController) CreateStore(c *gin.Context) {
 			"is_open":        store.IsOpen,
 			"business_hours": store.BusinessHours,
 			"pause_reason":   store.PauseReason,
+			"order_mode":     store.OrderMode,
+			"auto_accept":    store.AutoAccept,
 			"qr_url":         ctl.merchant.CustomerStoreURL(store.ID),
 			"created_at":     store.CreatedAt,
 			"updated_at":     store.UpdatedAt,
@@ -467,6 +485,8 @@ func (ctl *MerchantController) UpdateStore(c *gin.Context) {
 			"is_open":        store.IsOpen,
 			"business_hours": store.BusinessHours,
 			"pause_reason":   store.PauseReason,
+			"order_mode":     store.OrderMode,
+			"auto_accept":    store.AutoAccept,
 			"qr_url":         ctl.merchant.CustomerStoreURL(store.ID),
 			"created_at":     store.CreatedAt,
 			"updated_at":     store.UpdatedAt,
@@ -782,6 +802,8 @@ func (ctl *MerchantController) PublicStore(c *gin.Context) {
 			"is_open":        store.IsOpen,
 			"business_hours": store.BusinessHours,
 			"pause_reason":   store.PauseReason,
+			"order_mode":     store.OrderMode,
+			"auto_accept":    store.AutoAccept,
 			"created_at":     store.CreatedAt,
 			"updated_at":     store.UpdatedAt,
 		},

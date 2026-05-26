@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>移动端测试</title>
+</head>
+<body>
+  <div id="app">Loading...</div>
+  <script type="module">
+    try {
+      const { createApp } = await import('/node_modules/.vite/deps/vue.js?v=12f81369')
+      console.log('Vue loaded:', createApp)
+      
+      const { createRouter, createWebHashHistory } = await import('/node_modules/.vite/deps/vue-router.js?v=12f81369')
+      console.log('VueRouter loaded:', createRouter)
+      
+      const Vant = await import('/node_modules/.vite/deps/vant.js?v=12f81369')
+      console.log('Vant loaded:', Vant)
+      
+      document.getElementById('app').innerHTML = '<h2 style="color:green;text-align:center;padding:40px">✅ 所有依赖加载成功！移动端可以正常运行。</h2>'
+      console.log('ALL OK')
+    } catch (e) {
+      document.getElementById('app').innerHTML = '<h2 style="color:red;text-align:center;padding:40px">❌ 加载失败: ' + e.message + '</h2>'
+      console.error('ERROR:', e)
+    }
+  </script>
+</body>
+</html>

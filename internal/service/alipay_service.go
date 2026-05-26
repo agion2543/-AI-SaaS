@@ -212,7 +212,7 @@ func (s *AlipayService) body(order *model.Order) string {
 
 func (s *AlipayService) returnURL(order *model.Order) string {
 	if order.OrderType == "store_order" {
-		return fmt.Sprintf("%s/customer/order-success?orderNo=%s", s.cfg.FrontendURL, url.QueryEscape(order.OrderNo))
+		return fmt.Sprintf("%s/customer/orders/%s?from=pay_return", s.cfg.FrontendURL, url.PathEscape(order.OrderNo))
 	}
 	return s.cfg.AlipayReturnURL
 }

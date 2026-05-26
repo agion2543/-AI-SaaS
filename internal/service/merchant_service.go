@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -32,6 +33,7 @@ type MerchantService struct {
 	packages   *repository.PackageRepository
 	cards      *repository.CardRepository
 	codes      *repository.VerificationCodeRepository
+	systems    *repository.SystemRepository
 	ai         *AIService
 }
 
@@ -50,6 +52,7 @@ func NewMerchantService(cfg *config.Config, db *gorm.DB) *MerchantService {
 		packages:   repository.NewPackageRepository(db),
 		cards:      repository.NewCardRepository(db),
 		codes:      repository.NewVerificationCodeRepository(db),
+		systems:    repository.NewSystemRepository(db),
 		ai:         NewAIService(cfg),
 	}
 }
@@ -322,10 +325,26 @@ func (s *MerchantService) SubscriptionInfo(merchantID uint) (map[string]interfac
 	}
 	active := merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(time.Now())
 	return map[string]interface{}{
-		"merchant": merchant,
-		"plans":    plans,
-		"active":   active,
+		"merchant":         merchant,
+		"plans":            plans,
+		"active":           active,
+		"platform_payment": s.platformSubscriptionPaymentConfig(),
 	}, nil
+}
+
+func (s *MerchantService) platformSubscriptionPaymentConfig() map[string]string {
+	configs, err := s.systems.List()
+	if err != nil {
+		return map[string]string{}
+	}
+	result := map[string]string{}
+	for _, item := range configs {
+		switch item.ConfigKey {
+		case "platform_alipay_qr_code", "platform_wechat_qr_code", "platform_subscription_note":
+			result[item.ConfigKey] = item.ConfigValue
+		}
+	}
+	return result
 }
 
 func (s *MerchantService) CheckSubscription(merchantID uint) (bool, error) {
@@ -350,11 +369,55 @@ func (s *MerchantService) SubscriptionOrderStatus(merchantID uint, orderNo strin
 	}
 	valid, _ := s.CheckSubscription(merchantID)
 	return map[string]interface{}{
-		"order_no": order.OrderNo,
-		"status":   order.Status,
-		"paid":     order.Status == "paid",
-		"valid":    valid,
+		"order_no":    order.OrderNo,
+		"status":      order.Status,
+		"paid":        order.Status == "paid",
+		"valid":       valid,
+		"marked_paid": orderHasAction(order.OperationLogs, "merchant_subscription_paid_marked"),
 	}, nil
+}
+
+func (s *MerchantService) MarkSubscriptionOrderPaid(merchantID uint, orderNo string) (*model.Order, error) {
+	order, err := s.orders.FindByOrderNo(orderNo)
+	if err != nil {
+		return nil, errors.New("订阅订单不存在")
+	}
+	if order.OrderType != "merchant_subscription" || order.MerchantID == nil || *order.MerchantID != merchantID {
+		return nil, errors.New("订阅订单不存在")
+	}
+	if order.Status == "paid" {
+		return order, nil
+	}
+	if order.Status != "pending" {
+		return nil, errors.New("当前订阅订单不能标记付款")
+	}
+	if !orderHasAction(order.OperationLogs, "merchant_subscription_paid_marked") {
+		order.OperationLogs = appendMerchantOrderLog(order.OperationLogs, "merchant_subscription_paid_marked", "商家已提交付款提醒，等待平台核对到账")
+	}
+	if strings.TrimSpace(order.PaymentChannel) == "" {
+		order.PaymentChannel = "platform_qr"
+	}
+	if err := s.orders.Save(order); err != nil {
+		return nil, err
+	}
+	return order, nil
+}
+
+func appendMerchantOrderLog(raw, action, text string) string {
+	var logs []OrderOperationLog
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &logs)
+	}
+	logs = append(logs, OrderOperationLog{
+		Action: action,
+		Text:   text,
+		Time:   time.Now().Format(time.RFC3339),
+	})
+	bytes, err := json.Marshal(logs)
+	if err != nil {
+		return raw
+	}
+	return string(bytes)
 }
 
 func syncMerchantSubscriptionFields(merchant *model.Merchant, plans []model.MerchantPlan) bool {
@@ -493,6 +556,8 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	mode := strings.TrimSpace(req.Mode)
 	accountName := strings.TrimSpace(req.AccountName)
 	accountNo := strings.TrimSpace(req.AccountNo)
+	alipayQRCode := strings.TrimSpace(req.AlipayQRCode)
+	wechatQRCode := strings.TrimSpace(req.WechatQRCode)
 	appID := strings.TrimSpace(req.AppID)
 	contactPhone := normalizePhone(req.ContactPhone)
 	remark := strings.TrimSpace(req.Remark)
@@ -514,6 +579,12 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	if len([]rune(remark)) > 255 {
 		return nil, errors.New("备注不能超过 255 字")
 	}
+	if len([]rune(alipayQRCode)) > 1000 || len([]rune(wechatQRCode)) > 1000 {
+		return nil, errors.New("收款码链接不能超过 1000 字")
+	}
+	if mode == "direct" && alipayQRCode == "" && wechatQRCode == "" {
+		return nil, errors.New("商家收款码模式至少需要填写一个收款码")
+	}
 	if _, err := s.merchants.FindByID(merchantID); err != nil {
 		return nil, errors.New("商家信息不存在")
 	}
@@ -530,6 +601,8 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	config.Mode = mode
 	config.AccountName = accountName
 	config.AccountNo = accountNo
+	config.AlipayQRCode = alipayQRCode
+	config.WechatQRCode = wechatQRCode
 	config.AppID = appID
 	config.ContactPhone = contactPhone
 	config.Remark = remark
@@ -583,9 +656,14 @@ func (s *MerchantService) CreateStore(merchantID uint, req dto.CreateStoreReques
 	phone := normalizePhone(req.ContactPhone)
 	businessHours := strings.TrimSpace(req.BusinessHours)
 	pauseReason := strings.TrimSpace(req.PauseReason)
+	orderMode := normalizeStoreOrderMode(req.OrderMode)
 	isOpen := true
 	if req.IsOpen != nil {
 		isOpen = *req.IsOpen
+	}
+	autoAccept := orderMode == "submit_later"
+	if req.AutoAccept != nil {
+		autoAccept = *req.AutoAccept
 	}
 
 	if name == "" {
@@ -613,6 +691,8 @@ func (s *MerchantService) CreateStore(merchantID uint, req dto.CreateStoreReques
 		IsOpen:        isOpen,
 		BusinessHours: businessHours,
 		PauseReason:   pauseReason,
+		OrderMode:     orderMode,
+		AutoAccept:    autoAccept,
 	}
 	if err := s.stores.Create(store); err != nil {
 		return nil, err
@@ -627,6 +707,7 @@ func (s *MerchantService) UpdateStore(merchantID, storeID uint, req dto.UpdateSt
 	status := strings.TrimSpace(req.Status)
 	businessHours := strings.TrimSpace(req.BusinessHours)
 	pauseReason := strings.TrimSpace(req.PauseReason)
+	orderMode := normalizeStoreOrderMode(req.OrderMode)
 
 	if name == "" {
 		return nil, errors.New("\u95e8\u5e97\u540d\u79f0\u4e0d\u80fd\u4e3a\u7a7a")
@@ -656,8 +737,12 @@ func (s *MerchantService) UpdateStore(merchantID, storeID uint, req dto.UpdateSt
 	store.ContactPhone = phone
 	store.BusinessHours = businessHours
 	store.PauseReason = pauseReason
+	store.OrderMode = orderMode
 	if req.IsOpen != nil {
 		store.IsOpen = *req.IsOpen
+	}
+	if req.AutoAccept != nil {
+		store.AutoAccept = *req.AutoAccept
 	}
 	if status != "" {
 		store.Status = status
@@ -676,6 +761,14 @@ func (s *MerchantService) DisableStore(merchantID, storeID uint) error {
 	}
 	store.Status = "inactive"
 	return s.stores.Save(store)
+}
+
+func normalizeStoreOrderMode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "submit_later" {
+		return "submit_later"
+	}
+	return "pay_first"
 }
 
 func (s *MerchantService) ListStoreProducts(merchantID, storeID uint, page, pageSize int) ([]model.StoreProduct, int64, error) {
@@ -719,6 +812,7 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 			ImageURL:    imageURL,
 			Category:    category,
 			Status:      status,
+			Stock:       req.Stock,
 			Sort:        req.Sort,
 		}
 		if product.Sort == 0 {
@@ -741,6 +835,7 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 	product.ImageURL = imageURL
 	product.Category = category
 	product.Status = status
+	product.Stock = req.Stock
 	product.Sort = req.Sort
 	if product.Sort == 0 {
 		product.Sort = 100
@@ -1047,11 +1142,13 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
+	start := time.Now()
 	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
+		_ = s.recordAIUsage(merchantID, scenario, nil, err, time.Since(start))
 		return nil, err
 	}
-	_ = s.recordAIUsage(merchantID, scenario, result)
+	_ = s.recordAIUsage(merchantID, scenario, result, nil, time.Since(start))
 	return result, nil
 }
 
@@ -1133,11 +1230,13 @@ func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.Gene
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
+	start := time.Now()
 	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
+		_ = s.recordAIUsage(merchantID, "referral_multi_copy", nil, err, time.Since(start))
 		return nil, err
 	}
-	_ = s.recordAIUsage(merchantID, "referral_multi_copy", result)
+	_ = s.recordAIUsage(merchantID, "referral_multi_copy", result, nil, time.Since(start))
 
 	variants := buildReferralCopyVariants(merchant.Name, productName, config, stats, result.Content)
 	return map[string]interface{}{
@@ -1190,11 +1289,13 @@ func (s *MerchantService) GenerateAIShareReview(merchantID uint, req dto.Generat
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
+	start := time.Now()
 	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
+		_ = s.recordAIUsage(merchantID, "share_campaign_review", nil, err, time.Since(start))
 		return nil, err
 	}
-	_ = s.recordAIUsage(merchantID, "share_campaign_review", result)
+	_ = s.recordAIUsage(merchantID, "share_campaign_review", result, nil, time.Since(start))
 
 	return map[string]interface{}{
 		"review": review,
@@ -1260,16 +1361,29 @@ func (s *MerchantService) aiDailyLimit(merchant *model.Merchant) int {
 	return 10
 }
 
-func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result *AIResult) error {
-	if result == nil {
-		return nil
+func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result *AIResult, callErr error, duration time.Duration) error {
+	provider := strings.TrimSpace(s.cfg.AIProvider)
+	modelName := strings.TrimSpace(s.cfg.AIModel)
+	fallback := false
+	success := callErr == nil
+	errorText := ""
+	if result != nil {
+		provider = strings.TrimSpace(result.Provider)
+		modelName = strings.TrimSpace(result.Model)
+		fallback = result.Fallback
+	}
+	if callErr != nil {
+		errorText = trimRunes(callErr.Error(), 500)
 	}
 	log := &model.MerchantAIUsageLog{
 		MerchantID: merchantID,
 		Scenario:   strings.TrimSpace(scenario),
-		Model:      result.Model,
-		Provider:   result.Provider,
-		Fallback:   result.Fallback,
+		Model:      modelName,
+		Provider:   provider,
+		Fallback:   fallback,
+		Success:    success,
+		Error:      errorText,
+		DurationMS: int(duration.Milliseconds()),
 		UsedAt:     time.Now(),
 	}
 	return s.db.Create(log).Error
@@ -1413,6 +1527,18 @@ func firstLine(text string) string {
 		return string(runes[:90]) + "..."
 	}
 	return first
+}
+
+func trimRunes(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
 }
 
 func mustQuota(quota map[string]interface{}, err error) map[string]interface{} {

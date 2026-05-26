@@ -69,10 +69,17 @@ type BatchCardRequest struct {
 }
 
 type SaveSystemConfigRequest struct {
-	SiteName       string `json:"site_name"`
-	PaymentGateway string `json:"payment_gateway"`
-	FilingInfo     string `json:"filing_info"`
-	Notice         string `json:"notice"`
+	SiteName                 string `json:"site_name"`
+	PaymentGateway           string `json:"payment_gateway"`
+	PlatformAlipayQRCode     string `json:"platform_alipay_qr_code"`
+	PlatformWechatQRCode     string `json:"platform_wechat_qr_code"`
+	PlatformSubscriptionNote string `json:"platform_subscription_note"`
+	FilingInfo               string `json:"filing_info"`
+	Notice                   string `json:"notice"`
+}
+
+type ConfirmSubscriptionPaymentRequest struct {
+	Remark string `json:"remark"`
 }
 
 type CreateMerchantSettlementRequest struct {
@@ -81,4 +88,19 @@ type CreateMerchantSettlementRequest struct {
 
 type MarkMerchantSettlementPaidRequest struct {
 	Remark string `json:"remark"`
+}
+
+type CreateMerchantFollowUpRequest struct {
+	Type         string `json:"type" binding:"omitempty,oneof=risk settlement refund payment subscription operation"`
+	Priority     string `json:"priority" binding:"omitempty,oneof=low normal high urgent"`
+	Content      string `json:"content" binding:"required"`
+	Source       string `json:"source"`
+	SourceID     uint   `json:"source_id"`
+	OrderID      uint   `json:"order_id"`
+	OrderNo      string `json:"order_no"`
+	NextFollowAt string `json:"next_follow_at"`
+}
+
+type UpdateMerchantFollowUpStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=open closed"`
 }

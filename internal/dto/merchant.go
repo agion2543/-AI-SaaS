@@ -47,6 +47,8 @@ type CreateStoreRequest struct {
 	IsOpen        *bool  `json:"is_open"`
 	BusinessHours string `json:"business_hours"`
 	PauseReason   string `json:"pause_reason"`
+	OrderMode     string `json:"order_mode" binding:"omitempty,oneof=pay_first submit_later"`
+	AutoAccept    *bool  `json:"auto_accept"`
 }
 
 type UpdateStoreRequest struct {
@@ -57,6 +59,8 @@ type UpdateStoreRequest struct {
 	IsOpen        *bool  `json:"is_open"`
 	BusinessHours string `json:"business_hours"`
 	PauseReason   string `json:"pause_reason"`
+	OrderMode     string `json:"order_mode" binding:"omitempty,oneof=pay_first submit_later"`
+	AutoAccept    *bool  `json:"auto_accept"`
 }
 
 type SaveStoreProductRequest struct {
@@ -67,6 +71,7 @@ type SaveStoreProductRequest struct {
 	ImageURL    string `json:"image_url"`
 	Category    string `json:"category"`
 	Status      string `json:"status" binding:"omitempty,oneof=active inactive"`
+	Stock       *int   `json:"stock" binding:"omitempty,gte=0"`
 	Sort        int    `json:"sort"`
 }
 
@@ -122,6 +127,8 @@ type SaveMerchantPaymentConfigRequest struct {
 	Mode         string `json:"mode" binding:"omitempty,oneof=direct platform service_provider"`
 	AccountName  string `json:"account_name" binding:"required"`
 	AccountNo    string `json:"account_no" binding:"required"`
+	AlipayQRCode string `json:"alipay_qr_code"`
+	WechatQRCode string `json:"wechat_qr_code"`
 	AppID        string `json:"app_id"`
 	ContactPhone string `json:"contact_phone" binding:"omitempty,len=11,numeric"`
 	Remark       string `json:"remark"`

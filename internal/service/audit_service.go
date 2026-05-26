@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -15,11 +16,12 @@ type AuditService struct {
 }
 
 type AuditListFilter struct {
-	Action     string
-	ActorType  string
-	TargetType string
-	Keyword    string
-	MerchantID uint
+	Action       string
+	ActorType    string
+	TargetType   string
+	ReviewStatus string
+	Keyword      string
+	MerchantID   uint
 }
 
 type AuditRecordInput struct {
@@ -83,12 +85,15 @@ func (s *AuditService) List(filter AuditListFilter, page, pageSize int) ([]model
 	if filter.TargetType != "" {
 		query = query.Where("target_type = ?", filter.TargetType)
 	}
+	if filter.ReviewStatus != "" {
+		query = query.Where("review_status = ?", filter.ReviewStatus)
+	}
 	if filter.MerchantID > 0 {
 		query = query.Where("merchant_id = ?", filter.MerchantID)
 	}
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
-		query = query.Where("actor_name LIKE ? OR target_name LIKE ? OR action LIKE ?", like, like, like)
+		query = query.Where("actor_name LIKE ? OR target_name LIKE ? OR action LIKE ? OR detail LIKE ?", like, like, like, like)
 	}
 
 	var total int64
@@ -99,6 +104,22 @@ func (s *AuditService) List(filter AuditListFilter, page, pageSize int) ([]model
 		return nil, 0, err
 	}
 	return logs, total, nil
+}
+
+func (s *AuditService) MarkReviewed(id uint, reviewerID uint, remark string) (*model.AuditLog, error) {
+	var log model.AuditLog
+	if err := s.db.First(&log, id).Error; err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	log.ReviewStatus = "reviewed"
+	log.ReviewRemark = trimTo(strings.TrimSpace(remark), 255)
+	log.ReviewedBy = &reviewerID
+	log.ReviewedAt = &now
+	if err := s.db.Save(&log).Error; err != nil {
+		return nil, err
+	}
+	return &log, nil
 }
 
 func (s *AuditService) actorName(actorID uint, actorType string) string {

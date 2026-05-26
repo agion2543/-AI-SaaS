@@ -28,6 +28,9 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 	var customerTradeRevenue int64
 	var totalRefundAmount int64
 	var rangeRefundAmount int64
+	var pendingSettlementCount int64
+	var pendingSettlementAmount int64
+	var pendingRefundCount int64
 	var todayUsers int64
 	var rangeUsers int64
 	var rangeOrders int64
@@ -42,6 +45,9 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 	s.db.Model(&model.Order{}).Where("status IN ? AND order_type = ?", []string{"received", "accepted", "completed", "closed"}, "store_order").Select("COALESCE(SUM(total_amount),0)").Scan(&customerTradeRevenue)
 	s.db.Model(&model.RefundRecord{}).Where("status = ?", "success").Select("COALESCE(SUM(amount),0)").Scan(&totalRefundAmount)
 	s.db.Model(&model.RefundRecord{}).Where("status = ? AND created_at BETWEEN ? AND ?", "success", start, end).Select("COALESCE(SUM(amount),0)").Scan(&rangeRefundAmount)
+	s.db.Model(&model.MerchantSettlement{}).Where("status = ?", "pending").Count(&pendingSettlementCount)
+	s.db.Model(&model.MerchantSettlement{}).Where("status = ?", "pending").Select("COALESCE(SUM(net_amount_cents),0)").Scan(&pendingSettlementAmount)
+	s.db.Model(&model.RefundRecord{}).Where("created_at BETWEEN ? AND ?", start, end).Count(&pendingRefundCount)
 	s.db.Model(&model.User{}).Where("created_at BETWEEN ? AND ?", start, end).Count(&rangeUsers)
 	s.db.Model(&model.Order{}).Where("created_at BETWEEN ? AND ?", start, end).Count(&rangeOrders)
 	s.db.Model(&model.PaymentRecord{}).Where("status = ? AND created_at BETWEEN ? AND ?", "success", start, end).Select("COALESCE(SUM(amount),0)").Scan(&rangeRevenue)
@@ -156,6 +162,26 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 		Limit(8).
 		Scan(&orderPatrol)
 
+	var settlementPatrol []map[string]interface{}
+	s.db.Table("merchant_settlements").
+		Select("merchant_settlements.id, merchants.name AS merchant_name, merchant_settlements.order_count, merchant_settlements.net_amount_cents, merchant_settlements.status, merchant_settlements.created_at, merchant_settlements.paid_at").
+		Joins("LEFT JOIN merchants ON merchants.id = merchant_settlements.merchant_id").
+		Order("merchant_settlements.id desc").
+		Limit(8).
+		Scan(&settlementPatrol)
+
+	var refundPatrol []map[string]interface{}
+	s.db.Table("refund_records").
+		Select("refund_records.id, refund_records.refund_no, refund_records.amount, refund_records.reason, refund_records.status, merchants.name AS merchant_name, stores.name AS store_name, refund_records.created_at").
+		Joins("LEFT JOIN merchants ON merchants.id = refund_records.merchant_id").
+		Joins("LEFT JOIN stores ON stores.id = refund_records.store_id").
+		Order("refund_records.id desc").
+		Limit(8).
+		Scan(&refundPatrol)
+
+	var recentAuditLogs []model.AuditLog
+	s.db.Model(&model.AuditLog{}).Order("id desc").Limit(8).Find(&recentAuditLogs)
+
 	return map[string]interface{}{
 		"user_count":                    userCount,
 		"merchant_count":                merchantCount,
@@ -170,23 +196,29 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 			"start": start.Format("2006-01-02"),
 			"end":   end.Format("2006-01-02"),
 		},
-		"today_user_count":       todayUsers,
-		"range_user_count":       rangeUsers,
-		"range_order_count":      rangeOrders,
-		"range_revenue":          rangeRevenue,
-		"range_refund_amount":    rangeRefundAmount,
-		"range_net_revenue":      rangeRevenue - rangeRefundAmount,
-		"user_trend":             userTrend,
-		"revenue_trend":          revenueTrend,
-		"member_stats":           memberStats,
-		"package_revenue":        packageRevenue,
-		"merchant_ops":           merchantOps,
-		"revenue_mix":            revenueMix,
-		"merchant_revenue_trend": merchantRevenueTrend,
-		"store_order_trend":      storeOrderTrend,
-		"risk_merchants":         riskMerchants,
-		"product_patrol":         productPatrol,
-		"order_patrol":           orderPatrol,
+		"today_user_count":          todayUsers,
+		"range_user_count":          rangeUsers,
+		"range_order_count":         rangeOrders,
+		"range_revenue":             rangeRevenue,
+		"range_refund_amount":       rangeRefundAmount,
+		"range_net_revenue":         rangeRevenue - rangeRefundAmount,
+		"pending_settlement_count":  pendingSettlementCount,
+		"pending_settlement_amount": pendingSettlementAmount,
+		"range_refund_count":        pendingRefundCount,
+		"user_trend":                userTrend,
+		"revenue_trend":             revenueTrend,
+		"member_stats":              memberStats,
+		"package_revenue":           packageRevenue,
+		"merchant_ops":              merchantOps,
+		"revenue_mix":               revenueMix,
+		"merchant_revenue_trend":    merchantRevenueTrend,
+		"store_order_trend":         storeOrderTrend,
+		"risk_merchants":            riskMerchants,
+		"product_patrol":            productPatrol,
+		"order_patrol":              orderPatrol,
+		"settlement_patrol":         settlementPatrol,
+		"refund_patrol":             refundPatrol,
+		"recent_audit_logs":         recentAuditLogs,
 	}, nil
 }
 

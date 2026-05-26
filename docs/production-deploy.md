@@ -57,6 +57,8 @@ APP_URL=https://api.example.com
 FRONTEND_URL=https://example.com
 JWT_SECRET=请替换为长随机字符串
 AES_SECRET=必须替换为32位随机字符串
+INITIAL_ADMIN_USERNAME=admin
+INITIAL_ADMIN_PASSWORD=请替换为初始管理员强密码
 MYSQL_DSN=saas_user:数据库密码@tcp(mysql:3306)/saas_billing?charset=utf8mb4&parseTime=True&loc=Local
 ALIPAY_NOTIFY_URL=https://api.example.com/api/v1/payments/callback/alipay
 ALIPAY_RETURN_URL=https://example.com/payment/return
@@ -122,9 +124,16 @@ ALIPAY_RETURN_URL=https://你的前端域名/payment/return
 
 ```bash
 sql/migrations/*.sql
+migrations/*.sql
 ```
 
 生产环境建议使用专门迁移工具，后续可接入 `golang-migrate`。
+
+更完整的首次部署、升级、回滚和每日巡检流程见：
+
+```text
+docs/production-runbook.md
+```
 
 ## 7. 备份
 
@@ -145,12 +154,13 @@ docker exec saas-mysql-prod mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" saas_billi
 - `.env.production` 没有提交到 GitHub
 - `JWT_SECRET` 已替换为强随机值
 - `AES_SECRET` 是 32 位随机字符串
-- 管理员默认密码已修改
+- `INITIAL_ADMIN_PASSWORD` 已替换为强密码，且登录后台后已再次修改管理员密码
 - MySQL `3306` 未暴露到公网
 - 支付宝回调地址为公网 HTTPS
 - 已开启数据库备份
 - 已确认平台端、商家端、顾客端核心流程
 - 已确认操作审计能记录退款、开通订阅、审核收款等动作
+- 已按 `docs/production-runbook.md` 做过一次发布前演练和回滚预案确认
 
 ## 9. 当前支付建议
 
@@ -159,5 +169,8 @@ docker exec saas-mysql-prod mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" saas_billi
 - 平台订阅收入进入平台账户
 - 顾客扫码点单收入进入商家自己的支付宝/微信账户
 - 平台只做订单记录、流水记录和 SaaS 服务收费
+- 商家收款配置默认使用 `direct` 模式，`platform` 和 `service_provider` 暂作为后续规模化预留模式
 
 不建议早期使用“平台统一收款再手动分给商家”，这可能涉及资金清分、二清和对账合规风险。后期如需平台统一收款，应接入官方服务商/分账能力。
+
+上线 MVP 时建议把后台“收款策略说明”配置为：平台收 SaaS 订阅费，顾客点单款走商家自有收款账户，平台仅做订单记录、退款记录、运营巡检和人工对账。

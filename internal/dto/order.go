@@ -17,13 +17,25 @@ type CreateCustomerOrderRequest struct {
 	StoreID        uint                       `json:"store_id" binding:"required"`
 	CustomerPhone  string                     `json:"customer_phone"`
 	CustomerNote   string                     `json:"customer_note"`
+	ShareCode      string                     `json:"share_code"`
+	CouponNo       string                     `json:"coupon_no"`
 	PaymentChannel string                     `json:"payment_channel"`
 	PayMode        string                     `json:"pay_mode"`
 	Items          []CustomerOrderItemRequest `json:"items" binding:"required"`
 }
 
+type AppendCustomerOrderItemsRequest struct {
+	CustomerNote string                     `json:"customer_note"`
+	Items        []CustomerOrderItemRequest `json:"items" binding:"required"`
+}
+
 type RetryCustomerOrderPaymentRequest struct {
 	PayMode string `json:"pay_mode"`
+}
+
+type ReviewCustomerOrderRequest struct {
+	Rating int    `json:"rating" binding:"required,min=1,max=5"`
+	Review string `json:"review"`
 }
 
 type MerchantOrderFilterRequest struct {
