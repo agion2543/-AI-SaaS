@@ -78,6 +78,18 @@ type SaveSystemConfigRequest struct {
 	Notice                   string `json:"notice"`
 }
 
+type SaveAIConfigPolicyRequest struct {
+	Provider                string `json:"provider" binding:"required"`
+	BaseURL                 string `json:"base_url"`
+	Model                   string `json:"model" binding:"required"`
+	Enabled                 bool   `json:"enabled"`
+	DailyQuotaPerMerchant   int    `json:"daily_quota_per_merchant"`
+	DailyCostLimitCents     int64  `json:"daily_cost_limit_cents"`
+	FailureRateAlertPercent int    `json:"failure_rate_alert_percent"`
+	TimeoutSeconds          int    `json:"timeout_seconds"`
+	Remark                  string `json:"remark"`
+}
+
 type ConfirmSubscriptionPaymentRequest struct {
 	Remark string `json:"remark"`
 }

@@ -174,6 +174,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.POST("/audit-logs/:id/review", adminCtl.ReviewAuditLog)
 			adminLegacy.GET("/security-check", adminCtl.SecurityCheck)
 			adminLegacy.GET("/ai-config/status", adminCtl.AIConfigStatus)
+			adminLegacy.POST("/ai-config/policy", adminCtl.SaveAIConfigPolicy)
 			adminLegacy.GET("/ai-usage/overview", adminCtl.AIUsageOverview)
 			adminLegacy.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 		}
@@ -297,6 +298,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.POST("/audit-logs/:id/review", adminCtl.ReviewAuditLog)
 			adminGroup.GET("/security-check", adminCtl.SecurityCheck)
 			adminGroup.GET("/ai-config/status", adminCtl.AIConfigStatus)
+			adminGroup.POST("/ai-config/policy", adminCtl.SaveAIConfigPolicy)
 			adminGroup.GET("/ai-usage/overview", adminCtl.AIUsageOverview)
 			adminGroup.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 			adminGroup.GET("/merchants", adminCtl.Merchants)

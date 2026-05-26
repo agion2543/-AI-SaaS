@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,6 +87,18 @@ type AIProviderPreset struct {
 	Description string `json:"description"`
 }
 
+type AIConfigPolicy struct {
+	Provider                string `json:"provider"`
+	BaseURL                 string `json:"base_url"`
+	Model                   string `json:"model"`
+	Enabled                 bool   `json:"enabled"`
+	DailyQuotaPerMerchant   int    `json:"daily_quota_per_merchant"`
+	DailyCostLimitCents     int64  `json:"daily_cost_limit_cents"`
+	FailureRateAlertPercent int    `json:"failure_rate_alert_percent"`
+	TimeoutSeconds          int    `json:"timeout_seconds"`
+	Remark                  string `json:"remark"`
+}
+
 type AIConfigStatus struct {
 	Enabled        bool               `json:"enabled"`
 	Provider       string             `json:"provider"`
@@ -99,6 +112,7 @@ type AIConfigStatus struct {
 	Suggestion     string             `json:"suggestion"`
 	EnvExample     string             `json:"env_example"`
 	Presets        []AIProviderPreset `json:"presets"`
+	Policy         AIConfigPolicy     `json:"policy"`
 }
 
 type AIUsageScenarioStat struct {
@@ -1356,6 +1370,72 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 	return list, nil
 }
 
+func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest) (AIConfigPolicy, error) {
+	provider := strings.ToLower(strings.TrimSpace(req.Provider))
+	if provider == "" {
+		return AIConfigPolicy{}, errors.New("AI 供应商不能为空")
+	}
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		return AIConfigPolicy{}, errors.New("AI 模型不能为空")
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	quota := req.DailyQuotaPerMerchant
+	if quota <= 0 {
+		quota = 30
+	}
+	if quota > 5000 {
+		return AIConfigPolicy{}, errors.New("单商家日额度不能超过 5000 次")
+	}
+	alertRate := req.FailureRateAlertPercent
+	if alertRate <= 0 {
+		alertRate = 20
+	}
+	if alertRate > 100 {
+		return AIConfigPolicy{}, errors.New("失败率告警阈值不能超过 100%")
+	}
+	timeoutSeconds := req.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 20
+	}
+	if timeoutSeconds > 120 {
+		return AIConfigPolicy{}, errors.New("AI 超时时间不能超过 120 秒")
+	}
+	costLimit := req.DailyCostLimitCents
+	if costLimit < 0 {
+		return AIConfigPolicy{}, errors.New("每日成本上限不能小于 0")
+	}
+	remark := trimRunes(strings.TrimSpace(req.Remark), 300)
+
+	values := map[string]string{
+		"ai_policy_provider":                   provider,
+		"ai_policy_base_url":                   baseURL,
+		"ai_policy_model":                      modelName,
+		"ai_policy_enabled":                    strconv.FormatBool(req.Enabled),
+		"ai_policy_daily_quota_per_merchant":   strconv.Itoa(quota),
+		"ai_policy_daily_cost_limit_cents":     strconv.FormatInt(costLimit, 10),
+		"ai_policy_failure_rate_alert_percent": strconv.Itoa(alertRate),
+		"ai_policy_timeout_seconds":            strconv.Itoa(timeoutSeconds),
+		"ai_policy_remark":                     remark,
+	}
+	for key, value := range values {
+		if err := s.systems.Upsert(key, value, false); err != nil {
+			return AIConfigPolicy{}, err
+		}
+	}
+	return AIConfigPolicy{
+		Provider:                provider,
+		BaseURL:                 baseURL,
+		Model:                   modelName,
+		Enabled:                 req.Enabled,
+		DailyQuotaPerMerchant:   quota,
+		DailyCostLimitCents:     costLimit,
+		FailureRateAlertPercent: alertRate,
+		TimeoutSeconds:          timeoutSeconds,
+		Remark:                  remark,
+	}, nil
+}
+
 func (s *AdminService) SecurityCheck() SecurityCheckReport {
 	items := []SecurityCheckItem{
 		s.checkAdminPassword(),
@@ -1400,12 +1480,22 @@ func (s *AdminService) SecurityCheck() SecurityCheckReport {
 }
 
 func (s *AdminService) AIConfigStatus() AIConfigStatus {
+	policy := s.loadAIConfigPolicy()
 	provider := strings.TrimSpace(s.cfg.AIProvider)
+	if provider == "" {
+		provider = policy.Provider
+	}
 	if provider == "" {
 		provider = "template"
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(s.cfg.AIBaseURL), "/")
+	if baseURL == "" {
+		baseURL = policy.BaseURL
+	}
 	modelName := strings.TrimSpace(s.cfg.AIModel)
+	if modelName == "" {
+		modelName = policy.Model
+	}
 	hasKey := strings.TrimSpace(s.cfg.AIAPIKey) != ""
 	ready := s.cfg.AIEnabled && baseURL != "" && modelName != "" && hasKey
 	status := "warning"
@@ -1434,7 +1524,76 @@ func (s *AdminService) AIConfigStatus() AIConfigStatus {
 		Suggestion:     suggestion,
 		EnvExample:     aiEnvExample(provider, baseURL, modelName),
 		Presets:        aiProviderPresets(),
+		Policy:         policy,
 	}
+}
+
+func (s *AdminService) loadAIConfigPolicy() AIConfigPolicy {
+	policy := AIConfigPolicy{
+		Provider:                firstNonEmpty(strings.TrimSpace(s.cfg.AIProvider), "deepseek"),
+		BaseURL:                 strings.TrimRight(strings.TrimSpace(s.cfg.AIBaseURL), "/"),
+		Model:                   firstNonEmpty(strings.TrimSpace(s.cfg.AIModel), "deepseek-chat"),
+		Enabled:                 s.cfg.AIEnabled,
+		DailyQuotaPerMerchant:   30,
+		DailyCostLimitCents:     5000,
+		FailureRateAlertPercent: 20,
+		TimeoutSeconds:          s.cfg.AITimeoutSeconds,
+		Remark:                  "API Key 保存在服务器环境变量；后台只维护供应商、模型、额度和告警策略。",
+	}
+	if policy.TimeoutSeconds <= 0 {
+		policy.TimeoutSeconds = 20
+	}
+	values := s.systemConfigMap()
+	if value := strings.TrimSpace(values["ai_policy_provider"]); value != "" {
+		policy.Provider = value
+	}
+	if value := strings.TrimRight(strings.TrimSpace(values["ai_policy_base_url"]), "/"); value != "" {
+		policy.BaseURL = value
+	}
+	if value := strings.TrimSpace(values["ai_policy_model"]); value != "" {
+		policy.Model = value
+	}
+	if value := strings.TrimSpace(values["ai_policy_enabled"]); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			policy.Enabled = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_daily_quota_per_merchant"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.DailyQuotaPerMerchant = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_daily_cost_limit_cents"]); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
+			policy.DailyCostLimitCents = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_failure_rate_alert_percent"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.FailureRateAlertPercent = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_timeout_seconds"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.TimeoutSeconds = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_remark"]); value != "" {
+		policy.Remark = value
+	}
+	return policy
+}
+
+func (s *AdminService) systemConfigMap() map[string]string {
+	values := make(map[string]string)
+	list, err := s.systems.List()
+	if err != nil {
+		return values
+	}
+	for _, item := range list {
+		values[item.ConfigKey] = item.ConfigValue
+	}
+	return values
 }
 
 func (s *AdminService) AIUsageOverview() (AIUsageOverview, error) {
@@ -1850,6 +2009,15 @@ func boolToCount(value bool) int64 {
 		return 1
 	}
 	return 0
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func beginningOfDay(value time.Time) time.Time {

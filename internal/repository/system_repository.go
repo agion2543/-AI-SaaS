@@ -29,6 +29,14 @@ func (r *SystemRepository) Upsert(key, value string, encrypted bool) error {
 	}).Error
 }
 
+func (r *SystemRepository) Get(key string) (*model.SystemConfig, error) {
+	var cfg model.SystemConfig
+	if err := r.db.Where("config_key = ?", key).First(&cfg).Error; err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
 func (r *SystemRepository) List() ([]model.SystemConfig, error) {
 	var configs []model.SystemConfig
 	err := r.db.Order("id asc").Find(&configs).Error

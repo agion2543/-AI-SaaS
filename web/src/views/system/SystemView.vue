@@ -252,6 +252,60 @@
           <small v-if="!(aiUsage.top_scenarios || []).length">今日暂无场景数据</small>
         </div>
       </section>
+      <section class="ai-policy-panel">
+        <div class="ai-policy-head">
+          <div>
+            <span>AI RUNTIME POLICY</span>
+            <strong>运行策略与额度控制</strong>
+            <p>后台只保存供应商、模型、额度和告警阈值；真实 API Key 仍放服务器环境变量，避免泄露。</p>
+          </div>
+          <el-switch v-model="aiPolicyForm.enabled" active-text="计划启用" inactive-text="模板兜底" />
+        </div>
+        <el-form :model="aiPolicyForm" label-width="120px" class="ai-policy-form">
+          <div class="ai-policy-grid">
+            <el-form-item label="供应商">
+              <el-select v-model="aiPolicyForm.provider" placeholder="选择或填写供应商">
+                <el-option label="DeepSeek" value="deepseek" />
+                <el-option label="通义千问" value="qwen" />
+                <el-option label="智谱" value="zhipu" />
+                <el-option label="Kimi" value="moonshot" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="模型名">
+              <el-input v-model="aiPolicyForm.model" placeholder="例如 deepseek-chat / qwen-plus" />
+            </el-form-item>
+            <el-form-item label="Base URL">
+              <el-input v-model="aiPolicyForm.base_url" placeholder="兼容 OpenAI 协议的接口地址" />
+            </el-form-item>
+            <el-form-item label="超时时间">
+              <el-input-number v-model="aiPolicyForm.timeout_seconds" :min="5" :max="120" />
+            </el-form-item>
+            <el-form-item label="单商家日额度">
+              <el-input-number v-model="aiPolicyForm.daily_quota_per_merchant" :min="1" :max="5000" />
+            </el-form-item>
+            <el-form-item label="每日成本上限">
+              <el-input-number v-model="aiPolicyForm.daily_cost_limit_cents" :min="0" :step="1000" />
+            </el-form-item>
+            <el-form-item label="失败率告警">
+              <el-input-number v-model="aiPolicyForm.failure_rate_alert_percent" :min="1" :max="100" />
+            </el-form-item>
+            <el-form-item label="备注">
+              <el-input v-model="aiPolicyForm.remark" />
+            </el-form-item>
+          </div>
+          <div class="ai-policy-actions">
+            <el-button
+              v-for="item in aiStatus.presets || []"
+              :key="item.provider"
+              plain
+              @click="selectAIPreset(item)"
+            >
+              套用 {{ item.name }}
+            </el-button>
+            <el-button type="primary" :loading="aiSaving" @click="saveAIPolicy">保存 AI 策略</el-button>
+          </div>
+        </el-form>
+      </section>
       <div class="ai-provider-grid">
         <article v-for="item in aiStatus.presets || []" :key="item.provider">
           <span>{{ item.provider }}</span>
@@ -341,7 +395,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchAdminAIConfigStatus, fetchAdminAIUsageOverview, fetchConfigs, fetchSecurityCheck, saveConfigs, uploadPlatformPaymentQRCode } from '../../api/modules'
+import { fetchAdminAIConfigStatus, fetchAdminAIUsageOverview, fetchConfigs, fetchSecurityCheck, saveAdminAIConfigPolicy, saveConfigs, uploadPlatformPaymentQRCode } from '../../api/modules'
 import ActionCard from '../../components/design/ActionCard.vue'
 import DataPanel from '../../components/design/DataPanel.vue'
 import PageHero from '../../components/design/PageHero.vue'
@@ -355,6 +409,18 @@ const activeGuide = ref(null)
 const report = ref({ overall_status: 'warning', items: [] })
 const aiStatus = ref({})
 const aiUsage = ref({})
+const aiSaving = ref(false)
+const aiPolicyForm = reactive({
+  enabled: false,
+  provider: 'deepseek',
+  base_url: 'https://api.deepseek.com/v1',
+  model: 'deepseek-chat',
+  daily_quota_per_merchant: 30,
+  daily_cost_limit_cents: 5000,
+  failure_rate_alert_percent: 20,
+  timeout_seconds: 20,
+  remark: 'API Key 保存在服务器环境变量；后台只维护供应商、模型、额度和告警策略。'
+})
 const form = reactive({
   site_name: '本地生活商家 AI 运营 SaaS',
   payment_gateway: JSON.stringify({
@@ -551,8 +617,39 @@ const loadAIStatus = async () => {
     const [res, usageRes] = await Promise.all([fetchAdminAIConfigStatus(), fetchAdminAIUsageOverview()])
     aiStatus.value = res.data || {}
     aiUsage.value = usageRes.data || {}
+    applyAIPolicy(aiStatus.value.policy || {})
   } finally {
     aiChecking.value = false
+  }
+}
+
+const applyAIPolicy = (policy = {}) => {
+  aiPolicyForm.enabled = Boolean(policy.enabled)
+  aiPolicyForm.provider = policy.provider || aiPolicyForm.provider
+  aiPolicyForm.base_url = policy.base_url || aiPolicyForm.base_url
+  aiPolicyForm.model = policy.model || aiPolicyForm.model
+  aiPolicyForm.daily_quota_per_merchant = policy.daily_quota_per_merchant || aiPolicyForm.daily_quota_per_merchant
+  aiPolicyForm.daily_cost_limit_cents = policy.daily_cost_limit_cents ?? aiPolicyForm.daily_cost_limit_cents
+  aiPolicyForm.failure_rate_alert_percent = policy.failure_rate_alert_percent || aiPolicyForm.failure_rate_alert_percent
+  aiPolicyForm.timeout_seconds = policy.timeout_seconds || aiPolicyForm.timeout_seconds
+  aiPolicyForm.remark = policy.remark || aiPolicyForm.remark
+}
+
+const selectAIPreset = (preset) => {
+  aiPolicyForm.provider = preset.provider || aiPolicyForm.provider
+  aiPolicyForm.base_url = preset.base_url || aiPolicyForm.base_url
+  aiPolicyForm.model = preset.model || aiPolicyForm.model
+}
+
+const saveAIPolicy = async () => {
+  aiSaving.value = true
+  try {
+    const res = await saveAdminAIConfigPolicy(aiPolicyForm)
+    applyAIPolicy(res.data?.policy || aiPolicyForm)
+    await loadAIStatus()
+    ElMessage.success('AI 运行策略已保存')
+  } finally {
+    aiSaving.value = false
   }
 }
 
@@ -1177,6 +1274,62 @@ code {
   margin-top: 14px;
 }
 
+.ai-policy-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.ai-policy-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.ai-policy-head span,
+.ai-policy-head strong,
+.ai-policy-head p {
+  display: block;
+}
+
+.ai-policy-head span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-policy-head strong {
+  margin-top: 6px;
+  color: #0f2747;
+  font-size: 20px;
+}
+
+.ai-policy-head p {
+  margin: 6px 0 0;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.ai-policy-form {
+  margin-top: 14px;
+}
+
+.ai-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.ai-policy-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .ai-provider-grid code {
   display: block;
   margin-top: 10px;
@@ -1191,6 +1344,7 @@ code {
   .script-grid,
   .ai-config-center,
   .ai-usage-grid,
+  .ai-policy-grid,
   .ai-provider-grid,
   .patrol-lanes,
   .priority-list,
@@ -1217,6 +1371,7 @@ code {
   .script-grid,
   .ai-config-center,
   .ai-usage-grid,
+  .ai-policy-grid,
   .ai-provider-grid,
   .patrol-lanes,
   .priority-list {

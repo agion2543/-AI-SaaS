@@ -680,6 +680,20 @@ func (ctl *AdminController) AIConfigStatus(c *gin.Context) {
 	utils.Success(c, ctl.admin.AIConfigStatus())
 }
 
+func (ctl *AdminController) SaveAIConfigPolicy(c *gin.Context) {
+	var req dto.SaveAIConfigPolicyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	policy, err := ctl.admin.SaveAIConfigPolicy(req)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"saved": true, "policy": policy})
+}
+
 func (ctl *AdminController) AIUsageOverview(c *gin.Context) {
 	data, err := ctl.admin.AIUsageOverview()
 	if err != nil {
