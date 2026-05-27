@@ -243,6 +243,16 @@
             <strong>{{ aiUsage.average_latency_ms || 0 }}ms</strong>
             <small>用于观察供应商响应速度</small>
           </article>
+          <article :class="{ warning: aiUsage.near_limit_merchants > 0 }">
+            <span>接近额度</span>
+            <strong>{{ aiUsage.near_limit_merchants || 0 }}</strong>
+            <small>达到日额度 80% 的商家</small>
+          </article>
+          <article :class="{ warning: aiUsage.cost_alert }">
+            <span>预估成本</span>
+            <strong>{{ formatMoney(aiUsage.estimated_cost_cents || 0) }}</strong>
+            <small>上限 {{ formatMoney(aiUsage.cost_limit_cents || 0) }}</small>
+          </article>
         </div>
         <div class="ai-scenario-list">
           <span>高频场景</span>
@@ -663,6 +673,8 @@ const copyText = async (text) => {
   await navigator.clipboard.writeText(text)
   ElMessage.success('已复制')
 }
+
+const formatMoney = (cents = 0) => `¥${(Number(cents || 0) / 100).toFixed(2)}`
 
 const uploadPlatformQr = async (options, key) => {
   const file = options.file
@@ -1253,6 +1265,11 @@ code {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.ai-usage-grid article.warning {
+  border-color: #fde68a;
+  background: #fffbeb;
 }
 
 .ai-usage-grid span {

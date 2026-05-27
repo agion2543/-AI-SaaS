@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1102,12 +1103,9 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	if err != nil {
 		return nil, errors.New("商家不存在")
 	}
-	quota, err := s.AIQuota(merchantID)
+	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
 		return nil, err
-	}
-	if intValue(quota["remaining"]) <= 0 {
-		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
 	}
 	stats := s.marketingStatsSummary(merchantID)
 	goal := strings.TrimSpace(req.Goal)
@@ -1157,12 +1155,9 @@ func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.Gene
 	if err != nil {
 		return nil, errors.New("商家不存在")
 	}
-	quota, err := s.AIQuota(merchantID)
+	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
 		return nil, err
-	}
-	if intValue(quota["remaining"]) <= 0 {
-		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
 	}
 
 	shareService := NewShareService(s.db)
@@ -1251,12 +1246,9 @@ func (s *MerchantService) GenerateAIShareReview(merchantID uint, req dto.Generat
 	if err != nil {
 		return nil, errors.New("商家不存在")
 	}
-	quota, err := s.AIQuota(merchantID)
+	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
 		return nil, err
-	}
-	if intValue(quota["remaining"]) <= 0 {
-		return nil, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
 	}
 
 	params, err := parseAIShareReviewRange(req.StartDate, req.EndDate)
@@ -1309,7 +1301,8 @@ func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, erro
 	if err := s.db.Preload("MerchantPlan").First(&merchant, merchantID).Error; err != nil {
 		return nil, errors.New("商家不存在")
 	}
-	limit := s.aiDailyLimit(&merchant)
+	policy := s.aiPolicy()
+	limit := s.aiDailyLimit(&merchant, policy)
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	end := start.AddDate(0, 0, 1)
@@ -1319,46 +1312,132 @@ func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, erro
 		Count(&used).Error; err != nil {
 		return nil, err
 	}
+	var estimatedCost int64
+	if err := s.db.Model(&model.MerchantAIUsageLog{}).
+		Where("merchant_id = ? AND used_at >= ? AND used_at < ?", merchantID, start, end).
+		Select("COALESCE(SUM(estimated_cost_cents),0)").Scan(&estimatedCost).Error; err != nil {
+		return nil, err
+	}
 	remaining := limit - int(used)
 	if remaining < 0 {
 		remaining = 0
 	}
+	nearLimit := limit > 0 && used*100 >= int64(limit*80)
 	return map[string]interface{}{
-		"limit":      limit,
-		"used":       used,
-		"remaining":  remaining,
-		"reset_at":   end,
-		"plan":       merchant.SubscriptionPlan,
-		"plan_id":    merchant.SubscriptionPlanID,
-		"ai_enabled": s.cfg.AIEnabled,
-		"provider":   s.cfg.AIProvider,
-		"model":      s.cfg.AIModel,
+		"limit":                limit,
+		"used":                 used,
+		"remaining":            remaining,
+		"near_limit":           nearLimit,
+		"reset_at":             end,
+		"plan":                 merchant.SubscriptionPlan,
+		"plan_id":              merchant.SubscriptionPlanID,
+		"ai_enabled":           s.cfg.AIEnabled,
+		"policy_enabled":       policy.Enabled,
+		"provider":             firstNonEmpty(s.cfg.AIProvider, policy.Provider),
+		"model":                firstNonEmpty(s.cfg.AIModel, policy.Model),
+		"estimated_cost_cents": estimatedCost,
 	}, nil
 }
 
-func (s *MerchantService) aiDailyLimit(merchant *model.Merchant) int {
+func (s *MerchantService) ensureAIQuota(merchantID uint) (map[string]interface{}, error) {
+	quota, err := s.AIQuota(merchantID)
+	if err != nil {
+		return nil, err
+	}
+	if intValue(quota["remaining"]) <= 0 {
+		return quota, errors.New("今日 AI 生成次数已用完，请明天再试或升级订阅套餐")
+	}
+	return quota, nil
+}
+
+func (s *MerchantService) aiPolicy() AIConfigPolicy {
+	policy := AIConfigPolicy{
+		Provider:                firstNonEmpty(strings.TrimSpace(s.cfg.AIProvider), "deepseek"),
+		BaseURL:                 strings.TrimRight(strings.TrimSpace(s.cfg.AIBaseURL), "/"),
+		Model:                   firstNonEmpty(strings.TrimSpace(s.cfg.AIModel), "deepseek-chat"),
+		Enabled:                 s.cfg.AIEnabled,
+		DailyQuotaPerMerchant:   30,
+		DailyCostLimitCents:     5000,
+		FailureRateAlertPercent: 20,
+		TimeoutSeconds:          s.cfg.AITimeoutSeconds,
+	}
+	values := map[string]string{}
+	configs, err := s.systems.List()
+	if err == nil {
+		for _, item := range configs {
+			values[item.ConfigKey] = item.ConfigValue
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_provider"]); value != "" {
+		policy.Provider = value
+	}
+	if value := strings.TrimRight(strings.TrimSpace(values["ai_policy_base_url"]), "/"); value != "" {
+		policy.BaseURL = value
+	}
+	if value := strings.TrimSpace(values["ai_policy_model"]); value != "" {
+		policy.Model = value
+	}
+	if value := strings.TrimSpace(values["ai_policy_enabled"]); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			policy.Enabled = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_daily_quota_per_merchant"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.DailyQuotaPerMerchant = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_daily_cost_limit_cents"]); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
+			policy.DailyCostLimitCents = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_failure_rate_alert_percent"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.FailureRateAlertPercent = parsed
+		}
+	}
+	if value := strings.TrimSpace(values["ai_policy_timeout_seconds"]); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			policy.TimeoutSeconds = parsed
+		}
+	}
+	return policy
+}
+
+func (s *MerchantService) aiDailyLimit(merchant *model.Merchant, policy AIConfigPolicy) int {
+	baseLimit := policy.DailyQuotaPerMerchant
+	if baseLimit <= 0 {
+		baseLimit = 30
+	}
 	if merchant == nil {
-		return 5
+		return minInt(5, baseLimit)
 	}
 	if merchant.SubscriptionExpireAt == nil || merchant.SubscriptionExpireAt.Before(time.Now()) {
-		return 5
+		return minInt(5, baseLimit)
 	}
 	if merchant.MerchantPlan != nil {
 		if merchant.MerchantPlan.DurationDays >= 365 {
-			return 100
+			return maxInt(baseLimit*3, baseLimit)
 		}
 		if merchant.MerchantPlan.DurationDays >= 30 {
-			return 30
+			return baseLimit
 		}
 	}
 	plan := strings.ToLower(merchant.SubscriptionPlan)
+	if strings.Contains(plan, "year") || strings.Contains(merchant.SubscriptionPlan, "年") {
+		return maxInt(baseLimit*3, baseLimit)
+	}
+	if strings.Contains(plan, "month") || strings.Contains(merchant.SubscriptionPlan, "月") {
+		return baseLimit
+	}
 	if strings.Contains(plan, "year") || strings.Contains(plan, "年") {
-		return 100
+		return maxInt(baseLimit*3, baseLimit)
 	}
 	if strings.Contains(plan, "month") || strings.Contains(plan, "月") {
-		return 30
+		return baseLimit
 	}
-	return 10
+	return maxInt(baseLimit/2, 10)
 }
 
 func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result *AIResult, callErr error, duration time.Duration) error {
@@ -1376,15 +1455,19 @@ func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result
 		errorText = trimRunes(callErr.Error(), 500)
 	}
 	log := &model.MerchantAIUsageLog{
-		MerchantID: merchantID,
-		Scenario:   strings.TrimSpace(scenario),
-		Model:      modelName,
-		Provider:   provider,
-		Fallback:   fallback,
-		Success:    success,
-		Error:      errorText,
-		DurationMS: int(duration.Milliseconds()),
-		UsedAt:     time.Now(),
+		MerchantID:         merchantID,
+		Scenario:           strings.TrimSpace(scenario),
+		Model:              modelName,
+		Provider:           provider,
+		Fallback:           fallback,
+		Success:            success,
+		Error:              errorText,
+		DurationMS:         int(duration.Milliseconds()),
+		PromptTokens:       aiResultInt(result, "prompt"),
+		CompletionTokens:   aiResultInt(result, "completion"),
+		TotalTokens:        aiResultInt(result, "total"),
+		EstimatedCostCents: aiResultCost(result),
+		UsedAt:             time.Now(),
 	}
 	return s.db.Create(log).Error
 }
@@ -1400,6 +1483,43 @@ func intValue(value interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func aiResultInt(result *AIResult, field string) int {
+	if result == nil {
+		return 0
+	}
+	switch field {
+	case "prompt":
+		return result.PromptTokens
+	case "completion":
+		return result.CompletionTokens
+	case "total":
+		return result.TotalTokens
+	default:
+		return 0
+	}
+}
+
+func aiResultCost(result *AIResult) int64 {
+	if result == nil {
+		return 0
+	}
+	return result.EstimatedCostCents
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (s *MerchantService) bestProductName(merchantID uint) string {

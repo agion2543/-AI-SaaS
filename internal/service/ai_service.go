@@ -25,10 +25,14 @@ type AIRequest struct {
 }
 
 type AIResult struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Content  string `json:"content"`
-	Fallback bool   `json:"fallback"`
+	Provider           string `json:"provider"`
+	Model              string `json:"model"`
+	Content            string `json:"content"`
+	Fallback           bool   `json:"fallback"`
+	PromptTokens       int    `json:"prompt_tokens"`
+	CompletionTokens   int    `json:"completion_tokens"`
+	TotalTokens        int    `json:"total_tokens"`
+	EstimatedCostCents int64  `json:"estimated_cost_cents"`
 }
 
 type chatRequest struct {
@@ -45,6 +49,11 @@ type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -66,11 +75,15 @@ func (s *AIService) Generate(ctx context.Context, req AIRequest) (*AIResult, err
 		return nil, errors.New("ai service is not initialized")
 	}
 	if !s.cfg.AIEnabled || strings.TrimSpace(s.cfg.AIAPIKey) == "" || strings.TrimSpace(s.cfg.AIBaseURL) == "" {
+		content := fallbackMarketingCopy(req.UserPrompt)
 		return &AIResult{
-			Provider: s.provider(),
-			Model:    s.cfg.AIModel,
-			Content:  fallbackMarketingCopy(req.UserPrompt),
-			Fallback: true,
+			Provider:         s.provider(),
+			Model:            s.cfg.AIModel,
+			Content:          content,
+			Fallback:         true,
+			PromptTokens:     approximateTokens(req.SystemPrompt + "\n" + req.UserPrompt),
+			CompletionTokens: approximateTokens(content),
+			TotalTokens:      approximateTokens(req.SystemPrompt + "\n" + req.UserPrompt + "\n" + content),
 		}, nil
 	}
 
@@ -114,11 +127,34 @@ func (s *AIService) Generate(ctx context.Context, req AIRequest) (*AIResult, err
 	if len(decoded.Choices) == 0 || strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
 		return nil, errors.New("ai provider returned empty content")
 	}
+	content := strings.TrimSpace(decoded.Choices[0].Message.Content)
+	promptTokens := approximateTokens(req.SystemPrompt + "\n" + req.UserPrompt)
+	completionTokens := approximateTokens(content)
+	totalTokens := promptTokens + completionTokens
+	if decoded.Usage != nil {
+		if decoded.Usage.PromptTokens > 0 {
+			promptTokens = decoded.Usage.PromptTokens
+		}
+		if decoded.Usage.CompletionTokens > 0 {
+			completionTokens = decoded.Usage.CompletionTokens
+		}
+		if decoded.Usage.TotalTokens > 0 {
+			totalTokens = decoded.Usage.TotalTokens
+		} else {
+			totalTokens = promptTokens + completionTokens
+		}
+	}
+	provider := s.provider()
+	modelName := strings.TrimSpace(s.cfg.AIModel)
 	return &AIResult{
-		Provider: s.provider(),
-		Model:    s.cfg.AIModel,
-		Content:  strings.TrimSpace(decoded.Choices[0].Message.Content),
-		Fallback: false,
+		Provider:           provider,
+		Model:              modelName,
+		Content:            content,
+		Fallback:           false,
+		PromptTokens:       promptTokens,
+		CompletionTokens:   completionTokens,
+		TotalTokens:        totalTokens,
+		EstimatedCostCents: estimateAICostCents(provider, modelName, promptTokens, completionTokens),
 	}, nil
 }
 
@@ -127,6 +163,54 @@ func (s *AIService) provider() string {
 		return "template"
 	}
 	return strings.TrimSpace(s.cfg.AIProvider)
+}
+
+func approximateTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	count := len([]rune(text)) / 2
+	if count <= 0 {
+		count = 1
+	}
+	return count
+}
+
+func estimateAICostCents(provider, model string, promptTokens, completionTokens int) int64 {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.ToLower(strings.TrimSpace(model))
+	inputRateCentsPerMillion := int64(200)
+	outputRateCentsPerMillion := int64(800)
+	switch {
+	case strings.Contains(provider, "qwen") || strings.Contains(model, "qwen-plus"):
+		inputRateCentsPerMillion = 80
+		outputRateCentsPerMillion = 200
+	case strings.Contains(model, "qwen-turbo"):
+		inputRateCentsPerMillion = 30
+		outputRateCentsPerMillion = 60
+	case strings.Contains(provider, "deepseek") && strings.Contains(model, "reasoner"):
+		inputRateCentsPerMillion = 400
+		outputRateCentsPerMillion = 1600
+	case strings.Contains(provider, "deepseek"):
+		inputRateCentsPerMillion = 200
+		outputRateCentsPerMillion = 800
+	case strings.Contains(provider, "moonshot") || strings.Contains(provider, "kimi"):
+		inputRateCentsPerMillion = 300
+		outputRateCentsPerMillion = 1200
+	}
+	cost := ceilTokenCost(promptTokens, inputRateCentsPerMillion) + ceilTokenCost(completionTokens, outputRateCentsPerMillion)
+	if cost < 0 {
+		return 0
+	}
+	return cost
+}
+
+func ceilTokenCost(tokens int, rateCentsPerMillion int64) int64 {
+	if tokens <= 0 || rateCentsPerMillion <= 0 {
+		return 0
+	}
+	return (int64(tokens)*rateCentsPerMillion + 999999) / 1000000
 }
 
 func fallbackMarketingCopy(userPrompt string) string {

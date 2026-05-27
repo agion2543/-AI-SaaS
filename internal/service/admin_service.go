@@ -121,15 +121,19 @@ type AIUsageScenarioStat struct {
 }
 
 type AIUsageOverview struct {
-	TodayTotal      int64                 `json:"today_total"`
-	TodaySuccess    int64                 `json:"today_success"`
-	TodayFailed     int64                 `json:"today_failed"`
-	TodayFallback   int64                 `json:"today_fallback"`
-	ActiveMerchants int64                 `json:"active_merchants"`
-	AverageLatency  int64                 `json:"average_latency_ms"`
-	FailureRate     int64                 `json:"failure_rate"`
-	TopScenarios    []AIUsageScenarioStat `json:"top_scenarios"`
-	Suggestion      string                `json:"suggestion"`
+	TodayTotal         int64                 `json:"today_total"`
+	TodaySuccess       int64                 `json:"today_success"`
+	TodayFailed        int64                 `json:"today_failed"`
+	TodayFallback      int64                 `json:"today_fallback"`
+	ActiveMerchants    int64                 `json:"active_merchants"`
+	AverageLatency     int64                 `json:"average_latency_ms"`
+	FailureRate        int64                 `json:"failure_rate"`
+	NearLimitMerchants int64                 `json:"near_limit_merchants"`
+	EstimatedCostCents int64                 `json:"estimated_cost_cents"`
+	CostLimitCents     int64                 `json:"cost_limit_cents"`
+	CostAlert          bool                  `json:"cost_alert"`
+	TopScenarios       []AIUsageScenarioStat `json:"top_scenarios"`
+	Suggestion         string                `json:"suggestion"`
 }
 
 type MerchantListRow struct {
@@ -1635,6 +1639,30 @@ func (s *AdminService) AIUsageOverview() (AIUsageOverview, error) {
 		Scan(&scenarios).Error; err != nil {
 		return AIUsageOverview{}, err
 	}
+	var estimatedCost int64
+	if err := base.Select("COALESCE(SUM(estimated_cost_cents),0)").Scan(&estimatedCost).Error; err != nil {
+		return AIUsageOverview{}, err
+	}
+	policy := s.loadAIConfigPolicy()
+	var usageRows []struct {
+		MerchantID uint
+		Count      int64
+	}
+	if err := base.Select("merchant_id, COUNT(*) AS count").
+		Group("merchant_id").
+		Scan(&usageRows).Error; err != nil {
+		return AIUsageOverview{}, err
+	}
+	nearLimitMerchants := int64(0)
+	baseLimit := policy.DailyQuotaPerMerchant
+	if baseLimit <= 0 {
+		baseLimit = 30
+	}
+	for _, row := range usageRows {
+		if row.Count*100 >= int64(baseLimit*80) {
+			nearLimitMerchants++
+		}
+	}
 	failureRate := int64(0)
 	if total > 0 {
 		failureRate = failed * 100 / total
@@ -1644,15 +1672,19 @@ func (s *AdminService) AIUsageOverview() (AIUsageOverview, error) {
 		latency = int64(*avgLatency.Value)
 	}
 	return AIUsageOverview{
-		TodayTotal:      total,
-		TodaySuccess:    success,
-		TodayFailed:     failed,
-		TodayFallback:   fallback,
-		ActiveMerchants: activeMerchants,
-		AverageLatency:  latency,
-		FailureRate:     failureRate,
-		TopScenarios:    scenarios,
-		Suggestion:      aiUsageSuggestion(total, failed, fallback),
+		TodayTotal:         total,
+		TodaySuccess:       success,
+		TodayFailed:        failed,
+		TodayFallback:      fallback,
+		ActiveMerchants:    activeMerchants,
+		AverageLatency:     latency,
+		FailureRate:        failureRate,
+		NearLimitMerchants: nearLimitMerchants,
+		EstimatedCostCents: estimatedCost,
+		CostLimitCents:     policy.DailyCostLimitCents,
+		CostAlert:          policy.DailyCostLimitCents > 0 && estimatedCost >= policy.DailyCostLimitCents,
+		TopScenarios:       scenarios,
+		Suggestion:         aiUsageSuggestion(total, failed, fallback, nearLimitMerchants, estimatedCost, policy.DailyCostLimitCents),
 	}, nil
 }
 
@@ -1663,6 +1695,7 @@ func (s *AdminService) operationHealthSections() []OperationHealthBlock {
 		s.settlementHealthBlock(),
 		s.merchantOpsHealthBlock(),
 		s.productReadinessHealthBlock(),
+		s.aiUsageHealthBlock(),
 		s.deploymentReadinessHealthBlock(),
 	}
 }
@@ -1781,6 +1814,44 @@ func (s *AdminService) productReadinessHealthBlock() OperationHealthBlock {
 			healthMetric("上架商品", activeProducts, "顾客端可见商品", dangerIfZero(activeProducts)),
 			healthMetric("无图商品", noImageProducts, "影响顾客端转化", warningIfPositive(noImageProducts)),
 			healthMetric("售罄商品", soldOutProducts, "库存为 0 的上架商品", warningIfPositive(soldOutProducts)),
+		},
+	}
+}
+
+func (s *AdminService) aiUsageHealthBlock() OperationHealthBlock {
+	overview, err := s.AIUsageOverview()
+	if err != nil {
+		return OperationHealthBlock{
+			Key:        "ai_usage",
+			Title:      "AI 调用与成本风险",
+			Status:     "warning",
+			Summary:    "AI 调用统计读取失败。",
+			Suggestion: "检查 merchant_ai_usage_logs 表结构和迁移脚本是否已执行。",
+			ActionText: "查看 AI 配置",
+			ActionPath: "/admin/system",
+		}
+	}
+	policy := s.loadAIConfigPolicy()
+	status := "pass"
+	warningCount := overview.NearLimitMerchants + overview.TodayFailed
+	if policy.DailyCostLimitCents > 0 && overview.EstimatedCostCents >= policy.DailyCostLimitCents {
+		status = "danger"
+	} else if warningCount > 0 || overview.FailureRate >= int64(policy.FailureRateAlertPercent) {
+		status = "warning"
+	}
+	return OperationHealthBlock{
+		Key:        "ai_usage",
+		Title:      "AI 调用与成本风险",
+		Status:     status,
+		Summary:    fmt.Sprintf("今日调用 %d 次，失败 %d 次，接近额度商家 %d 个，预估成本 ¥%.2f。", overview.TodayTotal, overview.TodayFailed, overview.NearLimitMerchants, float64(overview.EstimatedCostCents)/100),
+		Suggestion: "优先处理失败率、接近额度和成本异常；真实接入 API 后建议按套餐限制高频生成和长文本输出。",
+		ActionText: "查看 AI 配置",
+		ActionPath: "/admin/system",
+		Metrics: []OperationHealthMetric{
+			healthMetric("今日调用", overview.TodayTotal, "平台商家端 AI 总调用次数", "pass"),
+			healthMetric("调用失败", overview.TodayFailed, "供应商、Key、网络或超时异常", warningIfPositive(overview.TodayFailed)),
+			healthMetric("接近额度", overview.NearLimitMerchants, "商家今日用量达到额度 80%", warningIfPositive(overview.NearLimitMerchants)),
+			healthMetric("成本分", overview.EstimatedCostCents, "按 token 粗略折算，单位为分", warningIf(policy.DailyCostLimitCents > 0 && overview.EstimatedCostCents >= policy.DailyCostLimitCents)),
 		},
 	}
 }
@@ -2090,9 +2161,15 @@ func aiEnvExample(provider, baseURL, modelName string) string {
 	return fmt.Sprintf("AI_ENABLED=true\nAI_PROVIDER=%s\nAI_BASE_URL=%s\nAI_API_KEY=replace-with-ai-api-key\nAI_MODEL=%s\nAI_TIMEOUT_SECONDS=20", provider, baseURL, modelName)
 }
 
-func aiUsageSuggestion(total, failed, fallback int64) string {
+func aiUsageSuggestion(total, failed, fallback, nearLimitMerchants, estimatedCost, costLimit int64) string {
 	if total == 0 {
 		return "今日暂无 AI 调用，接入真实模型后建议先观察经营建议、菜单优化和裂变文案三个高频场景。"
+	}
+	if costLimit > 0 && estimatedCost >= costLimit {
+		return "今日 AI 预估成本已达到后台设置上限，建议暂停高频生成、降低长文本输出或切换更低成本模型。"
+	}
+	if nearLimitMerchants > 0 {
+		return "今日已有商家接近 AI 调用额度，建议关注是否需要升级套餐或临时调整额度。"
 	}
 	if failed > 0 {
 		return "今日存在 AI 调用失败，建议检查供应商额度、Key、网络和超时设置。"
