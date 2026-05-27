@@ -447,7 +447,12 @@ const quotaHint = computed(() => {
   if (quotaStatus.value === 'warning') return `已使用 ${aiQuota.value.used ?? 0} 次，接近今日额度，建议优先生成最需要落地的内容。`
   return `已使用 ${aiQuota.value.used ?? 0} 次，当前套餐今日额度正常。`
 })
-const structuredOutput = computed(() => buildStructuredOutput(aiResult.value.content || '', copyForm.scenario))
+const structuredOutput = computed(() => {
+  if (Array.isArray(aiResult.value.structured) && aiResult.value.structured.length) {
+    return aiResult.value.structured
+  }
+  return buildStructuredOutput(aiResult.value.content || '', copyForm.scenario)
+})
 const aiModules = computed(() => [
   { key: 'review', label: '经营复盘', title: '今日复盘建议', desc: '总结订单、退款、客单价和明日动作', scenario: 'daily_report' },
   { key: 'campaign', label: '营销文案', title: '活动方案生成', desc: '输出朋友圈、社群、到店转化文案', scenario: 'campaign' },

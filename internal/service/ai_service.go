@@ -25,14 +25,24 @@ type AIRequest struct {
 }
 
 type AIResult struct {
-	Provider           string `json:"provider"`
-	Model              string `json:"model"`
-	Content            string `json:"content"`
-	Fallback           bool   `json:"fallback"`
-	PromptTokens       int    `json:"prompt_tokens"`
-	CompletionTokens   int    `json:"completion_tokens"`
-	TotalTokens        int    `json:"total_tokens"`
-	EstimatedCostCents int64  `json:"estimated_cost_cents"`
+	Provider           string            `json:"provider"`
+	Model              string            `json:"model"`
+	Content            string            `json:"content"`
+	Structured         []AIOutputSection `json:"structured,omitempty"`
+	Fallback           bool              `json:"fallback"`
+	PromptTokens       int               `json:"prompt_tokens"`
+	CompletionTokens   int               `json:"completion_tokens"`
+	TotalTokens        int               `json:"total_tokens"`
+	EstimatedCostCents int64             `json:"estimated_cost_cents"`
+}
+
+type AIOutputSection struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Title  string `json:"title"`
+	Text   string `json:"text"`
+	Copy   string `json:"copy"`
+	Action string `json:"action"`
 }
 
 type chatRequest struct {

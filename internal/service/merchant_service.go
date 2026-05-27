@@ -1121,7 +1121,7 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 		scenario = "裂变海报"
 	}
 
-	systemPrompt := "你是本地生活商家AI运营顾问，擅长餐饮、零售、服务业的低成本获客、复购和裂变活动。请输出中文，内容必须可直接用于商家后台。"
+	systemPrompt := "你是本地生活商家 AI 经营顾问，擅长餐饮、零售、服务业的低成本获客、复购和裂变活动。请输出中文，内容必须克制、真实、可直接落地。优先返回 JSON，格式为：{\"title\":\"活动标题\",\"social_copy\":\"朋友圈或社群文案\",\"coupon_suggestion\":\"优惠建议\",\"steps\":[\"步骤1\",\"步骤2\",\"步骤3\"],\"risk_notes\":\"风险与成本提醒\"}。如果不能返回 JSON，也必须按活动标题、传播文案、优惠建议、执行步骤、风险提醒分段输出。"
 	userPrompt := fmt.Sprintf(`商家名称：%s
 使用场景：%s
 目标人群：%s
@@ -1146,6 +1146,7 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 		_ = s.recordAIUsage(merchantID, scenario, nil, err, time.Since(start))
 		return nil, err
 	}
+	result.Structured = buildAIMarketingStructuredSections(result.Content, scenario)
 	_ = s.recordAIUsage(merchantID, scenario, result, nil, time.Since(start))
 	return result, nil
 }
@@ -1531,6 +1532,175 @@ func (s *MerchantService) bestProductName(merchantID uint) string {
 		return strings.TrimSpace(product.Name)
 	}
 	return ""
+}
+
+func buildAIMarketingStructuredSections(content, scenario string) []AIOutputSection {
+	if sections := parseStructuredAIJSON(content, scenario); len(sections) > 0 {
+		return sections
+	}
+	return parseStructuredAIText(content, scenario)
+}
+
+func parseStructuredAIJSON(content, scenario string) []AIOutputSection {
+	raw := strings.TrimSpace(content)
+	if raw == "" {
+		return nil
+	}
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		raw = raw[start : end+1]
+	}
+	var data struct {
+		Title            string   `json:"title"`
+		SocialCopy       string   `json:"social_copy"`
+		CouponSuggestion string   `json:"coupon_suggestion"`
+		Steps            []string `json:"steps"`
+		RiskNotes        string   `json:"risk_notes"`
+		ProductAdvice    string   `json:"product_advice"`
+	}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return nil
+	}
+	sections := []AIOutputSection{}
+	if text := strings.TrimSpace(data.Title); text != "" {
+		sections = append(sections, aiSection("title", "活动标题", text, text, text, structuredActionForScenario("title", scenario)))
+	}
+	if text := strings.TrimSpace(data.SocialCopy); text != "" {
+		sections = append(sections, aiSection("social_copy", "传播文案", "可直接发布的文案", text, text, "share"))
+	}
+	if text := strings.TrimSpace(data.CouponSuggestion); text != "" {
+		sections = append(sections, aiSection("coupon", "优惠建议", "券与活动机制", text, text, "promotion"))
+	}
+	if len(data.Steps) > 0 {
+		text := strings.Join(data.Steps, "\n")
+		sections = append(sections, aiSection("steps", "执行步骤", "下一步动作", text, text, structuredActionForScenario("steps", scenario)))
+	}
+	if text := strings.TrimSpace(data.ProductAdvice); text != "" {
+		sections = append(sections, aiSection("product", "商品优化", "商品/菜单建议", text, text, "product"))
+	}
+	if text := strings.TrimSpace(data.RiskNotes); text != "" {
+		sections = append(sections, aiSection("risk", "风险提醒", "成本与执行提醒", text, text, "none"))
+	}
+	return sections
+}
+
+func parseStructuredAIText(content, scenario string) []AIOutputSection {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil
+	}
+	rules := []struct {
+		Key    string
+		Label  string
+		Title  string
+		Action string
+		Names  []string
+	}{
+		{"title", "活动标题", "活动标题", structuredActionForScenario("title", scenario), []string{"活动标题", "标题"}},
+		{"social_copy", "传播文案", "可直接发布的文案", "share", []string{"传播文案", "海报主文案", "朋友圈", "社群", "顾客分享话术"}},
+		{"coupon", "优惠建议", "券与活动机制", "promotion", []string{"优惠", "奖励", "券", "机制"}},
+		{"steps", "执行步骤", "下一步动作", structuredActionForScenario("steps", scenario), []string{"执行步骤", "步骤", "下一步", "动作"}},
+		{"risk", "风险提醒", "成本与执行提醒", "none", []string{"风险", "成本", "提醒"}},
+	}
+	sections := []AIOutputSection{}
+	for _, rule := range rules {
+		if value := extractAISectionText(text, rule.Names); value != "" {
+			sections = append(sections, aiSection(rule.Key, rule.Label, rule.Title, value, value, rule.Action))
+		}
+	}
+	if len(sections) > 0 {
+		return sections
+	}
+	chunks := strings.Split(text, "\n\n")
+	for idx, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		label := []string{"活动建议", "传播文案", "优惠建议", "执行步骤", "风险提醒"}[minInt(idx, 4)]
+		action := structuredActionForScenario(label, scenario)
+		sections = append(sections, aiSection(fmt.Sprintf("fallback_%d", idx), label, label, chunk, chunk, action))
+		if len(sections) >= 5 {
+			break
+		}
+	}
+	return sections
+}
+
+func extractAISectionText(content string, names []string) string {
+	lines := strings.Split(content, "\n")
+	capturing := false
+	parts := []string{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		isHeading := false
+		for _, name := range names {
+			if strings.Contains(trimmed, name) && len([]rune(trimmed)) <= 28 {
+				isHeading = true
+				capturing = true
+				if idx := strings.IndexAny(trimmed, ":："); idx >= 0 && idx+1 < len(trimmed) {
+					parts = append(parts, strings.TrimSpace(trimmed[idx+1:]))
+				}
+				break
+			}
+		}
+		if isHeading {
+			continue
+		}
+		if capturing && looksLikeAIHeading(trimmed) {
+			break
+		}
+		if capturing {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func looksLikeAIHeading(value string) bool {
+	if len([]rune(value)) > 28 {
+		return false
+	}
+	keywords := []string{"活动标题", "传播文案", "海报", "朋友圈", "社群", "优惠", "奖励", "执行步骤", "下一步", "风险", "成本", "提醒"}
+	for _, keyword := range keywords {
+		if strings.Contains(value, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func aiSection(key, label, title, text, copyText, action string) AIOutputSection {
+	return AIOutputSection{
+		Key:    key,
+		Label:  label,
+		Title:  strings.TrimSpace(title),
+		Text:   strings.TrimSpace(text),
+		Copy:   strings.TrimSpace(copyText),
+		Action: action,
+	}
+}
+
+func structuredActionForScenario(name, scenario string) string {
+	lower := strings.ToLower(strings.TrimSpace(scenario + " " + name))
+	if strings.Contains(lower, "product") || strings.Contains(scenario, "商品") || strings.Contains(scenario, "菜单") {
+		return "product"
+	}
+	if strings.Contains(lower, "social") || strings.Contains(lower, "share") || strings.Contains(lower, "poster") || strings.Contains(scenario, "裂变") {
+		return "share"
+	}
+	if strings.Contains(name, "risk") || strings.Contains(name, "风险") {
+		return "none"
+	}
+	return "promotion"
 }
 
 func buildReferralCopyVariants(merchantName, productName string, config *model.ShareActivityConfig, stats *ShareStats, raw string) []map[string]string {
