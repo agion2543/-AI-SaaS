@@ -10,16 +10,31 @@
         </p>
         <div class="cockpit-actions">
           <el-button class="ghost-button" @click="load">刷新分析</el-button>
-          <el-button type="primary" :loading="copyLoading" @click="generateMarketingCopy('referral_poster')">生成裂变方案</el-button>
-          <el-button type="success" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
+          <el-button type="primary" :disabled="!canUseAI" :loading="copyLoading" @click="generateMarketingCopy('referral_poster')">生成裂变方案</el-button>
+          <el-button type="success" :disabled="!canUseAI" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
         </div>
       </div>
 
-      <div class="quota-orb">
+      <div class="quota-orb" :class="quotaStatus">
         <span>今日 AI 可用额度</span>
         <strong>{{ aiQuota.remaining ?? 0 }}</strong>
         <small>/ {{ aiQuota.limit ?? 0 }} 次</small>
-        <p>已使用 {{ aiQuota.used ?? 0 }} 次，套餐越高额度越多。</p>
+        <div class="quota-progress"><i :style="{ width: quotaPercent + '%' }"></i></div>
+        <p>{{ quotaHint }}</p>
+        <el-button v-if="!canUseAI" type="primary" plain @click="router.push('/merchant/subscription')">查看订阅额度</el-button>
+      </div>
+    </section>
+
+    <section v-if="aiError.visible" class="ai-error-card">
+      <div>
+        <span>{{ aiError.title }}</span>
+        <strong>{{ aiError.message }}</strong>
+        <p>{{ aiError.suggestion }}</p>
+      </div>
+      <div class="ai-error-actions">
+        <el-button v-if="!canUseAI" type="primary" @click="router.push('/merchant/subscription')">升级/续费套餐</el-button>
+        <el-button plain @click="load">刷新额度</el-button>
+        <el-button text @click="aiError.visible = false">知道了</el-button>
       </div>
     </section>
 
@@ -43,7 +58,7 @@
         <strong>{{ scenarioContext.title }}</strong>
         <p>{{ scenarioContext.desc }}</p>
       </div>
-      <el-button type="primary" :loading="scenarioContext.loading" @click="runCurrentScenario">
+        <el-button type="primary" :disabled="!canUseAI" :loading="scenarioContext.loading" @click="runCurrentScenario">
         {{ scenarioContext.button }}
       </el-button>
     </section>
@@ -117,7 +132,7 @@
                 <strong>{{ item.title }}</strong>
                 <p>{{ item.desc }}</p>
               </div>
-              <el-button size="small" type="primary" text :loading="item.loading" @click="item.action">{{ item.button }}</el-button>
+              <el-button size="small" type="primary" text :disabled="!canUseAI" :loading="item.loading" @click="item.action">{{ item.button }}</el-button>
             </div>
           </div>
         </div>
@@ -188,7 +203,7 @@
               <el-input v-model="copyForm.goal" type="textarea" :rows="3" />
             </el-form-item>
             <div class="form-actions">
-              <el-button type="primary" :loading="copyLoading" @click="generateMarketingCopy()">生成 AI 方案</el-button>
+              <el-button type="primary" :disabled="!canUseAI" :loading="copyLoading" @click="generateMarketingCopy()">生成 AI 方案</el-button>
               <el-button :loading="generating" @click="generateDraft()">生成活动草稿</el-button>
             </div>
           </el-form>
@@ -201,6 +216,11 @@
               <h2>生成结果</h2>
             </div>
             <el-tag v-if="aiResult.provider">{{ aiResult.fallback ? '模板兜底' : aiResult.provider }}</el-tag>
+          </div>
+          <div v-if="aiResult.content" class="output-meta">
+            <span>模型：{{ aiResult.model || aiQuota.model || '-' }}</span>
+            <span>Token：{{ aiResult.total_tokens || 0 }}</span>
+            <span>预估成本：{{ formatCost(aiResult.estimated_cost_cents) }}</span>
           </div>
           <div v-if="aiResult.content" class="copy-box">
             <pre>{{ aiResult.content }}</pre>
@@ -255,7 +275,7 @@
           <el-form-item label="核心卖点">
             <el-input v-model="videoForm.selling_points" type="textarea" :rows="3" />
           </el-form-item>
-          <el-button type="primary" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
+          <el-button type="primary" :disabled="!canUseAI" :loading="videoLoading" @click="generateVideoScript">生成短视频脚本</el-button>
         </el-form>
       </div>
 
@@ -267,6 +287,11 @@
           </div>
         </div>
         <div v-if="videoResult.content" class="copy-box">
+          <div class="output-meta dark">
+            <span>模型：{{ videoResult.model || aiQuota.model || '-' }}</span>
+            <span>Token：{{ videoResult.total_tokens || 0 }}</span>
+            <span>预估成本：{{ formatCost(videoResult.estimated_cost_cents) }}</span>
+          </div>
           <pre>{{ videoResult.content }}</pre>
           <div class="inline-actions">
             <el-button type="primary" @click="copyText(videoResult.content)">复制脚本</el-button>
@@ -324,6 +349,12 @@ const videoLoading = ref(false)
 const aiResult = ref({})
 const videoResult = ref({})
 const activeModule = ref('review')
+const aiError = reactive({
+  visible: false,
+  title: 'AI 生成未完成',
+  message: '',
+  suggestion: ''
+})
 
 const copyForm = reactive({
   scenario: 'referral_poster',
@@ -386,6 +417,23 @@ const scenarioPresets = {
 }
 
 const hotProducts = computed(() => insights.value.hot_products || insights.value.top_products || [])
+const canUseAI = computed(() => Number(aiQuota.value.remaining ?? 0) > 0)
+const quotaPercent = computed(() => {
+  const limit = Number(aiQuota.value.limit || 0)
+  const used = Number(aiQuota.value.used || 0)
+  if (!limit) return 0
+  return Math.min(100, Math.round((used / limit) * 100))
+})
+const quotaStatus = computed(() => {
+  if (!canUseAI.value) return 'exhausted'
+  if (aiQuota.value.near_limit || quotaPercent.value >= 80) return 'warning'
+  return 'normal'
+})
+const quotaHint = computed(() => {
+  if (!canUseAI.value) return '今日 AI 额度已用完，可明天继续使用，或升级/续费获得更高额度。'
+  if (quotaStatus.value === 'warning') return `已使用 ${aiQuota.value.used ?? 0} 次，接近今日额度，建议优先生成最需要落地的内容。`
+  return `已使用 ${aiQuota.value.used ?? 0} 次，当前套餐今日额度正常。`
+})
 const aiModules = computed(() => [
   { key: 'review', label: '经营复盘', title: '今日复盘建议', desc: '总结订单、退款、客单价和明日动作', scenario: 'daily_report' },
   { key: 'campaign', label: '营销文案', title: '活动方案生成', desc: '输出朋友圈、社群、到店转化文案', scenario: 'campaign' },
@@ -497,6 +545,7 @@ const todayActions = computed(() => [
 ])
 
 const formatYuan = (value) => (Number(value || 0) / 100).toFixed(2)
+const formatCost = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const scenarioTitle = (scenario) => ({
   referral_poster: 'AI裂变引流活动',
   new_customer: 'AI新客到店活动',
@@ -527,6 +576,7 @@ async function load() {
   insights.value = insightRes.data || {}
   shareStats.value = shareRes.data || {}
   aiQuota.value = quotaRes.data || {}
+  if (canUseAI.value) aiError.visible = false
 }
 
 async function generateDraft() {
@@ -567,21 +617,30 @@ async function createPromotionFromAI() {
 }
 
 async function generateMarketingCopy(scenario) {
+  if (!canUseAI.value) {
+    showQuotaError()
+    return
+  }
   if (scenario) copyForm.scenario = scenario
   copyLoading.value = true
   try {
     const res = await generateMerchantAIMarketingCopy(copyForm)
     aiResult.value = res.data?.result || res.data || {}
     if (res.data?.quota) aiQuota.value = res.data.quota
+    aiError.visible = false
     ElMessage.success('AI 营销方案已生成')
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || 'AI 今日额度可能已用完，请稍后再试')
+    await handleAIError(error)
   } finally {
     copyLoading.value = false
   }
 }
 
 async function generateVideoScript() {
+  if (!canUseAI.value) {
+    showQuotaError()
+    return
+  }
   videoLoading.value = true
   try {
     const res = await generateMerchantAIMarketingCopy({
@@ -592,12 +651,36 @@ async function generateVideoScript() {
     })
     videoResult.value = res.data?.result || res.data || {}
     if (res.data?.quota) aiQuota.value = res.data.quota
+    aiError.visible = false
     ElMessage.success('短视频脚本已生成')
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || 'AI 生成失败，请稍后再试')
+    await handleAIError(error)
   } finally {
     videoLoading.value = false
   }
+}
+
+function showQuotaError() {
+  aiError.visible = true
+  aiError.title = 'AI 额度已用完'
+  aiError.message = '今日 AI 生成次数已经用完。'
+  aiError.suggestion = '可以先复制已有结果继续执行，或到订阅页升级/续费，明天额度会自动恢复。'
+  ElMessage.warning(aiError.message)
+}
+
+async function handleAIError(error) {
+  const message = error?.response?.data?.message || 'AI 生成失败，请稍后再试'
+  aiError.visible = true
+  aiError.title = message.includes('额度') || message.includes('次数') ? 'AI 额度不足' : 'AI 暂时不可用'
+  aiError.message = message
+  aiError.suggestion = message.includes('额度') || message.includes('次数')
+    ? '优先使用已有生成结果；如果需要继续生成，可升级套餐或等待次日额度恢复。'
+    : '系统已保留页面内容，可稍后重试；如果连续失败，请联系平台检查模型 Key、额度和网络。'
+  try {
+    const quotaRes = await fetchMerchantAIQuota()
+    aiQuota.value = quotaRes.data || aiQuota.value
+  } catch (_) {}
+  ElMessage.error(message)
 }
 
 async function runCurrentScenario() {
@@ -866,6 +949,80 @@ watch(() => route.query.scenario, (scenario) => {
 .quota-orb p {
   margin: 12px 0 0;
   color: #64748b;
+}
+
+.quota-orb.warning {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+}
+
+.quota-orb.exhausted {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+}
+
+.quota-progress {
+  height: 8px;
+  margin-top: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.quota-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+}
+
+.quota-orb.warning .quota-progress i {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+}
+
+.quota-orb.exhausted .quota-progress i {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.ai-error-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7ed;
+}
+
+.ai-error-card span,
+.ai-error-card strong,
+.ai-error-card p {
+  display: block;
+}
+
+.ai-error-card span {
+  color: #ea580c;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-error-card strong {
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.ai-error-card p {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+.ai-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
 }
 
 .metric-grid {
@@ -1144,6 +1301,33 @@ watch(() => route.query.scenario, (scenario) => {
   min-height: 360px;
 }
 
+.output-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -6px 0 14px;
+}
+
+.output-meta span {
+  padding: 5px 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  color: #2563eb;
+  background: #eff6ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.output-meta.dark {
+  margin: 0 0 12px;
+}
+
+.output-meta.dark span {
+  color: #dbeafe;
+  border-color: rgba(219, 234, 254, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .copy-box {
   min-height: 260px;
   border-radius: 22px;
@@ -1256,6 +1440,11 @@ watch(() => route.query.scenario, (scenario) => {
 
   .action-card {
     grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .ai-error-card {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
