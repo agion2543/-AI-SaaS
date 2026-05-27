@@ -170,23 +170,24 @@
         <div class="panel-card generator-card">
           <div class="section-head">
             <div>
-              <div class="eyebrow dark">AI CAMPAIGN STUDIO</div>
-              <h2>AI 营销方案生成器</h2>
-              <p>生成裂变海报、召回券、朋友圈和门店推广话术。</p>
+              <div class="eyebrow dark">{{ studioConfig.eyebrow }}</div>
+              <h2>{{ studioConfig.title }}</h2>
+              <p>{{ studioConfig.description }}</p>
             </div>
           </div>
           <el-form label-position="top" class="studio-form">
             <div class="form-row">
-              <el-form-item label="使用场景">
+              <el-form-item :label="studioConfig.scenarioLabel">
                 <el-select v-model="copyForm.scenario">
-                  <el-option label="裂变海报" value="referral_poster" />
-                  <el-option label="新客引流" value="new_customer" />
-                  <el-option label="沉睡顾客召回" value="dormant_recall" />
-                  <el-option label="高价值顾客专属活动" value="vip_campaign" />
-                  <el-option label="朋友圈短文案" value="social_post" />
+                  <el-option
+                    v-for="option in studioConfig.scenarioOptions"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
                 </el-select>
               </el-form-item>
-              <el-form-item label="目标人群">
+              <el-form-item :label="studioConfig.audienceLabel">
                 <el-select v-model="copyForm.customer_tag">
                   <el-option label="新顾客" value="new_customer" />
                   <el-option label="复购顾客" value="repeat_customer" />
@@ -196,15 +197,15 @@
                 </el-select>
               </el-form-item>
             </div>
-            <el-form-item label="主推商品 / 服务">
-              <el-input v-model="copyForm.product_name" placeholder="例如：招牌烤串、双人套餐、到店服务" />
+            <el-form-item :label="studioConfig.subjectLabel">
+              <el-input v-model="copyForm.product_name" :placeholder="studioConfig.subjectPlaceholder" />
             </el-form-item>
-            <el-form-item label="营销目标">
+            <el-form-item :label="studioConfig.goalLabel">
               <el-input v-model="copyForm.goal" type="textarea" :rows="3" />
             </el-form-item>
             <div class="form-actions">
-              <el-button type="primary" :disabled="!canUseAI" :loading="copyLoading" @click="generateMarketingCopy()">生成 AI 方案</el-button>
-              <el-button :loading="generating" @click="generateDraft()">生成活动草稿</el-button>
+              <el-button type="primary" :disabled="!canUseAI" :loading="copyLoading" @click="generateMarketingCopy()">{{ studioConfig.primaryAction }}</el-button>
+              <el-button v-if="studioConfig.showDraftButton" :loading="generating" @click="generateDraft()">生成活动草稿</el-button>
             </div>
           </el-form>
         </div>
@@ -235,17 +236,19 @@
               </div>
             </article>
           </div>
-          <div v-if="aiResult.content" class="copy-box">
+          <div v-if="aiResult.content" class="copy-box" :class="{ compact: studioConfig.resultCompact }">
             <pre>{{ aiResult.content }}</pre>
             <div class="inline-actions">
-              <el-button type="primary" @click="copyText(aiResult.content)">复制文案</el-button>
-              <el-button type="success" :loading="generating" @click="createPromotionFromAI">一键生成活动草稿</el-button>
-              <el-button plain @click="prefillPromotionFromStructured()">填入活动表单</el-button>
+              <el-button type="primary" @click="copyText(aiResult.content)">{{ studioConfig.copyAction }}</el-button>
+              <el-button v-if="studioConfig.showPromotionActions" type="success" :loading="generating" @click="createPromotionFromAI">一键生成活动草稿</el-button>
+              <el-button v-if="studioConfig.showPromotionActions" plain @click="prefillPromotionFromStructured()">填入活动表单</el-button>
+              <el-button v-if="studioConfig.showProductActions" plain @click="prefillProductFromStructured()">填入商品表单</el-button>
+              <el-button v-if="studioConfig.showShareActions" plain @click="prefillShareFromStructured()">填入海报设置</el-button>
               <el-button v-if="route.query.promotion_id" type="warning" plain @click="backToPromotionEdit">
                 按建议调整活动
               </el-button>
-              <el-button @click="copySocialPack(aiResult.content)">复制朋友圈素材</el-button>
-              <el-button @click="router.push('/merchant/coupons')">查看券包核销</el-button>
+              <el-button v-if="studioConfig.showSocialPack" @click="copySocialPack(aiResult.content)">复制朋友圈素材</el-button>
+              <el-button v-if="studioConfig.showCouponLink" @click="router.push('/merchant/coupons')">查看券包核销</el-button>
             </div>
           </div>
           <div v-else class="empty-result">
@@ -392,7 +395,7 @@ const scenarioPresets = {
     goal: '根据今日订单和顾客数据，生成一套能提升复购和到店转化的优惠活动方案。'
   },
   product_optimize: {
-    scenario: 'social_post',
+    scenario: 'product_optimize',
     customer_tag: 'nearby_customer',
     product_name: '',
     goal: '针对缺图、缺描述、低动销或排序靠后的商品，生成商品标题、描述、主推理由和扫码页优化建议。'
@@ -453,6 +456,112 @@ const structuredOutput = computed(() => {
     return aiResult.value.structured
   }
   return buildStructuredOutput(aiResult.value.content || '', copyForm.scenario)
+})
+const studioMode = computed(() => {
+  if (activeModule.value === 'product' || copyForm.scenario === 'product_optimize') return 'product'
+  if (activeModule.value === 'share' || copyForm.scenario === 'referral_poster') return 'share'
+  if (activeModule.value === 'review' || ['daily_report', 'finance_review', 'refund_review', 'promotion_review'].includes(String(route.query.scenario || ''))) return 'review'
+  return 'campaign'
+})
+const studioConfig = computed(() => {
+  const base = {
+    eyebrow: 'AI CAMPAIGN STUDIO',
+    title: 'AI 营销方案生成器',
+    description: '生成裂变海报、召回券、朋友圈和门店推广话术。',
+    scenarioLabel: '使用场景',
+    audienceLabel: '目标人群',
+    subjectLabel: '主推商品 / 服务',
+    subjectPlaceholder: '例如：招牌烤串、双人套餐、到店服务',
+    goalLabel: '营销目标',
+    primaryAction: '生成 AI 方案',
+    copyAction: '复制文案',
+    showDraftButton: true,
+    showPromotionActions: true,
+    showProductActions: false,
+    showShareActions: false,
+    showSocialPack: true,
+    showCouponLink: true,
+    resultCompact: false,
+    scenarioOptions: [
+      { label: '裂变海报', value: 'referral_poster' },
+      { label: '新客引流', value: 'new_customer' },
+      { label: '沉睡顾客召回', value: 'dormant_recall' },
+      { label: '高价值顾客专属活动', value: 'vip_campaign' },
+      { label: '朋友圈短文案', value: 'social_post' }
+    ]
+  }
+  if (studioMode.value === 'product') {
+    return {
+      ...base,
+      eyebrow: 'AI PRODUCT OPTIMIZER',
+      title: 'AI 商品优化助手',
+      description: '根据缺图、缺描述、售罄、低库存和排序情况，生成商品标题、描述、主推和菜单调整建议。',
+      scenarioLabel: '优化场景',
+      audienceLabel: '顾客类型',
+      subjectLabel: '优先优化商品',
+      subjectPlaceholder: '例如：当前缺图商品、低库存商品、招牌套餐',
+      goalLabel: '商品问题与优化目标',
+      primaryAction: '生成商品优化建议',
+      copyAction: '复制优化建议',
+      showDraftButton: false,
+      showPromotionActions: false,
+      showProductActions: true,
+      showSocialPack: false,
+      showCouponLink: false,
+      resultCompact: true,
+      scenarioOptions: [
+        { label: '菜单商品优化', value: 'product_optimize' },
+        { label: '商品描述优化', value: 'product_description' },
+        { label: '主推商品排序', value: 'product_sorting' },
+        { label: '套餐组合建议', value: 'product_bundle' }
+      ]
+    }
+  }
+  if (studioMode.value === 'share') {
+    return {
+      ...base,
+      eyebrow: 'AI REFERRAL STUDIO',
+      title: 'AI 裂变海报方案',
+      description: '围绕分享海报、好友券和复购奖励生成可编辑文案，方便回填到裂变设置。',
+      scenarioLabel: '裂变场景',
+      subjectLabel: '主推权益 / 服务',
+      goalLabel: '裂变目标',
+      primaryAction: '生成裂变方案',
+      showDraftButton: false,
+      showPromotionActions: false,
+      showShareActions: true,
+      showCouponLink: true,
+      scenarioOptions: [
+        { label: '裂变海报', value: 'referral_poster' },
+        { label: '新客领券', value: 'new_customer' },
+        { label: '老客分享复购', value: 'dormant_recall' }
+      ]
+    }
+  }
+  if (studioMode.value === 'review') {
+    return {
+      ...base,
+      eyebrow: 'AI BUSINESS REVIEW',
+      title: 'AI 经营复盘建议',
+      description: '根据订单、实收、退款、客单价和热销商品，生成当天复盘和下一步动作。',
+      scenarioLabel: '复盘类型',
+      subjectLabel: '关注对象',
+      goalLabel: '复盘范围与问题',
+      primaryAction: '生成复盘建议',
+      copyAction: '复制复盘',
+      showDraftButton: false,
+      showPromotionActions: true,
+      showSocialPack: false,
+      resultCompact: true,
+      scenarioOptions: [
+        { label: '今日经营日报', value: 'daily_report' },
+        { label: '财务收入复盘', value: 'finance_review' },
+        { label: '退款售后复盘', value: 'refund_review' },
+        { label: '优惠活动复盘', value: 'promotion_review' }
+      ]
+    }
+  }
+  return base
 })
 const aiModules = computed(() => [
   { key: 'review', label: '经营复盘', title: '今日复盘建议', desc: '总结订单、退款、客单价和明日动作', scenario: 'daily_report' },
@@ -571,7 +680,15 @@ const scenarioTitle = (scenario) => ({
   new_customer: 'AI新客到店活动',
   dormant_recall: 'AI沉睡顾客召回券',
   vip_campaign: 'AI高价值顾客专属活动',
-  social_post: 'AI朋友圈转化活动'
+  social_post: 'AI朋友圈转化活动',
+  product_optimize: 'AI商品优化草稿',
+  product_description: 'AI商品描述草稿',
+  product_sorting: 'AI商品排序建议',
+  product_bundle: 'AI套餐组合建议',
+  daily_report: 'AI经营复盘建议',
+  finance_review: 'AI财务复盘建议',
+  refund_review: 'AI退款售后复盘',
+  promotion_review: 'AI活动复盘建议'
 }[scenario] || 'AI经营活动草稿')
 
 const dateString = (date) => {
@@ -1593,6 +1710,15 @@ watch(() => route.query.scenario, (scenario) => {
   background:
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.36), transparent 26%),
     #0f172a;
+}
+
+.copy-box.compact {
+  min-height: 180px;
+}
+
+.copy-box.compact pre {
+  max-height: 260px;
+  overflow: auto;
 }
 
 .copy-box pre {
