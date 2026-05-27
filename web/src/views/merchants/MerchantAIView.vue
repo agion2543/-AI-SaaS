@@ -222,6 +222,19 @@
             <span>Token：{{ aiResult.total_tokens || 0 }}</span>
             <span>预估成本：{{ formatCost(aiResult.estimated_cost_cents) }}</span>
           </div>
+          <div v-if="structuredOutput.length" class="structured-output">
+            <article v-for="item in structuredOutput" :key="item.key">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.title }}</strong>
+              <p>{{ item.text }}</p>
+              <div class="structured-actions">
+                <el-button size="small" type="primary" plain @click="copyText(item.copy || item.text)">复制</el-button>
+                <el-button v-if="item.action === 'promotion'" size="small" type="success" plain :loading="generating" @click="createPromotionFromStructured(item)">生成活动草稿</el-button>
+                <el-button v-if="item.action === 'share'" size="small" plain @click="router.push('/merchant/share')">去裂变海报</el-button>
+                <el-button v-if="item.action === 'product'" size="small" plain @click="router.push('/merchant/stores')">去商品管理</el-button>
+              </div>
+            </article>
+          </div>
           <div v-if="aiResult.content" class="copy-box">
             <pre>{{ aiResult.content }}</pre>
             <div class="inline-actions">
@@ -434,6 +447,7 @@ const quotaHint = computed(() => {
   if (quotaStatus.value === 'warning') return `已使用 ${aiQuota.value.used ?? 0} 次，接近今日额度，建议优先生成最需要落地的内容。`
   return `已使用 ${aiQuota.value.used ?? 0} 次，当前套餐今日额度正常。`
 })
+const structuredOutput = computed(() => buildStructuredOutput(aiResult.value.content || '', copyForm.scenario))
 const aiModules = computed(() => [
   { key: 'review', label: '经营复盘', title: '今日复盘建议', desc: '总结订单、退款、客单价和明日动作', scenario: 'daily_report' },
   { key: 'campaign', label: '营销文案', title: '活动方案生成', desc: '输出朋友圈、社群、到店转化文案', scenario: 'campaign' },
@@ -593,11 +607,12 @@ async function generateDraft() {
 async function createPromotionFromAI() {
   generating.value = true
   try {
-    const content = aiResult.value.content || copyForm.goal
+    const primary = structuredOutput.value.find((item) => item.action === 'promotion') || structuredOutput.value[0]
+    const content = primary?.copy || primary?.text || aiResult.value.content || copyForm.goal
     const isVip = copyForm.scenario === 'vip_campaign'
     await createMerchantPromotion({
       store_id: null,
-      title: scenarioTitle(copyForm.scenario),
+      title: primary?.title || scenarioTitle(copyForm.scenario),
       description: String(content || '').slice(0, 500),
       type: isVip ? 'discount' : 'amount',
       threshold: isVip ? 8800 : 5000,
@@ -608,6 +623,31 @@ async function createPromotionFromAI() {
       valid_to: addDays(14)
     })
     ElMessage.success('已生成优惠活动草稿，可继续编辑后发布')
+    router.push('/merchant/promotions?ai_draft=1')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '生成活动草稿失败')
+  } finally {
+    generating.value = false
+  }
+}
+
+async function createPromotionFromStructured(item) {
+  generating.value = true
+  try {
+    const isVip = copyForm.scenario === 'vip_campaign'
+    await createMerchantPromotion({
+      store_id: null,
+      title: item.title || scenarioTitle(copyForm.scenario),
+      description: String(item.copy || item.text || aiResult.value.content || '').slice(0, 500),
+      type: isVip ? 'discount' : 'amount',
+      threshold: isVip ? 8800 : 5000,
+      discount: isVip ? 0 : 800,
+      discount_rate: isVip ? 88 : 0,
+      status: 'draft',
+      valid_from: dateString(new Date()),
+      valid_to: addDays(14)
+    })
+    ElMessage.success('已按该建议生成活动草稿')
     router.push('/merchant/promotions?ai_draft=1')
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '生成活动草稿失败')
@@ -722,6 +762,102 @@ async function copyVideoPack(text) {
     '拍摄建议：前三秒展示成品或优惠，镜头包含门头、制作过程、顾客取餐/用餐和扫码领券。'
   ].join('\n')
   await copyText(pack)
+}
+
+function buildStructuredOutput(content, scenario) {
+  const text = String(content || '').trim()
+  if (!text) return []
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean)
+  const sections = []
+  let current = null
+  for (const line of lines) {
+    const match = line.match(/^(?:\d+[.、]\s*)?【?([^：:】]{2,18})】?[：:]\s*(.*)$/)
+    if (match) {
+      current = {
+        key: `section_${sections.length}`,
+        rawTitle: match[1],
+        title: cleanTitle(match[2] || match[1]),
+        body: match[2] ? [] : []
+      }
+      sections.push(current)
+      continue
+    }
+    if (current) current.body.push(line)
+  }
+  const parsed = sections
+    .map((section, index) => normalizeStructuredSection(section, index, scenario))
+    .filter((item) => item.text)
+    .slice(0, 6)
+  if (parsed.length >= 3) return parsed
+  return fallbackStructuredOutput(text, scenario)
+}
+
+function normalizeStructuredSection(section, index, scenario) {
+  const titleText = `${section.rawTitle || ''} ${section.title || ''}`
+  const body = section.body.join('\n').trim()
+  const text = body || section.title || ''
+  const label = structuredLabel(titleText, index)
+  return {
+    key: section.key,
+    label,
+    title: cleanTitle(section.title || label),
+    text,
+    copy: `${cleanTitle(section.title || label)}\n${text}`,
+    action: structuredAction(titleText, scenario)
+  }
+}
+
+function fallbackStructuredOutput(text, scenario) {
+  const chunks = text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean)
+  const first = chunks[0] || text.slice(0, 220)
+  const second = chunks[1] || text.slice(220, 520)
+  const third = chunks[2] || text.slice(520, 820)
+  return [
+    {
+      key: 'fallback_promotion',
+      label: '活动建议',
+      title: scenarioTitle(scenario),
+      text: first,
+      copy: first,
+      action: 'promotion'
+    },
+    {
+      key: 'fallback_copy',
+      label: '传播文案',
+      title: '可复制文案',
+      text: second || first,
+      copy: second || first,
+      action: 'share'
+    },
+    {
+      key: 'fallback_steps',
+      label: '执行步骤',
+      title: '下一步动作',
+      text: third || '复制文案后，可进入优惠活动或裂变海报继续落地。',
+      copy: third || text,
+      action: scenario === 'social_post' ? 'share' : 'promotion'
+    }
+  ].filter((item) => item.text)
+}
+
+function structuredLabel(title, index) {
+  if (/标题|活动/.test(title)) return '活动标题'
+  if (/海报|朋友圈|社群|文案|话术/.test(title)) return '传播文案'
+  if (/优惠|奖励|券|机制/.test(title)) return '优惠建议'
+  if (/步骤|执行|动作|下一步/.test(title)) return '执行步骤'
+  if (/风险|成本|提醒/.test(title)) return '风险提醒'
+  return ['活动建议', '传播文案', '优惠建议', '执行步骤', '风险提醒'][index] || '建议'
+}
+
+function structuredAction(title, scenario) {
+  if (/商品|菜单|菜品|描述|标题/.test(title) || scenario === 'product_optimize') return 'product'
+  if (/海报|朋友圈|社群|裂变|分享/.test(title)) return 'share'
+  if (/优惠|活动|券|奖励|标题|方案/.test(title)) return 'promotion'
+  return scenario === 'social_post' ? 'share' : 'promotion'
+}
+
+function cleanTitle(value) {
+  return String(value || '').replace(/^[-*\s\d.、]+/, '').replace(/[。；;：:]+$/, '').trim() || 'AI 建议'
 }
 
 function backToPromotionEdit() {
@@ -1328,6 +1464,56 @@ watch(() => route.query.scenario, (scenario) => {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.structured-output {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.structured-output article {
+  min-height: 150px;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.structured-output span,
+.structured-output strong,
+.structured-output p {
+  display: block;
+}
+
+.structured-output span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.structured-output strong {
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.structured-output p {
+  display: -webkit-box;
+  min-height: 52px;
+  margin: 8px 0 12px;
+  overflow: hidden;
+  color: #64748b;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.structured-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .copy-box {
   min-height: 260px;
   border-radius: 22px;
@@ -1430,6 +1616,7 @@ watch(() => route.query.scenario, (scenario) => {
   .module-grid,
   .execution-strip,
   .form-row,
+  .structured-output,
   .poster-grid {
     grid-template-columns: 1fr;
   }
