@@ -297,6 +297,23 @@
             </div>
           </div>
         </el-form-item>
+        <div class="publish-checks">
+          <div class="check-head">
+            <span>上架前检查</span>
+            <strong>{{ productPublishChecks.blockers.length ? '建议补齐后上架' : '基础检查通过' }}</strong>
+          </div>
+          <div class="check-list">
+            <div
+              v-for="item in productPublishChecks.items"
+              :key="item.text"
+              class="check-item"
+              :class="item.ok ? 'ok' : 'risk'"
+            >
+              <span>{{ item.ok ? '通过' : '注意' }}</span>
+              <p>{{ item.text }}</p>
+            </div>
+          </div>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -338,7 +355,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createMerchantStoreProduct,
   deleteMerchantStoreProduct,
@@ -521,6 +538,7 @@ const categoryStats = computed(() => categoryOptions.value.map((name) => {
     active: rows.filter((item) => item.status === 'active').length
   }
 }))
+const productPublishChecks = computed(() => buildProductPublishChecks())
 const visibleProducts = computed(() => {
   const keyword = filters.keyword.trim().toLowerCase()
   const rows = products.value.filter((item) => {
@@ -762,10 +780,47 @@ const validateForm = () => {
   return true
 }
 
+const buildProductPublishChecks = () => {
+  const nameOk = String(form.name || '').trim().length >= 2
+  const priceOk = Number(form.price_yuan || 0) > 0
+  const categoryOk = String(form.category || '').trim().length >= 2
+  const descriptionOk = String(form.description || '').trim().length >= 8
+  const imageOk = Boolean(String(form.image_url || '').trim()) && isValidImageUrl(form.image_url)
+  const stockOk = !form.stock_enabled || Number(form.stock || 0) > 0
+  const sortOk = Number(form.sort || 0) > 0 && Number(form.sort || 0) <= 100
+  const items = [
+    { ok: nameOk, text: nameOk ? '商品名称清晰。' : '商品名称过短，顾客扫码页不容易判断。' },
+    { ok: priceOk, text: priceOk ? '商品价格已填写。' : '上架商品建议填写有效价格，避免顾客误下单。' },
+    { ok: categoryOk, text: categoryOk ? '商品分类可用于顾客筛选。' : '建议补充商品分类，例如热销、套餐、饮品或服务。' },
+    { ok: descriptionOk, text: descriptionOk ? '商品描述较完整。' : 'AI 草稿落地后建议补充口味、规格、服务内容或推荐理由。' },
+    { ok: imageOk, text: imageOk ? '商品图片已配置。' : '缺少图片会影响顾客点击，建议上传图片后再重点上架。' },
+    { ok: stockOk, text: stockOk ? '库存状态可售。' : '当前库存为 0，顾客端会显示售罄或无法购买。' },
+    { ok: sortOk, text: sortOk ? '排序适合在扫码页展示。' : '排序值建议控制在 1-100，重点商品排得更靠前。' }
+  ]
+  return { items, blockers: items.filter((item) => !item.ok) }
+}
+
+const confirmProductPublishChecks = async () => {
+  if (form.status !== 'active' || !productPublishChecks.value.blockers.length) return true
+  const tips = productPublishChecks.value.blockers.map((item) => `• ${item.text}`).join('\n')
+  await ElMessageBox.confirm(
+    `当前商品上架前仍有以下风险：\n\n${tips}\n\n建议先补齐后再展示给顾客。是否继续保存为暂时下架？`,
+    '商品上架前检查',
+    {
+      confirmButtonText: '保存为下架',
+      cancelButtonText: '继续编辑',
+      type: 'warning'
+    }
+  )
+  form.status = 'inactive'
+  return true
+}
+
 const submit = async () => {
   if (!validateForm()) return
   saving.value = true
   try {
+    await confirmProductPublishChecks()
     if (dialogMode.value === 'create') {
       await createMerchantStoreProduct(buildPayload())
       ElMessage.success('商品已创建')
@@ -776,6 +831,7 @@ const submit = async () => {
     dialogVisible.value = false
     await load()
   } catch (err) {
+    if (err === 'cancel' || err === 'close') return
     ElMessage.error(err.response?.data?.message || '操作失败')
   } finally {
     saving.value = false
@@ -1263,6 +1319,67 @@ onMounted(load)
 
 .wide-input {
   width: 100%;
+}
+
+.publish-checks {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: #f8fbff;
+}
+
+.check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.check-head span {
+  color: #64748b;
+}
+
+.check-list {
+  display: grid;
+  gap: 8px;
+}
+
+.check-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: #fff;
+}
+
+.check-item span {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.check-item p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.check-item.ok span {
+  color: #16a34a;
+}
+
+.check-item.risk {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.check-item.risk span {
+  color: #ea580c;
 }
 
 .image-row {

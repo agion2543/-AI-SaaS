@@ -225,6 +225,24 @@
             <el-input-number v-model="form.valid_days" :min="1" :max="365" :step="1" controls-position="right" />
           </el-form-item>
 
+          <div class="publish-checks">
+            <div class="check-head">
+              <span>保存前检查</span>
+              <strong>{{ sharePublishChecks.blockers.length ? '建议修正后开启' : '基础检查通过' }}</strong>
+            </div>
+            <div class="check-list">
+              <div
+                v-for="item in sharePublishChecks.items"
+                :key="item.text"
+                class="check-item"
+                :class="item.ok ? 'ok' : 'risk'"
+              >
+                <span>{{ item.ok ? '通过' : '注意' }}</span>
+                <p>{{ item.text }}</p>
+              </div>
+            </div>
+          </div>
+
           <div class="form-actions">
             <el-button type="primary" :loading="saving" @click="save">保存活动设置</el-button>
             <el-button @click="router.push('/merchant/coupons')">券包/核销管理</el-button>
@@ -357,7 +375,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   amplifyMerchantShareOffer,
   createMerchantPromotion,
@@ -464,6 +482,7 @@ const actionCards = computed(() => {
     }
   ]
 })
+const sharePublishChecks = computed(() => buildSharePublishChecks())
 
 const displayActionCards = computed(() => {
   if (aiVariants.value.length) return aiVariants.value
@@ -508,6 +527,42 @@ const applyAIShareDraft = () => {
   }
 }
 
+const buildSharePublishChecks = () => {
+  const titleOk = String(form.poster_title || '').trim().length >= 4
+  const copyOk = String(form.poster_copy || '').trim().length >= 12
+  const friendAmount = Number(form.friend_coupon_amount_yuan || 0)
+  const friendThreshold = Number(form.friend_coupon_threshold_yuan || 0)
+  const rewardAmount = Number(form.referrer_coupon_amount_yuan || 0)
+  const rewardThreshold = Number(form.referrer_coupon_threshold_yuan || 0)
+  const friendCouponOk = friendAmount > 0 && (friendThreshold === 0 || friendAmount < friendThreshold)
+  const rewardCouponOk = rewardAmount >= 0 && (rewardAmount === 0 || rewardThreshold === 0 || rewardAmount < rewardThreshold)
+  const daysOk = Number(form.valid_days || 0) >= 3 && Number(form.valid_days || 0) <= 90
+  const items = [
+    { ok: titleOk, text: titleOk ? '海报标题清晰。' : '海报标题过短，建议写清顾客能获得什么。' },
+    { ok: copyOk, text: copyOk ? '分享文案较完整。' : '海报文案过空，建议补充分享理由和使用方式。' },
+    { ok: friendCouponOk, text: friendCouponOk ? '好友券金额和门槛合理。' : '好友券金额需大于 0，且不建议高于使用门槛。' },
+    { ok: rewardCouponOk, text: rewardCouponOk ? '分享人奖励设置可用。' : '分享人奖励金额不建议高于使用门槛。' },
+    { ok: daysOk, text: daysOk ? '券有效期适合试运营。' : '券有效期建议控制在 3-90 天，避免过短或长期失控。' }
+  ]
+  return { items, blockers: items.filter((item) => !item.ok) }
+}
+
+const confirmSharePublishChecks = async () => {
+  if (!form.enabled || !sharePublishChecks.value.blockers.length) return true
+  const tips = sharePublishChecks.value.blockers.map((item) => `• ${item.text}`).join('\n')
+  await ElMessageBox.confirm(
+    `当前裂变海报仍有以下风险：\n\n${tips}\n\n建议先修正后再开启，是否继续保存为未开启状态？`,
+    '海报保存前检查',
+    {
+      confirmButtonText: '保存但先不开启',
+      cancelButtonText: '继续编辑',
+      type: 'warning'
+    }
+  )
+  form.enabled = false
+  return true
+}
+
 const load = async () => {
   loading.value = true
   try {
@@ -534,6 +589,7 @@ const load = async () => {
 const save = async () => {
   saving.value = true
   try {
+    await confirmSharePublishChecks()
     const payload = {
       enabled: form.enabled,
       poster_title: form.poster_title,
@@ -549,6 +605,7 @@ const save = async () => {
     ElMessage.success(form.enabled ? '裂变活动已开启，顾客端将展示分享海报' : '裂变活动已关闭，顾客端不再展示活动')
     await load()
   } catch (err) {
+    if (err === 'cancel' || err === 'close') return
     ElMessage.error(err.response?.data?.message || '活动设置保存失败')
   } finally {
     saving.value = false
@@ -857,6 +914,67 @@ onMounted(load)
   margin-top: 6px;
   color: #475569;
   line-height: 1.7;
+}
+
+.publish-checks {
+  display: grid;
+  gap: 12px;
+  margin: 6px 0 14px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: #f8fbff;
+}
+
+.check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.check-head span {
+  color: #64748b;
+}
+
+.check-list {
+  display: grid;
+  gap: 8px;
+}
+
+.check-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.check-item span {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.check-item p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.check-item.ok span {
+  color: #16a34a;
+}
+
+.check-item.risk {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.check-item.risk span {
+  color: #ea580c;
 }
 
 .eyebrow {
