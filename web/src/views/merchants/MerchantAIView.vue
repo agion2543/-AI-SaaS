@@ -229,9 +229,9 @@
               <p>{{ item.text }}</p>
               <div class="structured-actions">
                 <el-button size="small" type="primary" plain @click="copyText(item.copy || item.text)">复制</el-button>
-                <el-button v-if="item.action === 'promotion'" size="small" type="success" plain :loading="generating" @click="createPromotionFromStructured(item)">生成活动草稿</el-button>
-                <el-button v-if="item.action === 'share'" size="small" plain @click="router.push('/merchant/share')">去裂变海报</el-button>
-                <el-button v-if="item.action === 'product'" size="small" plain @click="router.push('/merchant/stores')">去商品管理</el-button>
+                <el-button v-if="item.action === 'promotion'" size="small" type="success" plain @click="prefillPromotionFromStructured(item)">填入活动表单</el-button>
+                <el-button v-if="item.action === 'share'" size="small" plain @click="prefillShareFromStructured(item)">填入海报设置</el-button>
+                <el-button v-if="item.action === 'product'" size="small" plain @click="prefillProductFromStructured(item)">填入商品表单</el-button>
               </div>
             </article>
           </div>
@@ -240,6 +240,7 @@
             <div class="inline-actions">
               <el-button type="primary" @click="copyText(aiResult.content)">复制文案</el-button>
               <el-button type="success" :loading="generating" @click="createPromotionFromAI">一键生成活动草稿</el-button>
+              <el-button plain @click="prefillPromotionFromStructured()">填入活动表单</el-button>
               <el-button v-if="route.query.promotion_id" type="warning" plain @click="backToPromotionEdit">
                 按建议调整活动
               </el-button>
@@ -584,6 +585,71 @@ const addDays = (days) => {
   const date = new Date()
   date.setDate(date.getDate() + days)
   return dateString(date)
+}
+
+const textValue = (value, max = 500) => String(value || '').trim().slice(0, max)
+
+const pickStructuredItem = (action) => {
+  if (action) {
+    const matched = structuredOutput.value.find((item) => item.action === action)
+    if (matched) return matched
+  }
+  return structuredOutput.value[0] || null
+}
+
+const saveAIDraft = (key, payload) => {
+  sessionStorage.setItem(key, JSON.stringify({
+    ...payload,
+    source: 'merchant_ai_center',
+    created_at: new Date().toISOString()
+  }))
+}
+
+const promotionPayloadFromAI = (item = pickStructuredItem('promotion')) => {
+  const isVip = copyForm.scenario === 'vip_campaign'
+  return {
+    title: textValue(item?.title || scenarioTitle(copyForm.scenario), 120),
+    description: textValue(item?.copy || item?.text || aiResult.value.content || copyForm.goal, 500),
+    type: isVip ? 'discount' : 'amount',
+    threshold_yuan: isVip ? 88 : 50,
+    discount_yuan: isVip ? 0 : 8,
+    discount_rate: isVip ? 88 : 85,
+    valid_from: dateString(new Date()),
+    valid_to: addDays(14),
+    ai_note: textValue(item?.text || item?.copy || aiResult.value.content || '', 800)
+  }
+}
+
+const prefillPromotionFromStructured = (item) => {
+  saveAIDraft('merchant_ai_promotion_draft', promotionPayloadFromAI(item))
+  ElMessage.success('AI 活动建议已填入活动表单，可先编辑再保存')
+  router.push('/merchant/promotions?ai_prefill=1')
+}
+
+const prefillShareFromStructured = (item = pickStructuredItem('share')) => {
+  saveAIDraft('merchant_ai_share_draft', {
+    poster_title: textValue(item?.title || '好友扫码领券', 80),
+    poster_copy: textValue(item?.copy || item?.text || aiResult.value.content || copyForm.goal, 500),
+    ai_note: textValue(item?.text || item?.copy || aiResult.value.content || '', 800)
+  })
+  ElMessage.success('AI 海报文案已填入裂变设置，可先编辑再保存')
+  router.push('/merchant/share?ai_prefill=1')
+}
+
+const prefillProductFromStructured = (item = pickStructuredItem('product')) => {
+  saveAIDraft('merchant_ai_product_draft', {
+    name: textValue(route.query.product || item?.title || copyForm.product_name || '', 80),
+    description: textValue(item?.copy || item?.text || aiResult.value.content || copyForm.goal, 500),
+    category: textValue(route.query.category || '推荐商品', 40),
+    ai_note: textValue(item?.text || item?.copy || aiResult.value.content || '', 800)
+  })
+  const targetStoreId = Number(route.query.store_id || route.query.storeId || 0)
+  if (targetStoreId) {
+    router.push(`/merchant/stores/${targetStoreId}/products?ai_prefill=1`)
+    return
+  }
+  ElMessage.info('AI 商品草稿已保存，请选择门店后进入商品管理继续编辑')
+  router.push('/merchant/stores')
 }
 
 async function load() {

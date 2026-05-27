@@ -26,6 +26,15 @@
       </div>
     </section>
 
+    <section v-if="aiPrefillNote" class="ai-prefill-note">
+      <div>
+        <p class="eyebrow">AI DRAFT</p>
+        <h2>AI 海报草稿已填入</h2>
+        <p>{{ aiPrefillNote }}</p>
+      </div>
+      <el-button plain @click="aiPrefillNote = ''">收起</el-button>
+    </section>
+
     <section class="metric-grid">
       <article class="metric-card">
         <span>分享海报</span>
@@ -347,7 +356,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   amplifyMerchantShareOffer,
@@ -362,6 +371,7 @@ import {
 } from '../../api/modules'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
 const generatingCopy = ref(false)
@@ -373,6 +383,7 @@ const campaigns = ref([])
 const coupons = ref([])
 const config = ref({})
 const aiVariants = ref([])
+const aiPrefillNote = ref('')
 const aiQuota = ref({})
 const shareReview = ref(null)
 const defaultCopy = '分享给好友，好友扫码领券下单，你也可以获得复购奖励。'
@@ -478,6 +489,25 @@ const applyConfig = (next = {}) => {
   form.valid_days = next.valid_days || 30
 }
 
+const applyAIShareDraft = () => {
+  if (route.query.ai_prefill !== '1') return
+  const raw = sessionStorage.getItem('merchant_ai_share_draft')
+  if (!raw) return
+  try {
+    const draft = JSON.parse(raw)
+    form.enabled = true
+    form.poster_title = String(draft.poster_title || '好友扫码领券').slice(0, 80)
+    form.poster_copy = String(draft.poster_copy || '').slice(0, 500) || form.poster_copy
+    aiPrefillNote.value = String(draft.ai_note || '已把 AI 建议填入海报标题和分享文案，请确认优惠金额后保存。').slice(0, 800)
+    sessionStorage.removeItem('merchant_ai_share_draft')
+    router.replace('/merchant/share')
+    ElMessage.success('已填入 AI 海报草稿，请确认后保存')
+  } catch {
+    sessionStorage.removeItem('merchant_ai_share_draft')
+    ElMessage.warning('AI 海报草稿读取失败，请重新生成')
+  }
+}
+
 const load = async () => {
   loading.value = true
   try {
@@ -493,6 +523,7 @@ const load = async () => {
     campaigns.value = statsRes.data?.list || []
     coupons.value = statsRes.data?.coupons || []
     applyConfig(configRes.data?.config || statsRes.data?.config || {})
+    applyAIShareDraft()
   } catch (err) {
     ElMessage.error(err.response?.data?.message || '裂变看板加载失败')
   } finally {
@@ -804,6 +835,28 @@ onMounted(load)
 
 .panel-card :deep(.el-card__body) {
   padding: 20px;
+}
+
+.ai-prefill-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(236, 253, 245, 0.9));
+}
+
+.ai-prefill-note h2,
+.ai-prefill-note p {
+  margin: 0;
+}
+
+.ai-prefill-note p:not(.eyebrow) {
+  margin-top: 6px;
+  color: #475569;
+  line-height: 1.7;
 }
 
 .eyebrow {

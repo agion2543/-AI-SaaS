@@ -173,6 +173,15 @@
           <el-button size="small" plain @click="aiReviewNote = ''">收起建议</el-button>
         </div>
 
+        <div v-if="aiPrefillNote" class="ai-review-note">
+          <div>
+            <span>AI 表单草稿</span>
+            <strong>已自动填入活动名称、说明和基础优惠参数，请确认后保存</strong>
+          </div>
+          <pre>{{ aiPrefillNote }}</pre>
+          <el-button size="small" plain @click="aiPrefillNote = ''">收起草稿说明</el-button>
+        </div>
+
         <el-form-item label="活动名称">
           <el-input v-model="form.title" maxlength="120" placeholder="例如：新客到店立减活动" />
         </el-form-item>
@@ -305,6 +314,7 @@ const pageSize = 10
 const editingId = ref(null)
 const showAiDraftTip = ref(false)
 const aiReviewNote = ref('')
+const aiPrefillNote = ref('')
 const paidStatuses = ['received', 'accepted', 'completed', 'closed']
 
 const form = reactive({
@@ -552,6 +562,12 @@ const formatDate = (value) => {
   return String(value).slice(0, 10)
 }
 
+const dateAfter = (days) => {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 const statusLabel = (status) => ({
   draft: '草稿',
   published: '发布中',
@@ -589,6 +605,7 @@ const buildPromotionChecks = (data) => {
 
 const resetForm = () => {
   editingId.value = null
+  aiPrefillNote.value = ''
   Object.assign(form, {
     store_id: null,
     title: '',
@@ -611,6 +628,7 @@ const loadPromotions = async () => {
     total.value = res.data.total || 0
     showAiDraftTip.value = route.query.ai_draft === '1' && Boolean(latestAiDraft.value)
     openRouteEditPromotion()
+    applyAIPromotionDraft()
   } catch (err) {
     ElMessage.error(err.response?.data?.message || '优惠活动加载失败')
   } finally {
@@ -628,6 +646,36 @@ const openRouteEditPromotion = () => {
     : ''
   openEdit(target)
   router.replace('/merchant/promotions')
+}
+
+const applyAIPromotionDraft = () => {
+  if (route.query.ai_prefill !== '1' || dialogVisible.value) return
+  const raw = sessionStorage.getItem('merchant_ai_promotion_draft')
+  if (!raw) return
+  try {
+    const draft = JSON.parse(raw)
+    resetForm()
+    Object.assign(form, {
+      store_id: draft.store_id || null,
+      title: String(draft.title || 'AI 优惠活动草稿').slice(0, 120),
+      description: String(draft.description || '').slice(0, 500),
+      type: draft.type || 'amount',
+      threshold_yuan: Number(draft.threshold_yuan ?? 50),
+      discount_yuan: Number(draft.discount_yuan ?? 8),
+      discount_rate: Number(draft.discount_rate ?? 85),
+      status: 'draft',
+      valid_from: draft.valid_from || dateAfter(0),
+      valid_to: draft.valid_to || dateAfter(14)
+    })
+    aiPrefillNote.value = String(draft.ai_note || 'AI 已把建议转换为可编辑活动草稿。').slice(0, 800)
+    dialogVisible.value = true
+    sessionStorage.removeItem('merchant_ai_promotion_draft')
+    router.replace('/merchant/promotions')
+    ElMessage.success('已填入 AI 活动草稿，请确认后保存')
+  } catch {
+    sessionStorage.removeItem('merchant_ai_promotion_draft')
+    ElMessage.warning('AI 活动草稿读取失败，请重新生成')
+  }
 }
 
 const loadStores = async () => {

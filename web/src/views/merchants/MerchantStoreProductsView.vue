@@ -614,6 +614,7 @@ const openProductAI = () => {
       scenario: 'product_optimize',
       source: 'products',
       auto: '1',
+      store_id: storeId,
       total: products.value.length,
       active: activeCount.value,
       categories: categoryOptions.value.length,
@@ -648,6 +649,7 @@ const load = async () => {
     const res = await fetchMerchantStoreProducts(storeId, { page: page.value, page_size: pageSize })
     products.value = res.data.list || []
     total.value = res.data.total || 0
+    applyAIProductDraft()
   } finally {
     loading.value = false
   }
@@ -672,6 +674,30 @@ const openCreate = () => {
   dialogMode.value = 'create'
   resetForm()
   dialogVisible.value = true
+}
+
+const applyAIProductDraft = () => {
+  if (route.query.ai_prefill !== '1' || dialogVisible.value) return
+  const raw = sessionStorage.getItem('merchant_ai_product_draft')
+  if (!raw) return
+  try {
+    const draft = JSON.parse(raw)
+    dialogMode.value = 'create'
+    resetForm()
+    form.name = String(draft.name || '').slice(0, 80) || 'AI 商品草稿'
+    form.category = normalizeCategory(draft.category || defaultCategory)
+    form.description = String(draft.description || draft.ai_note || '').slice(0, 500)
+    form.price_yuan = Number(draft.price_yuan || 0)
+    form.sort = 20
+    form.status = 'active'
+    dialogVisible.value = true
+    sessionStorage.removeItem('merchant_ai_product_draft')
+    router.replace(`/merchant/stores/${storeId}/products`)
+    ElMessage.success('已填入 AI 商品草稿，请补充价格和图片后保存')
+  } catch {
+    sessionStorage.removeItem('merchant_ai_product_draft')
+    ElMessage.warning('AI 商品草稿读取失败，请重新生成')
+  }
 }
 
 const openCustomerPreview = () => {
