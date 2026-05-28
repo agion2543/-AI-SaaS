@@ -115,8 +115,8 @@
     </section>
 
     <section class="workbench-grid">
-      <div class="left-stack">
-        <div class="panel-card">
+      <div class="assist-row">
+        <div class="panel-card assist-card">
           <div class="section-head">
             <div>
               <div class="eyebrow dark">NEXT BEST ACTION</div>
@@ -137,7 +137,7 @@
           </div>
         </div>
 
-        <div class="panel-card loop-card">
+        <div class="panel-card loop-card assist-card">
           <div class="section-head compact">
             <div>
               <div class="eyebrow dark">REFERRAL LOOP</div>
@@ -166,7 +166,7 @@
         </div>
       </div>
 
-      <div class="right-stack">
+      <div class="studio-row">
         <div class="panel-card generator-card">
           <div class="section-head">
             <div>
@@ -1511,19 +1511,28 @@ watch(() => route.query.scenario, (scenario) => {
 
 .workbench-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.25fr);
   gap: 18px;
 }
 
-.left-stack,
-.right-stack {
-  display: flex;
-  flex-direction: column;
+.assist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.75fr);
   gap: 18px;
+}
+
+.studio-row {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.88fr) minmax(560px, 1.12fr);
+  gap: 18px;
+  align-items: start;
 }
 
 .panel-card {
   padding: 22px;
+}
+
+.assist-card {
+  min-height: 0;
 }
 
 .section-head {
@@ -1552,17 +1561,18 @@ watch(() => route.query.scenario, (scenario) => {
 
 .action-list {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
 .action-card {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
   border: 1px solid #dce8f5;
-  border-radius: 20px;
-  padding: 16px;
+  border-radius: 16px;
+  padding: 14px;
 }
 
 .action-card.blue {
@@ -1579,13 +1589,13 @@ watch(() => route.query.scenario, (scenario) => {
 
 .action-icon {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   place-items: center;
-  border-radius: 16px;
+  border-radius: 14px;
   color: #fff;
   background: linear-gradient(135deg, #2563eb, #06b6d4);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 900;
 }
 
@@ -1593,13 +1603,19 @@ watch(() => route.query.scenario, (scenario) => {
   display: block;
   margin: 4px 0;
   color: #0f172a;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .action-card p {
   margin: 0;
   color: #64748b;
   line-height: 1.6;
+}
+
+.action-card .el-button {
+  grid-column: 2;
+  justify-self: start;
+  padding-left: 0;
 }
 
 .generator-card {
@@ -1622,7 +1638,7 @@ watch(() => route.query.scenario, (scenario) => {
 }
 
 .result-card {
-  min-height: 360px;
+  min-height: 0;
 }
 
 .output-meta {
@@ -1654,13 +1670,13 @@ watch(() => route.query.scenario, (scenario) => {
 
 .structured-output {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
 
 .structured-output article {
-  min-height: 150px;
+  min-height: 132px;
   padding: 14px;
   border: 1px solid #dbeafe;
   border-radius: 8px;
@@ -1703,7 +1719,7 @@ watch(() => route.query.scenario, (scenario) => {
 }
 
 .copy-box {
-  min-height: 260px;
+  min-height: 210px;
   border-radius: 22px;
   padding: 18px;
   color: #dbeafe;
@@ -1731,7 +1747,7 @@ watch(() => route.query.scenario, (scenario) => {
 
 .empty-result {
   display: grid;
-  min-height: 240px;
+  min-height: 190px;
   place-content: center;
   border: 1px dashed #bfd4ef;
   border-radius: 22px;
@@ -1797,11 +1813,13 @@ watch(() => route.query.scenario, (scenario) => {
   .metric-grid,
   .bottom-grid,
   .module-grid,
-  .execution-strip {
+  .execution-strip,
+  .action-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .workbench-grid {
+  .assist-row,
+  .studio-row {
     grid-template-columns: 1fr;
   }
 }
@@ -1814,6 +1832,7 @@ watch(() => route.query.scenario, (scenario) => {
   .execution-strip,
   .form-row,
   .structured-output,
+  .action-list,
   .poster-grid {
     grid-template-columns: 1fr;
   }
@@ -1823,7 +1842,7 @@ watch(() => route.query.scenario, (scenario) => {
   }
 
   .action-card {
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr);
   }
 
   .ai-error-card {
