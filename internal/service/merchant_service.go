@@ -1120,6 +1120,37 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	if scenario == "" {
 		scenario = "裂变海报"
 	}
+	if isProductAIScenario(scenario) {
+		systemPrompt := "你是本地生活商家的 AI 商品运营顾问，擅长餐饮、零售、服务业商品菜单优化。请输出中文，内容必须克制、真实、适合小商家马上编辑落地。优先返回 JSON，格式为：{\"product_title\":\"商品标题建议\",\"product_description\":\"商品描述草稿\",\"main_reason\":\"主推理由\",\"sort_suggestion\":\"排序与上架建议\",\"bundle_suggestion\":\"套餐或组合建议\",\"steps\":[\"步骤1\",\"步骤2\",\"步骤3\"],\"risk_notes\":\"风险提醒\"}。不要输出朋友圈文案，不要把商品优化写成营销海报。"
+		userPrompt := fmt.Sprintf(`商家名称：%s
+使用场景：%s
+顾客类型：%s
+优先优化商品：%s
+商品问题与优化目标：%s
+经营数据摘要：%v
+
+请生成一份可执行的商品优化建议，格式包含：
+1. 商品标题建议
+2. 商品描述草稿
+3. 主推理由
+4. 排序/上架建议
+5. 套餐或组合建议
+6. 执行步骤
+7. 风险提醒
+要求：适合直接填入商品表单，避免夸大承诺，优先解决缺图、缺描述、售罄、低库存、排序靠后等问题。`, merchant.Name, scenario, customerTag, strings.TrimSpace(req.ProductName), goal, stats)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
+		defer cancel()
+		start := time.Now()
+		result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+		if err != nil {
+			_ = s.recordAIUsage(merchantID, scenario, nil, err, time.Since(start))
+			return nil, err
+		}
+		result.Structured = buildAIMarketingStructuredSections(result.Content, scenario)
+		_ = s.recordAIUsage(merchantID, scenario, result, nil, time.Since(start))
+		return result, nil
+	}
 
 	systemPrompt := "你是本地生活商家 AI 经营顾问，擅长餐饮、零售、服务业的低成本获客、复购和裂变活动。请输出中文，内容必须克制、真实、可直接落地。优先返回 JSON，格式为：{\"title\":\"活动标题\",\"social_copy\":\"朋友圈或社群文案\",\"coupon_suggestion\":\"优惠建议\",\"steps\":[\"步骤1\",\"步骤2\",\"步骤3\"],\"risk_notes\":\"风险与成本提醒\"}。如果不能返回 JSON，也必须按活动标题、传播文案、优惠建议、执行步骤、风险提醒分段输出。"
 	userPrompt := fmt.Sprintf(`商家名称：%s
@@ -1562,11 +1593,49 @@ func parseStructuredAIJSON(content, scenario string) []AIOutputSection {
 		Steps            []string `json:"steps"`
 		RiskNotes        string   `json:"risk_notes"`
 		ProductAdvice    string   `json:"product_advice"`
+		ProductTitle     string   `json:"product_title"`
+		ProductDesc      string   `json:"product_description"`
+		MainReason       string   `json:"main_reason"`
+		SortSuggestion   string   `json:"sort_suggestion"`
+		BundleSuggestion string   `json:"bundle_suggestion"`
 	}
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
 		return nil
 	}
 	sections := []AIOutputSection{}
+	if isProductAIScenario(scenario) {
+		if text := strings.TrimSpace(data.ProductTitle); text != "" {
+			sections = append(sections, aiSection("product_title", "商品标题", text, text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.Title); text != "" && strings.TrimSpace(data.ProductTitle) == "" {
+			sections = append(sections, aiSection("product_title", "商品标题", text, text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.ProductDesc); text != "" {
+			sections = append(sections, aiSection("product_description", "商品描述", "可填入商品详情", text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.MainReason); text != "" {
+			sections = append(sections, aiSection("main_reason", "主推理由", "顾客为什么应该优先看到它", text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.SortSuggestion); text != "" {
+			sections = append(sections, aiSection("sort_suggestion", "排序建议", "上架与展示顺序", text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.BundleSuggestion); text != "" {
+			sections = append(sections, aiSection("bundle_suggestion", "套餐建议", "适合组合售卖的方向", text, text, "product"))
+		}
+		if len(data.Steps) > 0 {
+			text := strings.Join(data.Steps, "\n")
+			sections = append(sections, aiSection("steps", "执行步骤", "下一步动作", text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.ProductAdvice); text != "" {
+			sections = append(sections, aiSection("product", "商品优化", "商品/菜单建议", text, text, "product"))
+		}
+		if text := strings.TrimSpace(data.RiskNotes); text != "" {
+			sections = append(sections, aiSection("risk", "风险提醒", "发布前需要注意", text, text, "none"))
+		}
+		if len(sections) > 0 {
+			return sections
+		}
+	}
 	if text := strings.TrimSpace(data.Title); text != "" {
 		sections = append(sections, aiSection("title", "活动标题", text, text, text, structuredActionForScenario("title", scenario)))
 	}
@@ -1593,6 +1662,50 @@ func parseStructuredAIText(content, scenario string) []AIOutputSection {
 	text := strings.TrimSpace(content)
 	if text == "" {
 		return nil
+	}
+	if isProductAIScenario(scenario) {
+		productRules := []struct {
+			Key    string
+			Label  string
+			Title  string
+			Action string
+			Names  []string
+		}{
+			{"product_title", "商品标题", "商品标题建议", "product", []string{"商品标题", "标题建议", "商品名称"}},
+			{"product_description", "商品描述", "可填入商品详情", "product", []string{"商品描述", "描述草稿", "详情文案"}},
+			{"main_reason", "主推理由", "顾客为什么应该优先看到它", "product", []string{"主推理由", "卖点", "推荐理由"}},
+			{"sort_suggestion", "排序建议", "上架与展示顺序", "product", []string{"排序", "上架", "展示顺序"}},
+			{"bundle_suggestion", "套餐建议", "适合组合售卖的方向", "product", []string{"套餐", "组合", "搭配"}},
+			{"steps", "执行步骤", "下一步动作", "product", []string{"执行步骤", "步骤", "下一步", "动作"}},
+			{"risk", "风险提醒", "发布前需要注意", "none", []string{"风险", "成本", "提醒"}},
+		}
+		sections := []AIOutputSection{}
+		for _, rule := range productRules {
+			if value := extractAISectionText(text, rule.Names); value != "" {
+				sections = append(sections, aiSection(rule.Key, rule.Label, rule.Title, value, value, rule.Action))
+			}
+		}
+		if len(sections) > 0 {
+			return sections
+		}
+		chunks := strings.Split(text, "\n\n")
+		labels := []string{"商品标题", "商品描述", "主推理由", "排序建议", "套餐建议", "风险提醒"}
+		for idx, chunk := range chunks {
+			chunk = strings.TrimSpace(chunk)
+			if chunk == "" {
+				continue
+			}
+			label := labels[minInt(idx, len(labels)-1)]
+			action := "product"
+			if strings.Contains(label, "风险") {
+				action = "none"
+			}
+			sections = append(sections, aiSection(fmt.Sprintf("product_fallback_%d", idx), label, label, chunk, chunk, action))
+			if len(sections) >= 6 {
+				break
+			}
+		}
+		return sections
 	}
 	rules := []struct {
 		Key    string
@@ -1687,6 +1800,14 @@ func aiSection(key, label, title, text, copyText, action string) AIOutputSection
 		Copy:   strings.TrimSpace(copyText),
 		Action: action,
 	}
+}
+
+func isProductAIScenario(scenario string) bool {
+	lower := strings.ToLower(strings.TrimSpace(scenario))
+	if strings.Contains(lower, "product") || strings.Contains(lower, "menu") || strings.Contains(lower, "bundle") {
+		return true
+	}
+	return strings.Contains(scenario, "商品") || strings.Contains(scenario, "菜单") || strings.Contains(scenario, "套餐")
 }
 
 func structuredActionForScenario(name, scenario string) string {

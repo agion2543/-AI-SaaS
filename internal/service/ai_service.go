@@ -224,6 +224,28 @@ func ceilTokenCost(tokens int, rateCentsPerMillion int64) int64 {
 }
 
 func fallbackMarketingCopy(userPrompt string) string {
+	lowerPrompt := strings.ToLower(userPrompt)
+	if strings.Contains(lowerPrompt, "product") || strings.Contains(lowerPrompt, "menu") || strings.Contains(lowerPrompt, "bundle") {
+		return `【AI 商品优化建议】
+
+商品标题建议：把商品名称改成“招牌主推 + 规格/场景”的结构，例如“招牌双人套餐”“午市轻食组合”“门店热卖单品”。
+
+商品描述草稿：突出商品适合谁、解决什么需求、口味/规格/服务内容是什么。描述控制在 40-80 字，避免夸大承诺，适合直接填入顾客扫码页。
+
+主推理由：优先把有价格、有图片、描述完整、履约稳定的商品排到前面；缺图或库存不稳定的商品先不要放在首屏。
+
+排序建议：将招牌、套餐、高毛利和复购商品排序值调到 10-30；缺图、售罄、低库存商品暂时排后或下架维护。
+
+套餐建议：选择 1 个主商品 + 1 个高频搭配商品组成轻套餐，先用小幅优惠测试，不要一次性做过大折扣。
+
+执行步骤：
+1. 先补齐前 3 个主推商品的图片、描述和价格。
+2. 把主推商品排序调到 10、20、30。
+3. 对售罄或低库存商品先下架或标注库存。
+4. 观察 3-7 天点击、下单和退款情况，再决定是否扩大套餐。
+
+风险提醒：商品描述不要承诺无法稳定履约的服务；套餐优惠先小范围测试，避免利润被折扣吃掉。`
+	}
 	target := "新客与复购顾客"
 	if strings.Contains(userPrompt, "沉睡") || strings.Contains(userPrompt, "召回") {
 		target = "沉睡顾客"
