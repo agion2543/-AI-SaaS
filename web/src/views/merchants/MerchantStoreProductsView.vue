@@ -297,6 +297,10 @@
             </div>
           </div>
         </el-form-item>
+        <div v-if="aiDraftNote" class="ai-draft-note">
+          <strong>AI 商品优化提示</strong>
+          <p>{{ aiDraftNote }}</p>
+        </div>
         <div class="publish-checks">
           <div class="check-head">
             <span>上架前检查</span>
@@ -383,6 +387,7 @@ const batchCategoryVisible = ref(false)
 const dialogMode = ref('create')
 const editingId = ref(null)
 const selectedProducts = ref([])
+const aiDraftNote = ref('')
 
 const filters = reactive({
   keyword: '',
@@ -686,6 +691,7 @@ const resetForm = () => {
     status: 'active'
   })
   editingId.value = null
+  aiDraftNote.value = ''
 }
 
 const openCreate = () => {
@@ -704,10 +710,15 @@ const applyAIProductDraft = () => {
     resetForm()
     form.name = String(draft.name || '').slice(0, 80) || 'AI 商品草稿'
     form.category = normalizeCategory(draft.category || defaultCategory)
-    form.description = String(draft.description || draft.ai_note || '').slice(0, 500)
+    form.description = String(draft.description || draft.main_reason || '').slice(0, 500)
     form.price_yuan = Number(draft.price_yuan || 0)
-    form.sort = 20
+    form.sort = Number(draft.sort || 20)
     form.status = 'active'
+    aiDraftNote.value = [
+      draft.sort_hint ? `排序建议：${draft.sort_hint}` : '',
+      draft.bundle_hint ? `组合建议：${draft.bundle_hint}` : '',
+      draft.ai_note ? `补充说明：${draft.ai_note}` : ''
+    ].filter(Boolean).join('\n')
     dialogVisible.value = true
     sessionStorage.removeItem('merchant_ai_product_draft')
     router.replace(`/merchant/stores/${storeId}/products`)
@@ -725,6 +736,7 @@ const openCustomerPreview = () => {
 const openEdit = (row) => {
   dialogMode.value = 'edit'
   editingId.value = row.id
+  aiDraftNote.value = ''
   Object.assign(form, {
     name: row.name || '',
     category: normalizeCategory(row.category),
@@ -1319,6 +1331,27 @@ onMounted(load)
 
 .wide-input {
   width: 100%;
+}
+
+.ai-draft-note {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #475569;
+  white-space: pre-line;
+}
+
+.ai-draft-note strong {
+  color: #1d4ed8;
+}
+
+.ai-draft-note p {
+  margin: 0;
+  line-height: 1.65;
 }
 
 .publish-checks {

@@ -753,12 +753,49 @@ const prefillShareFromStructured = (item = pickStructuredItem('share')) => {
   router.push('/merchant/share?ai_prefill=1')
 }
 
+const productSection = (keys = [], labels = []) => structuredOutput.value.find((section) => {
+  const key = String(section?.key || '').toLowerCase()
+  const label = String(section?.label || section?.title || '')
+  return keys.some((item) => key.includes(String(item).toLowerCase())) ||
+    labels.some((item) => label.includes(String(item)))
+})
+
+const productSectionText = (keys = [], labels = [], max = 500) => {
+  const section = productSection(keys, labels)
+  return textValue(section?.copy || section?.text || section?.title || '', max)
+}
+
+const inferProductSort = (hint = '') => {
+  const raw = String(hint || '')
+  const matched = raw.match(/(?:排序|sort|调到|设为|设置为)[^\d]*(\d{1,3})/i)
+  if (matched) return Math.min(100, Math.max(1, Number(matched[1])))
+  if (/主推|优先|首屏|靠前|前面|置顶/.test(raw)) return 20
+  if (/下架|售罄|缺图|低库存|靠后/.test(raw)) return 100
+  return 20
+}
+
 const prefillProductFromStructured = (item = pickStructuredItem('product')) => {
+  const titleText = productSectionText(['product_title', 'title'], ['商品标题', '标题'], 120)
+  const descriptionText = productSectionText(['product_description', 'description'], ['商品描述', '描述'], 500)
+  const mainReason = productSectionText(['main_reason', 'reason', 'selling_point'], ['主推理由', '卖点', '推荐理由'], 500)
+  const sortSuggestion = productSectionText(['sort_suggestion', 'sort'], ['排序建议', '排序'], 500)
+  const bundleSuggestion = productSectionText(['bundle_suggestion', 'bundle'], ['组合建议', '套餐建议', '搭配建议'], 500)
+  const fallbackText = textValue(item?.copy || item?.text || aiResult.value.content || copyForm.goal, 500)
   saveAIDraft('merchant_ai_product_draft', {
-    name: textValue(route.query.product || item?.title || copyForm.product_name || '', 80),
-    description: textValue(item?.copy || item?.text || aiResult.value.content || copyForm.goal, 500),
+    name: textValue(route.query.product || titleText || item?.title || copyForm.product_name || '', 80),
+    description: textValue(descriptionText || mainReason || fallbackText, 500),
     category: textValue(route.query.category || '推荐商品', 40),
-    ai_note: textValue(item?.text || item?.copy || aiResult.value.content || '', 800)
+    sort: inferProductSort(sortSuggestion || mainReason),
+    main_reason: mainReason,
+    sort_hint: sortSuggestion,
+    bundle_hint: bundleSuggestion,
+    ai_note: textValue([
+      titleText ? `商品标题：${titleText}` : '',
+      descriptionText ? `商品描述：${descriptionText}` : '',
+      mainReason ? `主推理由：${mainReason}` : '',
+      sortSuggestion ? `排序建议：${sortSuggestion}` : '',
+      bundleSuggestion ? `组合建议：${bundleSuggestion}` : ''
+    ].filter(Boolean).join('\n') || item?.text || item?.copy || aiResult.value.content || '', 1000)
   })
   const targetStoreId = Number(route.query.store_id || route.query.storeId || 0)
   if (targetStoreId) {
