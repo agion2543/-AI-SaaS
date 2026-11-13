@@ -9,6 +9,13 @@
       @click-left="goBack"
     />
 
+    <van-notice-bar v-if="isSyntheticPreview" type="warning" left-icon="info-o" :scrollable="false">
+      合成演示数据 · 非真实交易
+    </van-notice-bar>
+    <van-notice-bar v-if="paymentSetupUnavailable && !isConfirmedPaid" type="warning" left-icon="warning-o" :scrollable="false">
+      支付入口暂不可用 · 仍未确认收款
+    </van-notice-bar>
+
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <van-loading type="spinner" size="40px">加载中...</van-loading>
@@ -28,7 +35,8 @@
       <van-cell-group inset title="订单信息">
         <van-cell title="订单编号">
           <template #value>
-            <span class="order-no" @click="copyOrderNo">{{ order.order_no }}</span>
+            <span class="order-no">{{ order.order_no }}</span>
+            <van-button size="mini" plain type="primary" @click="copyOrderNo">复制安全链接</van-button>
           </template>
         </van-cell>
         <van-cell title="下单时间" :value="formatTime(order.created_at)" />
@@ -47,22 +55,38 @@
             <span class="item-price">¥{{ formatPrice(item.price * item.quantity) }}</span>
           </template>
         </van-cell>
-        <van-cell title="实付金额">
+        <van-cell :title="isConfirmedPaid ? '实付金额' : '应付金额'">
           <template #value>
-            <span class="final-price">¥{{ formatPrice(order.amount) }}</span>
+            <span class="final-price">¥{{ formatPrice(payableAmount) }}</span>
           </template>
         </van-cell>
+        <van-cell title="收款状态" :value="paymentStatusText" />
       </van-cell-group>
 
       <!-- 订单备注 -->
-      <van-cell-group v-if="order.remark" inset title="备注">
-        <van-cell :value="order.remark" />
+      <van-cell-group v-if="order.customer_note || order.remark" inset title="备注">
+        <van-cell :value="order.customer_note || order.remark" />
       </van-cell-group>
 
       <!-- 支付信息 -->
       <van-cell-group v-if="order.paid_at" inset title="支付信息">
-        <van-cell title="支付方式" :value="getPayTypeText(order.pay_type)" />
+        <van-cell title="支付方式" :value="getPayTypeText(order.payment_channel || order.pay_type)" />
         <van-cell title="支付时间" :value="formatTime(order.paid_at)" />
+      </van-cell-group>
+
+      <van-cell-group v-if="canUseMerchantQr" inset title="商户自有收款码">
+        <van-cell title="应付金额" :value="`¥${formatPrice(payableAmount)}`" />
+        <div class="merchant-qr-options">
+          <div v-for="option in merchantPayOptions" :key="option.key" class="merchant-qr-option">
+            <strong>{{ option.label }}</strong>
+            <img :src="option.value" :alt="option.label" />
+          </div>
+        </div>
+        <p class="manual-payment-note">这是门店配置的商户自有收款码，款项直接付给门店，平台不代收。付款后点击下方按钮仅通知门店核对；门店确认实际到账前，系统不会把订单计为已收款。</p>
+        <van-button type="primary" block :loading="paying" @click="markPaid">已转账，通知门店核对</van-button>
+      </van-cell-group>
+      <van-cell-group v-else-if="showMerchantQrMissing" inset title="门店收款">
+        <van-cell title="收款码未配置" value="请联系门店核对付款方式" />
       </van-cell-group>
 
       <!-- 倒计时（待支付状态） -->
@@ -76,118 +100,87 @@
 
       <!-- 操作按钮 -->
       <div class="action-buttons">
-        <!-- 待支付状态 -->
-        <template v-if="order.status === 'pending'">
-          <van-button type="primary" block @click="handlePayment">立即支付</van-button>
-          <van-button plain block @click="cancelOrder">取消订单</van-button>
+        <template v-if="order.status === 'pending' && payableAmount > 0">
+          <van-button type="primary" block :loading="paying" @click="handlePayment">继续支付</van-button>
         </template>
-
-        <!-- 已支付状态 -->
-        <template v-else-if="order.status === 'paid'">
-          <van-button type="primary" plain block @click="viewStore">再来一单</van-button>
+        <template v-else-if="order.status === 'payment_confirming'">
+          <van-button type="warning" plain block disabled>等待门店确认到账</van-button>
         </template>
-
-        <!-- 已完成状态 -->
+        <template v-else-if="order.status === 'failed' && payableAmount > 0">
+          <van-button type="primary" block :loading="paying" @click="handlePayment">重新发起支付</van-button>
+        </template>
         <template v-else-if="order.status === 'completed'">
           <van-button type="primary" block @click="viewStore">再来一单</van-button>
           <van-button plain block @click="rateOrder">评价</van-button>
         </template>
-
-        <!-- 已取消/已退款 -->
-        <template v-else-if="['cancelled', 'refunded'].includes(order.status)">
-          <van-button type="primary" block @click="viewStore">重新下单</van-button>
+        <template v-else-if="['closed', 'cancelled', 'refunded'].includes(order.status)">
+          <van-button type="primary" block @click="viewStore">返回门店</van-button>
         </template>
+        <van-button v-if="order.store_id && !['completed', 'closed', 'cancelled'].includes(order.status)" plain block @click="viewStore">联系门店 / 查看门店</van-button>
       </div>
     </template>
 
     <van-empty v-else description="订单不存在" />
-
-    <!-- 取消订单弹窗 -->
-    <van-dialog
-      v-model:show="showCancelDialog"
-      title="取消订单"
-      show-cancel-button
-      @confirm="confirmCancel"
-    >
-      <div class="cancel-dialog-content">
-        <p>确定要取消该订单吗？</p>
-        <p v-if="order && order.status === 'pending'" class="warning-text">请在支付前完成取消</p>
-      </div>
-    </van-dialog>
-
-    <!-- 支付弹窗（模拟支付） -->
-    <van-popup v-model:show="showPaymentDialog" position="bottom" style="height: 50%;">
-      <div class="payment-dialog">
-        <div class="payment-header">
-          <span>确认支付</span>
-          <van-icon name="cross" @click="showPaymentDialog = false" />
-        </div>
-        <div class="payment-amount">
-          <span class="currency">¥</span>
-          <span class="amount">{{ formatPrice(order?.amount || 0) }}</span>
-        </div>
-        <div class="payment-methods">
-          <van-radio-group v-model="selectedPayMethod">
-            <van-cell-group>
-              <van-cell title="微信支付" clickable @click="selectedPayMethod = 'wechat'">
-                <template #icon>
-                  <van-icon name="wechat-pay" size="20" color="#07c169" />
-                </template>
-                <template #right-icon>
-                  <van-radio name="wechat" />
-                </template>
-              </van-cell>
-              <van-cell title="支付宝" clickable @click="selectedPayMethod = 'alipay'">
-                <template #icon>
-                  <van-icon name="../../assets/alipay.png" size="20" />
-                </template>
-                <template #right-icon>
-                  <van-radio name="alipay" />
-                </template>
-              </van-cell>
-            </van-cell-group>
-          </van-radio-group>
-        </div>
-        <div class="payment-confirm">
-          <van-button type="primary" block :loading="paying" @click="confirmPayment">
-            确认支付
-          </van-button>
-        </div>
-      </div>
-    </van-popup>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
-import { fetchCustomerOrder, createCustomerStoreOrder } from '@/api/modules'
+import { showToast, showSuccessToast, showFailToast, showConfirmDialog } from 'vant'
+import { fetchCustomerOrder, markCustomerOrderPaid, retryCustomerOrderPayment } from '@/api/modules'
+import { captureCustomerOrderAccessToken, getCustomerOrderAccessToken, mobileCustomerOrderAccessPath } from '@/utils/customerOrderAccess'
+import { isCustomerOrderPaid } from '@/utils/mobileCustomerOrder'
 
 const route = useRoute()
 const router = useRouter()
 const orderNo = route.params.orderNo
+const isSyntheticPreview = import.meta.env.DEV && route.query.synthetic === '1'
+const paymentSetupUnavailable = ref(route.query.payment_setup_unavailable === '1')
 
 // 状态
 const loading = ref(true)
 const order = ref(null)
-const showCancelDialog = ref(false)
-const showPaymentDialog = ref(false)
-const selectedPayMethod = ref('wechat')
 const paying = ref(false)
+const paymentConfig = ref({})
 let pollTimer = null
-
-const defaultProductImg = 'https://via.placeholder.com/100x100?text=商品'
+let pollAttempts = 0
+const pollableStatuses = ['pending', 'submitted', 'payment_confirming', 'received', 'accepted', 'preparing']
 
 // 计算属性
+const payableAmount = computed(() => Number(order.value?.total_amount ?? order.value?.amount ?? 0))
+const isConfirmedPaid = computed(() => isCustomerOrderPaid(order.value) && payableAmount.value > 0)
+const paymentStatusText = computed(() => {
+  if (payableAmount.value <= 0) return '无需付款'
+  if (order.value?.status === 'payment_confirming') return '等待门店确认到账'
+  if (isConfirmedPaid.value) return '已确认收款'
+  if (order.value?.status === 'failed') return '支付未完成'
+  if (['pending', 'submitted', 'preparing'].includes(order.value?.status)) return '待付款或核对'
+  return '待核对'
+})
+const merchantPayOptions = computed(() => {
+  const options = []
+  if (paymentConfig.value?.alipay_qr_code) options.push({ key: 'alipay', label: '商户支付宝收款码', value: paymentConfig.value.alipay_qr_code })
+  if (paymentConfig.value?.wechat_qr_code) options.push({ key: 'wechat', label: '商户微信收款码', value: paymentConfig.value.wechat_qr_code })
+  return options
+})
+const canUseMerchantQr = computed(() => payableAmount.value > 0 && ['submitted', 'preparing'].includes(order.value?.status) && !order.value?.paid_at && merchantPayOptions.value.length > 0)
+const showMerchantQrMissing = computed(() => payableAmount.value > 0 && ['submitted', 'preparing'].includes(order.value?.status) && !order.value?.paid_at && merchantPayOptions.value.length === 0)
+
 const statusClass = computed(() => {
   const statusMap = {
     pending: 'status-pending',
+    submitted: 'status-pending',
+    payment_confirming: 'status-pending',
     paid: 'status-paid',
+    received: 'status-paid',
+    accepted: 'status-paid',
     preparing: 'status-preparing',
     ready: 'status-ready',
     completed: 'status-completed',
     cancelled: 'status-cancelled',
+    closed: 'status-cancelled',
+    failed: 'status-cancelled',
     refunded: 'status-refunded'
   }
   return statusMap[order.value?.status] || ''
@@ -196,11 +189,17 @@ const statusClass = computed(() => {
 const statusIcon = computed(() => {
   const iconMap = {
     pending: 'clock-o',
+    submitted: 'clock-o',
+    payment_confirming: 'clock-o',
     paid: 'paid',
+    received: 'paid',
+    accepted: 'orders-o',
     preparing: 'orders-o',
     ready: 'bag-o',
     completed: 'success',
     cancelled: 'cross',
+    closed: 'cross',
+    failed: 'warning-o',
     refunded: 'refund-o'
   }
   return iconMap[order.value?.status] || 'info-o'
@@ -209,24 +208,39 @@ const statusIcon = computed(() => {
 const statusText = computed(() => {
   const textMap = {
     pending: '待支付',
-    paid: '已支付',
+    submitted: payableAmount.value <= 0 ? '订单已提交，无需付款' : '订单已提交',
+    payment_confirming: '等待门店确认收款',
+    paid: '已确认收款',
+    received: '已确认收款，待接单',
+    accepted: '商家已接单',
     preparing: '制作中',
     ready: '待取餐',
     completed: '已完成',
     cancelled: '已取消',
+    closed: '订单已关闭',
+    failed: '支付未完成',
     refunded: '已退款'
   }
-  return textMap[order.value?.status] || '未知状态'
+  return textMap[order.value?.status] || '订单处理中'
 })
 
 const statusDesc = computed(() => {
+  if (paymentSetupUnavailable.value && !isConfirmedPaid.value && payableAmount.value > 0) {
+    return '支付宝付款入口暂不可用；订单尚未确认收款，可稍后重试或联系门店核对。'
+  }
   const descMap = {
     pending: '请尽快完成支付',
-    paid: '商家正在准备中',
+    submitted: payableAmount.value <= 0 ? '本单应付金额为 0 元，不计入实收' : '订单已提交，请按门店提供的方式付款或核对',
+    payment_confirming: '你已通知门店核对到账；门店确认前，系统不会计为已收款',
+    paid: '门店已确认收款',
+    received: '门店已确认收款，等待接单',
+    accepted: '门店已接单，正在处理',
     preparing: '您的订单正在制作中',
     ready: '订单已准备好，请取餐',
     completed: '感谢您的光临，欢迎再次光临',
     cancelled: '订单已取消',
+    closed: '订单已关闭',
+    failed: '尚未确认付款；可重新发起支付',
     refunded: '退款已原路返回'
   }
   return descMap[order.value?.status] || ''
@@ -234,7 +248,7 @@ const statusDesc = computed(() => {
 
 // 方法
 function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
+  return (Number(price ?? 0) / 100).toFixed(2)
 }
 
 function formatTime(time) {
@@ -252,14 +266,22 @@ function getPayTypeText(payType) {
   const typeMap = {
     wechat: '微信支付',
     alipay: '支付宝',
+    merchant_qr: '商户自有收款码（直接付给门店）',
     mock: '模拟支付'
   }
   return typeMap[payType] || payType || '-'
 }
 
 function copyOrderNo() {
-  navigator.clipboard.writeText(order.value.order_no).then(() => {
-    showToast('已复制订单号')
+  const accessToken = getCustomerOrderAccessToken(order.value?.order_no)
+  if (!accessToken) {
+    showToast('缺少订单访问凭证，无法生成安全链接')
+    return
+  }
+  const path = mobileCustomerOrderAccessPath(order.value.order_no, accessToken)
+  const secureLink = `${window.location.origin}${window.location.pathname}#${path}`
+  navigator.clipboard.writeText(secureLink).then(() => {
+    showToast('安全订单链接已复制，请勿公开分享')
   }).catch(() => {
     showToast('复制失败')
   })
@@ -279,17 +301,21 @@ function onCountdownFinish() {
 }
 
 async function loadOrderData() {
-  loading.value = true
+  if (!order.value) loading.value = true
   try {
-    const res = await fetchCustomerOrder(orderNo)
-    order.value = res.data
-    // 如果订单已支付，停止轮询
-    if (order.value?.status !== 'pending') {
-      stopPolling()
+    const accessToken = getCustomerOrderAccessToken(orderNo)
+    if (!accessToken) {
+      order.value = null
+      showToast('订单链接缺少访问凭证，旧的仅含订单号链接已停用')
+      return
     }
+    const res = await fetchCustomerOrder(orderNo)
+    order.value = res.data.order || res.data
+    paymentConfig.value = res.data.payment_config || {}
+    if (!pollableStatuses.includes(order.value?.status)) stopPolling()
   } catch (e) {
     console.error('加载订单失败:', e)
-    showToast('加载失败')
+    showToast(e.response?.status === 404 ? '订单不存在或访问凭证无效' : '加载失败')
   } finally {
     loading.value = false
   }
@@ -297,11 +323,15 @@ async function loadOrderData() {
 
 function startPolling() {
   stopPolling()
+  pollAttempts = 0
   pollTimer = setInterval(() => {
-    if (order.value?.status === 'pending') {
-      loadOrderData()
+    if (!order.value || !pollableStatuses.includes(order.value.status) || pollAttempts >= 40) {
+      stopPolling()
+      return
     }
-  }, 5000) // 每5秒轮询一次
+    pollAttempts += 1
+    loadOrderData()
+  }, 5000)
 }
 
 function stopPolling() {
@@ -309,43 +339,67 @@ function stopPolling() {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  pollAttempts = 0
 }
 
-function handlePayment() {
-  showPaymentDialog.value = true
-}
-
-async function confirmPayment() {
+async function handlePayment() {
+  if (!orderNo || !['pending', 'failed'].includes(order.value?.status) || payableAmount.value <= 0 || paying.value) return
   paying.value = true
   try {
-    // 模拟支付成功
-    // 实际项目中这里应该调用微信/支付宝 SDK
-    await new Promise(resolve => setTimeout(resolve, 1500))
-
-    showSuccessToast('支付成功')
-    showPaymentDialog.value = false
-    await loadOrderData()
-    startPolling()
+    const res = await retryCustomerOrderPayment(orderNo, { pay_mode: 'page' })
+    order.value = res.data.order || order.value
+    const payment = res.data.payment || {}
+    const paymentUrl = payment.payment_url || payment.payment_form || payment.form
+    if (paymentUrl) {
+      if (paymentUrl.trim().startsWith('<form')) {
+        document.open()
+        document.write(paymentUrl)
+        document.close()
+        document.querySelector('form')?.submit()
+      } else {
+        window.location.href = paymentUrl
+      }
+      return
+    }
+    showFailToast('支付渠道未返回有效付款入口；订单仍未确认收款')
   } catch (e) {
-    showFailToast('支付失败，请重试')
+    showFailToast(e.response?.data?.message || '发起支付失败，订单仍未确认收款')
   } finally {
     paying.value = false
   }
 }
 
-function cancelOrder() {
-  showCancelDialog.value = true
+async function markPaid() {
+  if (!canUseMerchantQr.value || paying.value) return
+  try {
+    await showConfirmDialog({
+      title: '通知门店核对到账',
+      message: `请确认已完成转账，金额为 ¥${formatPrice(payableAmount.value)}。提交后只会通知门店核对，不会自动认定收款。`,
+      confirmButtonText: '确认已转账',
+      cancelButtonText: '返回检查'
+    })
+  } catch {
+    return
+  }
+  paying.value = true
+  try {
+    const res = await markCustomerOrderPaid(orderNo)
+    order.value = res.data.order || order.value
+    paymentConfig.value = res.data.payment_config || paymentConfig.value
+    showSuccessToast('已通知门店核对到账；门店确认前不会计为实收')
+    startPolling()
+  } catch (e) {
+    showFailToast(e.response?.data?.message || '通知门店失败')
+  } finally {
+    paying.value = false
+  }
 }
 
-async function confirmCancel() {
-  try {
-    // 调用取消订单接口
-    await new Promise(resolve => setTimeout(resolve, 500))
-    showSuccessToast('订单已取消')
-    await loadOrderData()
-  } catch (e) {
-    showFailToast('取消失败')
-  }
+function removeAccessTokenFromRoute() {
+  if (!Object.prototype.hasOwnProperty.call(route.query, 'access_token')) return
+  const query = { ...route.query }
+  delete query.access_token
+  router.replace({ path: route.path, query, hash: route.hash }).catch(() => {})
 }
 
 function viewStore() {
@@ -358,9 +412,14 @@ function rateOrder() {
   showToast('评价功能开发中')
 }
 
-onMounted(() => {
-  loadOrderData()
-  // 如果是待支付状态，开始轮询
+onMounted(async () => {
+  const accessToken = captureCustomerOrderAccessToken(orderNo, route)
+  if (!accessToken) {
+    await loadOrderData()
+    return
+  }
+  removeAccessTokenFromRoute()
+  await loadOrderData()
   startPolling()
 })
 
@@ -456,51 +515,32 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.cancel-dialog-content {
-  padding: 20px;
-  text-align: center;
-}
-
-.warning-text {
-  color: #ee0a24;
-  font-size: 12px;
-  margin-top: 8px;
-}
-
-.payment-dialog {
-  padding: 20px;
-}
-
-.payment-header {
+.merchant-qr-options {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 16px;
+}
+
+.merchant-qr-option {
+  flex: 1 1 140px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  font-weight: bold;
-  font-size: 16px;
-  margin-bottom: 20px;
+  gap: 8px;
 }
 
-.payment-amount {
-  text-align: center;
-  padding: 20px 0;
+.merchant-qr-option img {
+  width: 180px;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
-.payment-amount .currency {
-  font-size: 20px;
-  color: #333;
-}
-
-.payment-amount .amount {
-  font-size: 36px;
-  font-weight: bold;
-  color: #333;
-}
-
-.payment-methods {
-  margin-bottom: 20px;
-}
-
-.payment-confirm {
-  padding-top: 10px;
+.manual-payment-note {
+  padding: 0 16px;
+  color: #8a5a00;
+  font-size: 13px;
+  line-height: 1.6;
 }
 </style>

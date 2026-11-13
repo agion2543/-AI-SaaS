@@ -58,20 +58,20 @@
                 :price="formatPrice(product.price)"
                 :title="product.name"
                 :desc="product.description || ''"
-                :thumb="product.image || defaultProductImg"
+                :thumb="product.image_url || product.image || defaultProductImg"
                 @click="showProductDetail(product)"
               >
                 <template #tags>
-                  <van-tag v-if="product.stock <= 0" type="danger">已售罄</van-tag>
-                  <van-tag v-else-if="product.stock <= 5" type="warning">仅剩{{ product.stock }}</van-tag>
+                  <van-tag v-if="isProductSoldOut(product)" type="danger">已售罄</van-tag>
+                  <van-tag v-else-if="isProductLowStock(product)" type="warning">仅剩{{ product.stock }}</van-tag>
                   <van-tag v-if="product.discount" type="success">立减{{ product.discount }}元</van-tag>
                 </template>
                 <template #num>
                   <van-stepper
                     v-model="cart[product.id]"
                     :min="0"
-                    :max="product.stock"
-                    :disabled="product.stock <= 0"
+                    :max="productStockLimit(product)"
+                    :disabled="isProductSoldOut(product)"
                     @change="(val) => updateCart(product, val)"
                     @click.stop
                   />
@@ -90,7 +90,7 @@
       <!-- 底部购物车栏 -->
       <van-submit-bar
         v-if="totalCount > 0"
-        :price="totalPrice * 100"
+        :price="totalPrice"
         label="合计"
         button-text="去结算"
         suffix-label=""
@@ -132,8 +132,8 @@
             v-for="p in searchResults"
             :key="p.id"
             :title="p.name"
-            :label="formatPrice(p.price)"
-            :thumb="p.image || defaultProductImg"
+            :label="`¥${formatPrice(p.price)}`"
+            :thumb="p.image_url || p.image || defaultProductImg"
             is-link
             @click="showProductDetail(p)"
           />
@@ -146,7 +146,7 @@
     <van-popup v-model:show="showProductPopup" position="bottom" round style="max-height: 70%;">
       <div v-if="currentProduct" class="product-detail">
         <van-image
-          :src="currentProduct.image || defaultProductImg"
+          :src="currentProduct.image_url || currentProduct.image || defaultProductImg"
           width="100%"
           height="200"
           fit="cover"
@@ -155,17 +155,18 @@
           <h3>{{ currentProduct.name }}</h3>
           <p class="product-desc">{{ currentProduct.description || '暂无描述' }}</p>
           <div class="product-meta">
-            <span class="product-price">¥{{ currentProduct.price }}</span>
-            <span v-if="currentProduct.stock > 0" class="product-stock">库存: {{ currentProduct.stock }}</span>
+            <span class="product-price">¥{{ formatPrice(currentProduct.price) }}</span>
+            <span v-if="productStockLimit(currentProduct) === undefined" class="product-stock">库存充足</span>
+            <span v-else-if="currentProduct.stock > 0" class="product-stock">库存: {{ currentProduct.stock }}</span>
             <van-tag v-else type="danger">已售罄</van-tag>
           </div>
         </div>
         <div class="product-actions">
-          <van-stepper v-model="addCount" :min="1" :max="currentProduct.stock" :disabled="currentProduct.stock <= 0" />
+          <van-stepper v-model="addCount" :min="1" :max="productStockLimit(currentProduct)" :disabled="isProductSoldOut(currentProduct)" />
           <van-button
             type="primary"
             size="small"
-            :disabled="currentProduct.stock <= 0"
+            :disabled="isProductSoldOut(currentProduct)"
             @click="addToCartFromDetail"
           >
             加入购物车
@@ -204,6 +205,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast } from 'vant'
 import { fetchCustomerStore, fetchCustomerStoreProducts } from '@/api/modules'
+import { customerResponseList } from '@/utils/mobileCustomerOrder'
 
 const route = useRoute()
 const router = useRouter()
@@ -258,7 +260,22 @@ const cartItems = computed(() => {
 
 // 方法
 function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
+  return (Number(price || 0) / 100).toFixed(2)
+}
+
+function productStockLimit(product) {
+  if (product?.stock === undefined || product?.stock === null) return undefined
+  return Math.max(Number(product.stock || 0), 0)
+}
+
+function isProductSoldOut(product) {
+  const stock = productStockLimit(product)
+  return stock !== undefined && stock <= 0
+}
+
+function isProductLowStock(product) {
+  const stock = productStockLimit(product)
+  return stock !== undefined && stock > 0 && stock <= 5
 }
 
 function getCategoryCount(catId) {
@@ -282,7 +299,8 @@ function showProductDetail(product) {
 function addToCartFromDetail() {
   const product = currentProduct.value
   const newCount = (cart.value[product.id] || 0) + addCount.value
-  cart.value[product.id] = Math.min(newCount, product.stock)
+  const stockLimit = productStockLimit(product)
+  cart.value[product.id] = stockLimit === undefined ? newCount : Math.min(newCount, stockLimit)
   showProductPopup.value = false
   saveCart()
   showSuccessToast('已加入购物车')
@@ -354,10 +372,10 @@ async function loadStoreData() {
       fetchCustomerStoreProducts(storeId)
     ])
 
-    storeInfo.value = storeRes.data || {}
+    storeInfo.value = storeRes.data?.store || storeRes.data || {}
 
     // 处理商品数据，添加分类信息
-    const prods = productsRes.data || []
+    const prods = customerResponseList(productsRes)
     products.value = prods.map(p => ({ ...p, count: 0 }))
 
     // 从商品中提取分类

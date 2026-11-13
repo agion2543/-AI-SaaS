@@ -1,18 +1,27 @@
 <template>
-  <div class="subscription-page">
-    <section class="subscription-hero">
-      <div>
-        <div class="eyebrow">SAAS SUBSCRIPTION</div>
-        <h1>{{ isActive ? '订阅续费与升级' : '开通商家工作台' }}</h1>
-        <p>用一套轻量工具跑通扫码点单、订单处理、财务对账、优惠活动和 AI 经营建议，先把日常经营闭环搭起来。</p>
-      </div>
-      <div class="hero-actions">
-        <el-tag size="large" :type="isActive ? 'success' : 'danger'">
-          {{ isActive ? '订阅有效' : '订阅未开通或已过期' }}
+    <div class="subscription-page">
+      <section class="subscription-hero">
+        <div>
+          <div class="eyebrow">SAAS SUBSCRIPTION</div>
+          <h1>{{ isActive ? '订阅续费与升级' : '开通商家工作台' }}</h1>
+          <p>用一套轻量工具跑通扫码点单、订单处理、财务对账和优惠活动，先把日常经营闭环搭起来。AI 经营模块尚未接入，当前不可用。</p>
+        </div>
+        <div class="hero-actions">
+          <el-tag size="large" :type="isActive ? 'success' : isPaused ? 'warning' : 'danger'">
+            {{ isActive ? '订阅有效' : isPaused ? '订阅已暂停' : '订阅未开通或已过期' }}
         </el-tag>
         <el-button v-if="isActive" type="success" @click="enterWorkspace">进入工作台</el-button>
       </div>
     </section>
+
+    <el-alert
+      v-if="isPaused"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="pauseNotice"
+      description="暂停期间不开放经营数据读取或业务操作；此页保留订阅状态、续费付款和卡密兑换等恢复入口。"
+    />
 
     <el-alert v-if="notice" :title="notice" type="warning" show-icon :closable="false" />
 
@@ -44,7 +53,7 @@
         <div><span>当前套餐</span><strong>{{ currentPlanName }}</strong></div>
         <div><span>服务状态</span><strong>{{ subscriptionState.title }}</strong><small>{{ subscriptionState.hint }}</small></div>
         <div><span>剩余时长</span><strong>{{ remainingDaysText }}</strong></div>
-        <div><span>到期时间</span><strong>{{ formatDateTime(merchant.subscription_expire_at) }}</strong></div>
+          <div><span>到期时间</span><strong>{{ formatDateTime(merchantExpiry) }}</strong></div>
         <div><span>商家状态</span><strong>{{ statusLabel(merchant.status) }}</strong></div>
       </div>
     </section>
@@ -66,13 +75,13 @@
         <div class="plan-top">
           <h3>{{ displayPlanName(plan) }}</h3>
           <div class="plan-tags">
-            <el-tag type="success">完整功能</el-tag>
+            <el-tag type="success">已上线功能</el-tag>
             <el-tag>{{ planBadge(plan) }}</el-tag>
           </div>
         </div>
         <div class="price">¥{{ formatMoney(plan.price_cents) }}</div>
         <p class="plan-desc">{{ planPitch(plan) }}</p>
-        <p class="plan-scope">当前付费版本均可使用完整商家工作台，差异主要是服务周期、付款频率和人工支持方式。</p>
+        <p class="plan-scope">当前付费版本均可使用已上线的商家工作台功能；套餐展示按价格和服务周期区分。AI 经营模块尚未接入，当前不可用。</p>
         <ul class="feature-list">
           <li v-for="feature in planFeatures(plan)" :key="feature">{{ feature }}</li>
         </ul>
@@ -133,6 +142,11 @@ import {
   markMerchantSubscriptionOrderPaid,
   redeemMerchantSubscriptionCard
 } from '../../api/modules'
+import {
+  isMerchantSubscriptionActive,
+  merchantSubscriptionDisplayState,
+  merchantSubscriptionExpiry
+} from '../../utils/merchantSubscriptionState'
 import { useMerchantAuthStore } from '../../stores/merchantAuth'
 
 const route = useRoute()
@@ -155,38 +169,32 @@ const redeeming = ref(false)
 let pollTimer = null
 sessionStorage.removeItem('merchant_subscription_message')
 
-const isActive = computed(() => merchant.value.subscription_expire_at && new Date(merchant.value.subscription_expire_at).getTime() > Date.now())
+const merchantExpiry = computed(() => merchantSubscriptionExpiry(merchant.value))
+const isActive = computed(() => isMerchantSubscriptionActive(merchant.value))
+const isPaused = computed(() => merchant.value.subscription_status === 'paused')
+const pauseNotice = computed(() => merchant.value.subscription_pause_reason
+  ? `平台已暂停商家业务权限。暂停原因：${merchant.value.subscription_pause_reason}`
+  : '平台已暂停商家业务权限，请通过平台支持渠道核实暂停原因。')
 const currentPlanName = computed(() => {
   const found = plans.value.find((item) => item.id === merchant.value.subscription_plan_id)
   if (found) return displayPlanName(found)
   return merchant.value.subscription_plan ? displayPlanName({ name: merchant.value.subscription_plan }) : '未开通'
 })
 const remainingDays = computed(() => {
-  if (!merchant.value.subscription_expire_at) return null
-  const diff = new Date(merchant.value.subscription_expire_at).getTime() - Date.now()
-  return Math.ceil(diff / 86400000)
-})
+    if (!merchantExpiry.value) return null
+    const diff = new Date(merchantExpiry.value).getTime() - Date.now()
+    return Math.ceil(diff / 86400000)
+  })
 const remainingDaysText = computed(() => {
   if (remainingDays.value === null) return '未开通'
-  if (remainingDays.value < 0) return '已过期'
+  if (merchantExpiry.value && new Date(merchantExpiry.value).getTime() <= Date.now()) return '已过期'
   if (remainingDays.value === 0) return '今天到期'
   return `${remainingDays.value} 天`
 })
-const subscriptionState = computed(() => {
-  if (!merchant.value.subscription_expire_at) {
-    return { title: '未开通', hint: '选择服务版本并完成付款后开通' }
-  }
-  if (remainingDays.value < 0) {
-    return { title: '已过期', hint: '续费后可恢复商家工作台服务' }
-  }
-  if (remainingDays.value <= 7) {
-    return { title: '即将到期', hint: '建议提前续费，避免影响使用' }
-  }
-  return { title: '服务中', hint: '当前订阅可正常使用' }
-})
+const subscriptionState = computed(() => merchantSubscriptionDisplayState(merchant.value))
 const paymentStatusText = computed(() => currentOrderNo.value ? '待平台确认到账' : '等待生成付款单')
 const payFlowSteps = [
-  { label: '01', title: '选择服务版本', text: '按月、按年或技术支持方式开通，当前付费版本均保留完整功能。' },
+  { label: '01', title: '选择服务版本', text: '当前付费版本均可使用已上线的商家工作台功能。' },
   { label: '02', title: '扫码付款', text: '使用平台支付宝或微信收款码付款，系统保留订阅付款单。' },
   { label: '03', title: '平台确认', text: '平台确认到账后，订阅订单自动变为已支付并开通或续期。' },
   { label: '04', title: '进入工作台', text: '商家可继续使用扫码下单、订单管理、财务对账和经营工具。' }
@@ -194,7 +202,7 @@ const payFlowSteps = [
 const valueCards = [
   { label: 'ORDER', title: '扫码下单与订单处理', text: '顾客扫码选商品，商家端集中处理待付款、待确认收款、接单和完成。' },
   { label: 'FINANCE', title: '经营看板与财务对账', text: '区分应收、待确认、实收、退款和净收入，每天收店前更容易核账。' },
-  { label: 'GROWTH', title: '优惠活动与 AI 建议', text: '从商品、活动、复盘建议和营销文案入手，帮助小商家低成本试运营。' }
+  { label: 'GROWTH', title: '优惠活动与经营复盘', text: '从商品和活动入手，帮助小商家低成本试运营；AI 经营建议暂未开放。' }
 ]
 const platformQrItems = computed(() => [
   { key: 'alipay', label: '支付宝收款码', value: platformPayment.value.platform_alipay_qr_code || '' },
@@ -318,10 +326,10 @@ const formatDateTime = (value) => value ? String(value).replace('T', ' ').slice(
 const statusLabel = (status) => ({ active: '正常', pending: '待审核', suspended: '已禁用' }[status] || status || '-')
 const planBadge = (plan) => Number(plan.duration_days || 0) > 0 ? `${plan.duration_days} 天` : '人工服务'
 const planPitch = (plan) => Number(plan.duration_days || 0) >= 365
-  ? '适合稳定经营门店，按年开通完整商家工作台服务，减少续费打扰。'
-  : '适合先按月试用，完整体验扫码点单、订单管理和经营对账。'
+  ? '适合稳定经营门店，按年开通当前已上线的商家工作台服务，减少续费打扰。'
+  : '适合先按月试用当前已上线的扫码点单、订单管理和经营对账功能。'
 const planFeatures = (plan) => {
-  const base = ['扫码点单', '订单管理', '财务对账', '商品管理', '优惠活动', 'AI 经营建议']
+  const base = ['扫码点单', '订单管理', '财务对账', '商品管理', '优惠活动']
   if (Number(plan.duration_days || 0) >= 365) return [...base, '年度续费更省心']
   return [...base, '按月灵活续费']
 }

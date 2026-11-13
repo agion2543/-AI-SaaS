@@ -3,7 +3,7 @@
     <PageHero
       eyebrow="MARKETING CENTER"
       title="优惠活动"
-      description="把 AI 经营建议落到真实活动里。发布后的满减、折扣活动会进入顾客扫码页，并影响后续下单实付金额。"
+      description="创建优惠活动并查看真实带单效果。AI 经营建议与自动复盘尚未接入；发布后的活动会进入顾客扫码页并影响实付金额。"
       tone="brand"
     >
       <template #actions>
@@ -143,7 +143,7 @@
                 发布
               </el-button>
               <el-button v-else size="small" type="warning" @click="changeStatus(row, 'inactive')">停用</el-button>
-              <el-button size="small" type="primary" plain @click="reviewPromotionWithAI(row)">AI复盘</el-button>
+              <el-button size="small" type="primary" plain disabled>AI复盘未开放</el-button>
               <el-button size="small" type="danger" plain @click="removePromotion(row)">删除</el-button>
             </div>
           </template>
@@ -315,8 +315,6 @@ const editingId = ref(null)
 const showAiDraftTip = ref(false)
 const aiReviewNote = ref('')
 const aiPrefillNote = ref('')
-const paidStatuses = ['received', 'accepted', 'completed', 'closed']
-
 const form = reactive({
   store_id: null,
   title: '',
@@ -352,7 +350,7 @@ const promotionEffects = computed(() => {
     const bucket = map[promotionId]
     bucket.order_count += 1
     bucket.discount_amount += Number(order.discount_amount || 0)
-    if (paidStatuses.includes(order.status)) {
+    if (Boolean(order.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0) {
       bucket.paid_count += 1
       bucket.revenue_amount += orderPaidAmount(order)
     }
@@ -414,8 +412,8 @@ const marketingActions = computed(() => [
   {
     key: 'ai-review',
     label: '复盘',
-    title: 'AI 复盘活动效果',
-    hint: '带上订单、让利和实收数据生成调整建议',
+    title: 'AI 复盘功能未开放',
+    hint: 'AI 服务接入前，可查看真实活动数据但不能生成自动建议',
     tone: 'primary',
     go: () => router.push({
       path: '/merchant/ai',

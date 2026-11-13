@@ -50,9 +50,10 @@ type UpdateMerchantOrderNoteRequest struct {
 }
 
 type RefundOrderRequest struct {
-	Amount int64  `json:"amount"`
-	Full   bool   `json:"full"`
-	Reason string `json:"reason"`
+	Amount         int64  `json:"amount"`
+	Full           bool   `json:"full"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type PaymentCallbackRequest struct {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type Config struct {
 	InitialAdminPass   string
 	RateLimitPerMinute int
 	MySQLDSN           string
+	DBAutoMigrate      bool
 	FrontendURL        string
 	AlipaySandbox      bool
 	AlipayAppID        string
@@ -50,6 +52,7 @@ func Load() (*Config, error) {
 		InitialAdminPass:   getEnv("INITIAL_ADMIN_PASSWORD", "SaasAdmin@2026!"),
 		RateLimitPerMinute: getEnvAsInt("RATE_LIMIT_PER_MINUTE", 120),
 		MySQLDSN:           getEnv("MYSQL_DSN", "root:123456@tcp(127.0.0.1:3306)/saas_billing?charset=utf8mb4&parseTime=True&loc=Local"),
+		DBAutoMigrate:      getEnvAsBool("DB_AUTO_MIGRATE", true),
 		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:5173"),
 		AlipaySandbox:      getEnvAsBool("ALIPAY_SANDBOX", true),
 		AlipayAppID:        getEnv("ALIPAY_APP_ID", ""),
@@ -65,7 +68,45 @@ func Load() (*Config, error) {
 		AITimeoutSeconds:   getEnvAsInt("AI_TIMEOUT_SECONDS", 20),
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// Validate rejects unsafe development defaults when the service is configured
+// to run in production. Development defaults remain available for local use.
+func (c *Config) Validate() error {
+	if !strings.EqualFold(strings.TrimSpace(c.AppEnv), "production") {
+		return nil
+	}
+
+	if len(c.JWTSecret) < 32 || isPlaceholderValue(c.JWTSecret) || c.JWTSecret == "replace-with-a-very-strong-secret" {
+		return errors.New("unsafe production configuration: JWT_SECRET must be a non-placeholder secret of at least 32 characters")
+	}
+	if len(c.AESSecret) != 32 || isPlaceholderValue(c.AESSecret) || c.AESSecret == "0123456789abcdef0123456789abcdef" {
+		return errors.New("unsafe production configuration: AES_SECRET must be a non-placeholder 32-character secret")
+	}
+	if len(c.InitialAdminPass) < 12 || isPlaceholderValue(c.InitialAdminPass) || c.InitialAdminPass == "SaasAdmin@2026!" {
+		return errors.New("unsafe production configuration: INITIAL_ADMIN_PASSWORD must be a non-placeholder password of at least 12 characters")
+	}
+	dsn := strings.ToLower(c.MySQLDSN)
+	if strings.TrimSpace(c.MySQLDSN) == "" || strings.Contains(dsn, "root:123456@") || isPlaceholderValue(c.MySQLDSN) {
+		return errors.New("unsafe production configuration: MYSQL_DSN must be explicitly configured without the local default credentials")
+	}
+
+	return nil
+}
+
+func isPlaceholderValue(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, marker := range []string{"replace-with", "your-", "change-me", "changeme", "placeholder"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func getEnv(key, fallback string) string {

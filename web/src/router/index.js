@@ -23,12 +23,15 @@ import SystemView from '../views/system/SystemView.vue'
 import AuditLogsView from '../views/system/AuditLogsView.vue'
 import FollowUpTodosView from '../views/system/FollowUpTodosView.vue'
 import MerchantsView from '../views/merchants/MerchantsView.vue'
+import GroupBuyLinksView from '../views/platform/GroupBuyLinksView.vue'
+import RefundReconciliationView from '../views/platform/RefundReconciliationView.vue'
 import MerchantDetailView from '../views/merchants/MerchantDetailView.vue'
 import MerchantLoginView from '../views/merchants/MerchantLoginView.vue'
 import MerchantDashboardView from '../views/merchants/MerchantDashboardView.vue'
 import MerchantProfileView from '../views/merchants/MerchantProfileView.vue'
 import MerchantAIView from '../views/merchants/MerchantAIView.vue'
 import MerchantPromotionsView from '../views/merchants/MerchantPromotionsView.vue'
+import MerchantGroupBuyView from '../views/merchants/MerchantGroupBuyView.vue'
 import MerchantCouponsView from '../views/merchants/MerchantCouponsView.vue'
 import MerchantShareView from '../views/merchants/MerchantShareView.vue'
 import MerchantStoresView from '../views/merchants/MerchantStoresView.vue'
@@ -41,7 +44,8 @@ import MerchantSubscriptionView from '../views/merchants/MerchantSubscriptionVie
 import MerchantRegisterView from '../views/merchants/MerchantRegisterView.vue'
 import CustomerStoreView from '../views/customer/CustomerStoreView.vue'
 import CustomerOrderSuccessView from '../views/customer/CustomerOrderSuccessView.vue'
-import { checkMerchantSubscription } from '../api/modules'
+import { fetchMerchantInfo } from '../api/modules'
+import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
 
 const routes = [
   { path: '/', redirect: '/admin/dashboard' },
@@ -60,11 +64,13 @@ const routes = [
       { path: 'dashboard', component: DashboardView },
       { path: 'todos', component: FollowUpTodosView },
       { path: 'merchants', component: MerchantsView },
+      { path: 'group-buy-links', component: GroupBuyLinksView },
       { path: 'merchants/:id', component: MerchantDetailView },
       { path: 'users', component: UsersView },
       { path: 'packages', component: PackagesView },
       { path: 'subscriptions', component: SubscriptionRevenueView },
       { path: 'orders', component: OrdersView },
+      { path: 'refund-reconciliations', component: RefundReconciliationView },
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView }
@@ -79,19 +85,20 @@ const routes = [
         path: '',
         component: MerchantLayout,
         children: [
-          { path: 'dashboard', component: MerchantDashboardView, meta: { requiresMerchantAuth: true } },
-          { path: 'promotions', component: MerchantPromotionsView, meta: { requiresMerchantAuth: true } },
+          { path: 'dashboard', component: MerchantDashboardView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'promotions', component: MerchantPromotionsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'group-buy', component: MerchantGroupBuyView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
           { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
           { path: 'subscription', component: MerchantSubscriptionView, meta: { requiresMerchantAuth: true, allowExpiredSubscription: true } },
-          { path: 'profile', component: MerchantProfileView, meta: { requiresMerchantAuth: true } },
-          { path: 'stores', component: MerchantStoresView, meta: { requiresMerchantAuth: true } },
-          { path: 'orders', component: MerchantOrdersView, meta: { requiresMerchantAuth: true } },
-          { path: 'orders/:id', component: MerchantOrderDetailView, meta: { requiresMerchantAuth: true } },
-          { path: 'finance', component: MerchantFinanceView, meta: { requiresMerchantAuth: true } },
+          { path: 'profile', component: MerchantProfileView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'stores', component: MerchantStoresView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'orders', component: MerchantOrdersView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'orders/:id', component: MerchantOrderDetailView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'finance', component: MerchantFinanceView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'coupons', component: MerchantCouponsView, meta: { requiresMerchantAuth: true } },
-          { path: 'payment-settings', component: MerchantPaymentSettingsView, meta: { requiresMerchantAuth: true } },
-          { path: 'stores/:storeId/products', component: MerchantStoreProductsView, meta: { requiresMerchantAuth: true } }
+          { path: 'payment-settings', component: MerchantPaymentSettingsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'stores/:storeId/products', component: MerchantStoreProductsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } }
         ]
       }
     ]
@@ -137,10 +144,12 @@ router.beforeEach(async (to) => {
     !to.meta.allowExpiredSubscription
   ) {
     try {
-      const res = await checkMerchantSubscription()
-      if (!res.data.valid) {
-        return { path: '/merchant/subscription', query: { redirect: to.fullPath } }
-      }
+      const res = await fetchMerchantInfo()
+      const merchant = res.data?.merchant || res.data || {}
+      const accessState = merchantSubscriptionAccessState(merchant)
+      if (accessState === 'active') return
+      if (accessState === 'expired' && to.meta.allowExpiredReadOnly) return
+      return { path: '/merchant/subscription', query: { redirect: to.fullPath } }
     } catch {
       return { path: '/merchant/subscription', query: { redirect: to.fullPath } }
     }

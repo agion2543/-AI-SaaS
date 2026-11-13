@@ -1,6 +1,10 @@
 <template>
   <main class="order-status-page">
     <section class="phone-shell">
+      <div v-if="accessError" class="panel access-error">
+        <el-empty description="订单链接缺少有效的访问凭证，无法读取订单。请使用下单后保存的安全链接；旧的仅含订单号链接已停用。" />
+      </div>
+      <template v-else>
       <header class="status-hero" :class="heroClass">
         <div class="hero-top">
           <span>订单状态</span>
@@ -37,7 +41,7 @@
               <span>订单号</span>
               <strong>{{ order.order_no || '-' }}</strong>
             </div>
-            <el-button text type="primary" @click="copyOrderNo">复制</el-button>
+            <el-button text type="primary" @click="copyOrderNo">复制安全链接</el-button>
           </div>
           <div class="next-action">
             <span>{{ nextAction.label }}</span>
@@ -186,7 +190,7 @@
                 <strong>扫码向商家付款</strong>
                 <p>付款会直接进入商家账户。付款完成后回到本页点击“我已付款”，商家核对到账后订单会继续处理。</p>
               </div>
-              <b>{{ yuan(order.total_amount || order.amount) }}</b>
+              <b>{{ yuan(order.total_amount ?? order.amount ?? 0) }}</b>
             </div>
             <div class="pay-steps">
               <div>
@@ -215,7 +219,7 @@
             <div class="merchant-pay-meta">
               <span>订单号：{{ order.order_no || '-' }}</span>
               <span>核对码：{{ pickupCode }}</span>
-              <span>应付：{{ yuan(order.total_amount || order.amount) }}</span>
+              <span>应付：{{ yuan(order.total_amount ?? order.amount ?? 0) }}</span>
             </div>
             <el-button
               type="primary"
@@ -372,6 +376,7 @@
           <el-button size="large" :disabled="!contactPhone" @click="callStore">联系门店</el-button>
         </div>
       </template>
+      </template>
     </section>
 
     <el-dialog v-model="qrDialogVisible" title="支付宝扫码支付" width="92%" class="qr-dialog">
@@ -386,7 +391,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createCustomerOrderShare,
   fetchCustomerOrder,
@@ -394,10 +399,12 @@ import {
   retryCustomerOrderPayment,
   reviewCustomerOrder
 } from '../../api/modules'
+import { captureCustomerOrderAccessToken, customerOrderAccessLink, getCustomerOrderAccessToken, stripCustomerOrderAccessTokenFromUrl } from '../../utils/customerOrderAccess'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
+const accessError = ref('')
 const retrying = ref(false)
 const markingPaid = ref(false)
 const sharing = ref(false)
@@ -422,10 +429,9 @@ const items = computed(() => Array.isArray(order.value.items) ? order.value.item
 const storeId = computed(() => order.value.store_id || order.value.store?.id)
 const contactPhone = computed(() => order.value.store?.contact_phone || order.value.merchant?.contact_phone || '')
 const isRefunded = computed(() => Number(order.value.refunded_amount || 0) > 0)
-const confirmedStatuses = ['received', 'accepted', 'completed', 'closed']
-const receivableAmount = computed(() => Number(order.value.total_amount || order.value.amount || 0))
+const receivableAmount = computed(() => Number(order.value.total_amount ?? order.value.amount ?? 0))
 const paidAmount = computed(() => Number(order.value.paid_amount ?? order.value.total_amount ?? order.value.amount ?? 0))
-const isConfirmedPaid = computed(() => confirmedStatuses.includes(status.value) || Boolean(order.value.paid_at))
+const isConfirmedPaid = computed(() => Boolean(order.value.paid_at) && paidAmount.value > 0)
 const confirmedNetAmount = computed(() => {
   if (!isConfirmedPaid.value) return 0
   return Math.max(paidAmount.value - Number(order.value.refunded_amount || 0), 0)
@@ -435,13 +441,16 @@ const pickupCode = computed(() => {
   const text = String(order.value.order_no || '')
   return text ? text.slice(-4).toUpperCase() : '-'
 })
-const canRetry = computed(() => ['pending', 'failed'].includes(status.value))
+const canRetry = computed(() => ['pending', 'failed'].includes(status.value) && receivableAmount.value > 0)
 const canAppendItems = computed(() => ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && Boolean(storeId.value))
 const canRequestShare = computed(() => ['received', 'accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at))
 const canSharePoster = computed(() => canRequestShare.value && Boolean(shareCampaign.value.share_code))
 const canReview = computed(() => ['accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at))
 const showPaidNotice = computed(() => ['received', 'accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at) && !isRefunded.value)
 const paymentSummary = computed(() => {
+  if (receivableAmount.value <= 0) {
+    return { title: '无需付款', hint: '本单应付金额为 0 元，不计入实收' }
+  }
   if (['pending', 'failed'].includes(status.value)) {
     return { title: '待支付', hint: '未付款，不计入已收款' }
   }
@@ -462,8 +471,8 @@ const merchantPayOptions = computed(() => {
   if (paymentConfig.value.wechat_qr_code) options.push({ key: 'wechat', label: '微信收款码', value: paymentConfig.value.wechat_qr_code })
   return options
 })
-const canUseMerchantQr = computed(() => ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length > 0)
-const showMerchantQrMissing = computed(() => ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length === 0)
+const canUseMerchantQr = computed(() => receivableAmount.value > 0 && ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length > 0)
+const showMerchantQrMissing = computed(() => receivableAmount.value > 0 && ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length === 0)
 const payReturnNotice = computed(() => {
   if (!isPayReturn.value || !canRetry.value) return null
   if (status.value === 'failed') {
@@ -684,6 +693,14 @@ const timeline = computed(() => {
 
 const load = async () => {
   if (!orderNo.value) return
+  const accessToken = captureCustomerOrderAccessToken(orderNo.value, route)
+  if (!accessToken) {
+    accessError.value = 'missing'
+    order.value = {}
+    stopPolling()
+    return
+  }
+  accessError.value = ''
   loading.value = true
   try {
     const res = await fetchCustomerOrder(orderNo.value)
@@ -703,14 +720,34 @@ const load = async () => {
       ensureShareCampaign()
     }
   } catch (err) {
-    ElMessage.error(err.response?.data?.message || '订单加载失败')
+    if (err.response?.status === 404) {
+      accessError.value = 'invalid'
+      order.value = {}
+      stopPolling()
+    } else {
+      ElMessage.error(err.response?.data?.message || '订单加载失败')
+    }
   } finally {
     loading.value = false
   }
 }
 
 const markPaid = async () => {
-  if (!orderNo.value) return
+  if (!orderNo.value || !canUseMerchantQr.value || markingPaid.value) return
+  try {
+    await ElMessageBox.confirm(
+      `请确认已向商家完成转账，且付款金额为 ${yuan(receivableAmount.value)}。提交后仅通知商家核对，系统不会自动认定到账；商家确认实际收款后，订单才会继续处理。若尚未完成付款，请点“返回检查”，不要提交。`,
+      '确认已完成转账？',
+      {
+        confirmButtonText: '确认已转账，通知商家',
+        cancelButtonText: '返回检查',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
   markingPaid.value = true
   try {
     const res = await markCustomerOrderPaid(orderNo.value)
@@ -826,11 +863,16 @@ const copyShareText = async () => {
 }
 const copyOrderNo = async () => {
   if (!order.value.order_no) return
+  const accessToken = getCustomerOrderAccessToken(order.value.order_no)
+  if (!accessToken) {
+    ElMessage.error('无法生成安全订单链接，请重新打开下单后的订单页面')
+    return
+  }
   try {
-    await navigator.clipboard.writeText(order.value.order_no)
-    ElMessage.success('订单号已复制')
+    await navigator.clipboard.writeText(customerOrderAccessLink(order.value.order_no, accessToken))
+    ElMessage.success('安全订单链接已复制；链接包含访问凭证，请勿公开分享')
   } catch {
-    ElMessage.warning('复制失败，请手动长按订单号复制')
+    ElMessage.warning('复制失败，请检查浏览器剪贴板权限')
   }
 }
 const logTime = (action) => {
@@ -854,6 +896,12 @@ const yuan = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 
 onMounted(() => {
+  const accessToken = captureCustomerOrderAccessToken(orderNo.value, route)
+  if (!accessToken) {
+    accessError.value = 'missing'
+    return
+  }
+  stripCustomerOrderAccessTokenFromUrl()
   load()
   if (orderNo.value) startPolling(isPayReturn.value ? 'pay_return' : 'status')
 })

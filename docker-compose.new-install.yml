@@ -1,0 +1,82 @@
+# Explicit fresh-install path for candidate schema v1 (2026-11-13).
+# Uses its own MySQL volume; do not point MYSQL_DSN at an existing database.
+services:
+  mysql:
+    image: mysql:8.0.46
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-replace-with-root-password}
+      MYSQL_DATABASE: saas_billing
+      MYSQL_USER: saas_user
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-replace-with-db-password}
+      TZ: Asia/Shanghai
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_v1_fresh_data:/var/lib/mysql
+    networks:
+      - saas_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-replace-with-root-password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  schema-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    env_file:
+      - .env.production
+    command: ["/app/schema-migrate"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - saas_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      DB_AUTO_MIGRATE: "false"
+    depends_on:
+      schema-migrate:
+        condition: service_completed_successfully
+    networks:
+      - saas_net
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "80:80"
+    networks:
+      - saas_net
+
+volumes:
+  mysql_v1_fresh_data:
+    name: saas_fresh_install_v1_mysql_data
+
+networks:
+  saas_net:
+    driver: bridge

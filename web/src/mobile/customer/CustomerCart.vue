@@ -34,7 +34,7 @@
         :price="formatPrice(item.price)"
         :title="item.name"
         :desc="item.description || ''"
-        :thumb="item.image || defaultProductImg"
+        :thumb="item.image_url || item.image || defaultProductImg"
         class="cart-item"
       >
         <template #num>
@@ -60,12 +60,20 @@
         />
       </van-cell-group>
 
+      <van-cell-group inset title="顾客手机（选填）" class="coupon-group">
+        <van-field v-model="customerPhone" type="tel" maxlength="11" placeholder="填写手机号后可查询奖励券">
+          <template #button>
+            <van-button size="small" type="primary" @click="loadCoupons">查询奖励券</van-button>
+          </template>
+        </van-field>
+      </van-cell-group>
+
       <!-- 优惠券 -->
       <van-cell-group inset title="优惠" class="coupon-group">
         <van-cell
           title="优惠券"
           is-link
-          :value="selectedCoupon ? `-¥${selectedCoupon.value}` : '暂无可用'"
+          :value="selectedCoupon ? `-¥${formatPrice(selectedCoupon.value)}` : '暂无可用'"
           @click="showCouponPicker = true"
         />
       </van-cell-group>
@@ -85,7 +93,7 @@
 
       <!-- 底部结算栏 -->
       <van-submit-bar
-        :price="finalPrice * 100"
+        :price="finalPrice"
         label="合计"
         button-text="提交订单"
         :disabled="cartItems.length === 0"
@@ -119,10 +127,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
 import { fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder } from '@/api/modules'
+import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
+import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
 
 const route = useRoute()
 const router = useRouter()
@@ -134,6 +144,7 @@ const submitting = ref(false)
 const products = ref([])
 const cart = ref({})
 const remark = ref('')
+const customerPhone = ref('')
 const coupons = ref([])
 const selectedCoupon = ref(null)
 const chosenCouponIndex = ref(-1)
@@ -170,22 +181,22 @@ const finalPrice = computed(() => {
 
 const availableCoupons = computed(() => {
   return coupons.value
-    .filter(c => c.status === 'available' && c.min_amount <= originalPrice.value)
+    .filter(c => c.status === 'unused' && Number(c.threshold || 0) <= originalPrice.value)
     .map(c => ({
       ...c,
-      value: c.value || 0,
-      name: c.name || `满${c.min_amount}减${c.value}`,
-      startAt: new Date(c.start_time).getTime() / 1000,
-      endAt: new Date(c.end_time).getTime() / 1000,
-      denominations: c.value,
-      originCondition: c.min_amount,
-      reason: c.min_amount > originalPrice.value ? `满${c.min_amount}可用` : ''
+      value: Number(c.amount || 0),
+      name: c.title || `满${formatPrice(c.threshold)}减${formatPrice(c.amount)}`,
+      startAt: c.valid_from ? new Date(c.valid_from).getTime() / 1000 : undefined,
+      endAt: c.valid_to ? new Date(c.valid_to).getTime() / 1000 : undefined,
+      denominations: Number(c.amount || 0),
+      originCondition: Number(c.threshold || 0),
+      reason: Number(c.threshold || 0) > originalPrice.value ? `满${formatPrice(c.threshold)}可用` : ''
     }))
 })
 
 // 方法
 function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
+  return (Number(price || 0) / 100).toFixed(2)
 }
 
 function goShopping() {
@@ -252,36 +263,78 @@ function onCouponExchange() {
   showToast('请输入优惠券码')
 }
 
+async function loadCoupons() {
+  if (!isValidCustomerPhone(customerPhone.value)) {
+    showToast('请输入 11 位手机号后查询')
+    return
+  }
+  try {
+    coupons.value = await fetchCustomerCouponsForPhone(fetchCustomerStoreCoupons, storeId, customerPhone.value)
+    showToast(coupons.value.length ? `已找到 ${coupons.value.length} 张可用券` : '当前手机号暂无可用奖励券')
+  } catch (e) {
+    coupons.value = []
+    showFailToast(e.response?.data?.message || '查询优惠券失败')
+  }
+}
+
 async function submitOrder() {
   if (cartItems.value.length === 0) {
     showToast('购物车是空的')
     return
   }
+  if (customerPhone.value.trim() && !isValidCustomerPhone(customerPhone.value)) {
+    showToast('手机号需要是 11 位数字')
+    return
+  }
 
   submitting.value = true
   try {
-    // 构建订单商品
-    const orderItems = cartItems.value.map(item => ({
-      product_id: item.id,
-      quantity: item.count,
-      price: item.price
+    const res = await createCustomerStoreOrder(buildCustomerOrderPayload({
+      storeId,
+      customerPhone: customerPhone.value,
+      customerNote: remark.value,
+      couponNo: selectedCoupon.value?.coupon_no,
+      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: item.price }))
     }))
-
-    // 调用后端创建订单
-    const res = await createCustomerStoreOrder({
-      store_id: storeId,
-      items: orderItems,
-      remark: remark.value,
-      coupon_id: selectedCoupon.value?.id
-    })
+    const order = res.data.order || res.data
+    const orderNo = order.order_no
+    const accessToken = res.data.access_token
+    if (!orderNo || !accessToken) throw new Error('订单安全凭证未返回，请勿使用订单号单独查询')
+    saveCustomerOrderAccessToken(orderNo, accessToken)
 
     // 清除购物车
     cart.value = {}
     saveCart()
 
-    // 跳转到支付页面
-    showSuccessToast('订单创建成功')
-    router.replace(`/m/order/${res.data.order_no}`)
+    if (res.data.payment_error) {
+      showFailToast('订单已创建，但支付宝付款入口暂不可用；订单仍未确认收款')
+      router.replace({
+        path: `/m/order/${encodeURIComponent(orderNo)}`,
+        query: { access_token: accessToken, payment_setup_unavailable: '1' }
+      })
+      return
+    }
+
+    const payment = res.data.payment || {}
+    const paymentUrl = payment.payment_url || payment.payment_form
+    if (payment.mode === 'page' && paymentUrl) {
+      if (paymentUrl.trim().startsWith('<form')) {
+        document.open()
+        document.write(paymentUrl)
+        document.close()
+        document.querySelector('form')?.submit()
+      } else {
+        window.location.href = paymentUrl
+      }
+      return
+    }
+
+    if (res.data.payment_required === false || ['submitted', 'preparing'].includes(order.status)) {
+      showSuccessToast('订单已提交；如需预付请按状态页提示完成付款')
+    } else {
+      showToast('订单已创建，尚未确认收款；可在状态页继续付款')
+    }
+    router.replace(mobileCustomerOrderAccessPath(orderNo, accessToken))
   } catch (e) {
     console.error('创建订单失败:', e)
     showFailToast(e.response?.data?.message || '创建订单失败')
@@ -293,13 +346,10 @@ async function submitOrder() {
 async function loadData() {
   loading.value = true
   try {
-    const [productsRes, couponsRes] = await Promise.all([
-      fetchCustomerStoreProducts(storeId),
-      fetchCustomerStoreCoupons(storeId).catch(() => ({ data: [] }))
-    ])
+    const productsRes = await fetchCustomerStoreProducts(storeId)
 
-    products.value = productsRes.data || []
-    coupons.value = couponsRes.data || []
+    products.value = customerResponseList(productsRes)
+    coupons.value = []
     loadCart()
   } catch (e) {
     console.error('加载数据失败:', e)
@@ -308,6 +358,12 @@ async function loadData() {
     loading.value = false
   }
 }
+
+watch(customerPhone, () => {
+  coupons.value = []
+  selectedCoupon.value = null
+  chosenCouponIndex.value = -1
+})
 
 onMounted(() => {
   loadData()

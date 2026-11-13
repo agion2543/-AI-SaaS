@@ -3,7 +3,7 @@
     <PageHero
       eyebrow="MERCHANT COCKPIT"
       :title="`欢迎，${merchantName}`"
-      description="一屏看清今日订单、实收、待办、热销商品和 AI 经营建议。目标不是堆报表，而是让商家马上知道今天先做什么。"
+      description="一屏看清今日订单、实收、待办、热销商品和经营数据。目标不是堆报表，而是让商家马上知道今天先做什么。"
       compact
     >
       <template #actions>
@@ -103,7 +103,7 @@
       description="把今日订单、实收、退款、客单价和下一步动作汇总成商家每天能直接看的简报。"
     >
       <template #actions>
-        <el-button text type="primary" @click="openDailyAI">生成 AI 建议</el-button>
+        <el-button text type="primary" @click="openDailyAI">查看 AI 模块状态</el-button>
         <el-button text type="primary" @click="copyDailyReport">复制日报</el-button>
         <el-button text type="primary" @click="exportDailyReport">导出 XLSX</el-button>
       </template>
@@ -250,7 +250,7 @@
 
       <DataPanel eyebrow="LEADS" title="最近线索" description="来自扫码、裂变海报和营销活动的潜在顾客。">
         <template #actions>
-          <el-button text type="primary" @click="router.push('/merchant/ai?scenario=dormant_recall')">查看分析</el-button>
+          <el-button text type="primary" @click="router.push('/merchant/ai?scenario=dormant_recall')">AI 模块状态</el-button>
         </template>
         <el-table :data="recentLeads" empty-text="暂无线索">
           <el-table-column label="称呼" min-width="100">
@@ -297,7 +297,6 @@ const orders = ref([])
 const refunds = ref([])
 const paymentConfig = ref({})
 const merchantInfo = ref({})
-const paidStatuses = ['received', 'accepted', 'completed', 'closed']
 const autoRefreshEnabled = ref(true)
 const lastRefreshAt = ref('')
 const previousActionCount = ref(null)
@@ -326,7 +325,7 @@ const recallCustomerCount = computed(() => (
 const today = computed(todayText)
 const todayOrders = computed(() => orders.value.filter((item) => String(item.created_at || '').slice(0, 10) === today.value))
 const paidTodayOrders = computed(() => orders.value.filter((item) => (
-  paidStatuses.includes(item.status) && String(item.paid_at || item.updated_at || '').slice(0, 10) === today.value
+  Boolean(item.paid_at) && Number(item.total_amount ?? item.amount ?? 0) > 0 && String(item.paid_at).slice(0, 10) === today.value
 )))
 const todayPendingPayOrders = computed(() => todayOrders.value.filter((item) => ['pending', 'failed'].includes(item.status)))
 const todayUnconfirmedOrders = computed(() => todayOrders.value.filter((item) => item.status === 'payment_confirming'))
@@ -556,7 +555,7 @@ const todayBrief = computed(() => {
       title: `今日退款 ${formatMoney(todayRefundAmount.value)}，建议复盘原因`,
       content: `今日净实收 ${formatMoney(todayNetIncome.value)}，客单价 ${formatMoney(todayAvgOrderAmount.value)}。优先查看退款订单，找出商品描述、等待时间或沟通问题。`,
       button: '看财务',
-      go: () => router.push('/merchant/ai?scenario=refund_review')
+      go: () => router.push('/merchant/finance')
     }
   }
   if (fulfillmentCount.value > 0) {
@@ -571,15 +570,15 @@ const todayBrief = computed(() => {
     return {
       title: `今日经营正常，净实收 ${formatMoney(todayNetIncome.value)}`,
       content: `今日 ${todayOrders.value.length} 笔订单，客单价 ${formatMoney(todayAvgOrderAmount.value)}。可以继续优化热销商品和裂变海报，提高复购。`,
-      button: '看热销',
-      go: () => router.push('/merchant/ai?scenario=campaign')
+      button: '看商品',
+      go: () => router.push('/merchant/products')
     }
   }
   return {
     title: '今天还没有扫码点单，先做曝光和活动',
-    content: '建议检查门店二维码、商品图片和优惠活动，也可以用 AI 生成朋友圈文案或短视频脚本引流。',
+    content: '建议检查门店二维码、商品图片和优惠活动；AI 文案与短视频脚本生成暂未开放。',
     button: '做营销',
-    go: () => router.push('/merchant/ai?scenario=short_video')
+    go: () => router.push('/merchant/promotions')
   }
 })
 
@@ -642,7 +641,7 @@ const actionItems = computed(() => {
       title: `今日退款 ${formatMoney(todayRefundAmount.value)}`,
       content: '建议复盘退款原因，检查商品描述、履约速度或顾客沟通是否存在问题。',
       button: '看财务',
-      go: () => router.push('/merchant/ai?scenario=refund_review')
+      go: () => router.push('/merchant/finance')
     })
   }
   if (recallCustomerCount.value > 0) {
@@ -670,9 +669,9 @@ const actionItems = computed(() => {
       label: '经营',
       tone: 'green',
       title: '当前经营状态平稳',
-      content: '可以继续优化热销商品图片、上新套餐，并用 AI 生成下一轮营销活动。',
-      button: 'AI建议',
-      go: () => router.push('/merchant/ai?scenario=campaign')
+      content: '可以继续优化热销商品图片、上新套餐，并在活动管理中配置下一轮营销活动。',
+      button: '配置活动',
+      go: () => router.push('/merchant/promotions')
     }
   ]
 })
@@ -751,7 +750,7 @@ const load = async ({ silent = false, notify = false } = {}) => {
   try {
     const [infoRes, aiRes, leadsRes, ordersRes, refundsRes, paymentRes] = await Promise.all([
       fetchMerchantInfo(),
-      fetchMerchantAIInsights(),
+      fetchMerchantAIInsights().catch(() => ({ data: {} })),
       fetchMerchantLeads({ page: 1, page_size: 5 }),
       fetchMerchantOrders({ page: 1, page_size: 100 }),
       fetchMerchantRefunds(),
@@ -800,7 +799,7 @@ const toggleAutoRefresh = () => {
   stopAutoRefresh()
 }
 
-const orderAmount = (row) => Number(row.paid_amount ?? row.total_amount ?? row.amount ?? 0)
+const orderAmount = (row) => Number(row.total_amount ?? row.amount ?? 0)
 const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const orderStatusLabel = (status) => ({
   pending: '待支付',

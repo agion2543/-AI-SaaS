@@ -321,10 +321,10 @@ func (s *MerchantService) SubscriptionInfo(merchantID uint) (map[string]interfac
 	if err != nil {
 		return nil, err
 	}
-	if syncMerchantSubscriptionFields(merchant, plans) {
+	if syncMerchantSubscriptionFields(merchant, plans) && merchant.HasActiveSubscriptionAt(time.Now()) {
 		_ = s.merchants.Save(merchant)
 	}
-	active := merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(time.Now())
+	active := merchant.HasActiveSubscriptionAt(time.Now())
 	return map[string]interface{}{
 		"merchant":         merchant,
 		"plans":            plans,
@@ -353,11 +353,7 @@ func (s *MerchantService) CheckSubscription(merchantID uint) (bool, error) {
 	if err != nil {
 		return false, errors.New("\u5546\u5bb6\u4fe1\u606f\u4e0d\u5b58\u5728")
 	}
-	expireAt := merchant.SubscriptionExpireAt
-	if expireAt == nil {
-		expireAt = merchant.SubscriptionExpiredAt
-	}
-	return expireAt != nil && expireAt.After(time.Now()), nil
+	return merchant.HasActiveSubscriptionAt(time.Now()), nil
 }
 
 func (s *MerchantService) SubscriptionOrderStatus(merchantID uint, orderNo string) (map[string]interface{}, error) {
@@ -444,10 +440,6 @@ func syncMerchantSubscriptionFields(merchant *model.Merchant, plans []model.Merc
 			}
 		}
 	}
-	if merchant.SubscriptionStatus != "active" && merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(time.Now()) {
-		merchant.SubscriptionStatus = "active"
-		changed = true
-	}
 	return changed
 }
 
@@ -471,17 +463,23 @@ func (s *MerchantService) CreateSubscriptionOrder(userID, merchantID uint, req d
 	if channel == "" {
 		channel = "alipay"
 	}
+	planNameSnapshot := plan.Name
+	planPriceSnapshot := plan.PriceCents
+	planDurationSnapshot := plan.DurationDays
 	order := &model.Order{
-		OrderNo:        fmt.Sprintf("MSUB%d", time.Now().UnixNano()),
-		OrderType:      "merchant_subscription",
-		UserID:         ptrUint(userID),
-		MerchantID:     &merchantID,
-		PackageID:      &fallbackPackage.ID,
-		MerchantPlanID: &plan.ID,
-		Amount:         plan.PriceCents,
-		TotalAmount:    plan.PriceCents,
-		Status:         "pending",
-		PaymentChannel: channel,
+		OrderNo:                  fmt.Sprintf("MSUB%d", time.Now().UnixNano()),
+		OrderType:                "merchant_subscription",
+		UserID:                   ptrUint(userID),
+		MerchantID:               &merchantID,
+		PackageID:                &fallbackPackage.ID,
+		MerchantPlanID:           &plan.ID,
+		PlanNameSnapshot:         &planNameSnapshot,
+		PlanPriceCentsSnapshot:   &planPriceSnapshot,
+		PlanDurationDaysSnapshot: &planDurationSnapshot,
+		Amount:                   plan.PriceCents,
+		TotalAmount:              plan.PriceCents,
+		Status:                   "pending",
+		PaymentChannel:           channel,
 	}
 	if err := s.orders.Create(order); err != nil {
 		return nil, err
@@ -617,7 +615,7 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	return s.PaymentConfig(merchantID)
 }
 
-func (s *MerchantService) ReviewPaymentConfig(merchantID uint, req dto.ReviewMerchantPaymentConfigRequest) (*model.MerchantPaymentConfig, error) {
+func (s *MerchantService) ReviewPaymentConfig(merchantID uint, req dto.ReviewMerchantPaymentConfigRequest, audit ...AuditEvent) (*model.MerchantPaymentConfig, error) {
 	var config model.MerchantPaymentConfig
 	if err := s.db.Where("merchant_id = ?", merchantID).First(&config).Error; err != nil {
 		return nil, errors.New("商家收款配置不存在")
@@ -641,10 +639,24 @@ func (s *MerchantService) ReviewPaymentConfig(merchantID uint, req dto.ReviewMer
 	config.Status = status
 	config.AuditStatus = auditStatus
 	config.AuditRemark = remark
-	if err := s.db.Save(&config).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&config).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant_payment_config"
+			event.Input.TargetID = config.ID
+			event.Input.TargetName = config.AccountName
+			event.Input.MerchantID = &merchantID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return s.PaymentConfig(merchantID)
+	return &config, nil
 }
 
 func (s *MerchantService) ListStores(merchantID uint, page, pageSize int) ([]model.Store, int64, error) {
@@ -1445,7 +1457,7 @@ func (s *MerchantService) aiDailyLimit(merchant *model.Merchant, policy AIConfig
 	if merchant == nil {
 		return minInt(5, baseLimit)
 	}
-	if merchant.SubscriptionExpireAt == nil || merchant.SubscriptionExpireAt.Before(time.Now()) {
+	if !merchant.HasActiveSubscriptionAt(time.Now()) {
 		return minInt(5, baseLimit)
 	}
 	if merchant.MerchantPlan != nil {
@@ -2098,11 +2110,11 @@ func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]inte
 	var customerCount int64
 	s.db.Model(&model.Order{}).
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
-		Where("status IN ?", []string{"received", "accepted", "completed", "closed"}).
+		Where("paid_at IS NOT NULL AND total_amount > 0").
 		Count(&orderCount)
 	s.db.Model(&model.Order{}).
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
-		Where("status IN ?", []string{"received", "accepted", "completed", "closed"}).
+		Where("paid_at IS NOT NULL AND total_amount > 0").
 		Select("COALESCE(SUM(total_amount),0)").Scan(&tradeAmount)
 	s.db.Model(&model.RefundRecord{}).
 		Where("merchant_id = ? AND status = ?", merchantID, "success").

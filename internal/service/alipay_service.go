@@ -21,6 +21,15 @@ type AlipayService struct {
 	client *alipay.Client
 }
 
+type definitiveRefundFailureError struct {
+	code string
+	msg  string
+}
+
+func (e *definitiveRefundFailureError) Error() string {
+	return fmt.Sprintf("alipay refund failed: %s %s", e.code, e.msg)
+}
+
 type AlipayCheckoutPayload struct {
 	Channel     string `json:"channel"`
 	Mode        string `json:"mode"`
@@ -53,9 +62,13 @@ func (s *AlipayService) Enabled() bool {
 	return s.client != nil
 }
 
-func (s *AlipayService) BuildCheckoutPayload(order *model.Order, payMode string) (*AlipayCheckoutPayload, error) {
+func (s *AlipayService) BuildCheckoutPayload(order *model.Order, payMode string, customerAccessTokens ...string) (*AlipayCheckoutPayload, error) {
 	if !s.Enabled() {
 		return nil, errors.New("alipay sandbox is not configured")
+	}
+	accessToken := ""
+	if len(customerAccessTokens) > 0 {
+		accessToken = customerAccessTokens[0]
 	}
 
 	if payMode == "" {
@@ -64,9 +77,9 @@ func (s *AlipayService) BuildCheckoutPayload(order *model.Order, payMode string)
 
 	switch payMode {
 	case "page":
-		return s.buildPagePayload(order)
+		return s.buildPagePayload(order, accessToken)
 	case "qr":
-		return s.buildQRPayload(order)
+		return s.buildQRPayload(order, accessToken)
 	default:
 		return nil, fmt.Errorf("unsupported pay mode: %s", payMode)
 	}
@@ -104,14 +117,14 @@ func (s *AlipayService) Refund(order *model.Order, refundNo string, amount int64
 		return "", errors.New("alipay refund returned empty response")
 	}
 	if result.IsFailure() {
-		return "", fmt.Errorf("alipay refund failed: %s %s", result.Code, result.Msg)
+		return "", &definitiveRefundFailureError{code: string(result.Code), msg: result.Msg}
 	}
 	raw, _ := json.Marshal(result)
 	return string(raw), nil
 }
 
-func (s *AlipayService) buildPagePayload(order *model.Order) (*AlipayCheckoutPayload, error) {
-	returnURL := s.returnURL(order)
+func (s *AlipayService) buildPagePayload(order *model.Order, accessToken string) (*AlipayCheckoutPayload, error) {
+	returnURL := s.returnURL(order, accessToken)
 	param := alipay.TradePagePay{
 		Trade: alipay.Trade{
 			NotifyURL:      s.cfg.AlipayNotifyURL,
@@ -142,7 +155,7 @@ func (s *AlipayService) buildPagePayload(order *model.Order) (*AlipayCheckoutPay
 	}, nil
 }
 
-func (s *AlipayService) buildQRPayload(order *model.Order) (*AlipayCheckoutPayload, error) {
+func (s *AlipayService) buildQRPayload(order *model.Order, accessToken string) (*AlipayCheckoutPayload, error) {
 	param := alipay.TradePreCreate{
 		Trade: alipay.Trade{
 			NotifyURL:      s.cfg.AlipayNotifyURL,
@@ -169,11 +182,17 @@ func (s *AlipayService) buildQRPayload(order *model.Order) (*AlipayCheckoutPaylo
 		Mode:      "qr",
 		QRCode:    result.QRCode,
 		NotifyURL: s.cfg.AlipayNotifyURL,
-		ReturnURL: s.returnURL(order),
+		ReturnURL: s.returnURL(order, accessToken),
 	}, nil
 }
 
 func payableAmount(order *model.Order) int64 {
+	if order.OrderType == "store_order" {
+		if order.TotalAmount < 0 {
+			return 0
+		}
+		return order.TotalAmount
+	}
 	if order.TotalAmount > 0 {
 		return order.TotalAmount
 	}
@@ -210,9 +229,13 @@ func (s *AlipayService) body(order *model.Order) string {
 	return "SaaS payment"
 }
 
-func (s *AlipayService) returnURL(order *model.Order) string {
+func (s *AlipayService) returnURL(order *model.Order, customerAccessTokens ...string) string {
 	if order.OrderType == "store_order" {
-		return fmt.Sprintf("%s/customer/orders/%s?from=pay_return", s.cfg.FrontendURL, url.PathEscape(order.OrderNo))
+		result := fmt.Sprintf("%s/customer/orders/%s?from=pay_return", s.cfg.FrontendURL, url.PathEscape(order.OrderNo))
+		if len(customerAccessTokens) > 0 && customerAccessTokens[0] != "" {
+			result += "#access_token=" + url.QueryEscape(customerAccessTokens[0])
+		}
+		return result
 	}
 	return s.cfg.AlipayReturnURL
 }

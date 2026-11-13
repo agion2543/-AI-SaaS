@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -357,23 +358,16 @@ func (ctl *MerchantController) ReviewPaymentConfig(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, "audit status is required")
 		return
 	}
-	config, err := ctl.merchant.ReviewPaymentConfig(merchantID, req)
+	config, err := ctl.merchant.ReviewPaymentConfig(merchantID, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_payment_config_review", TargetType: "merchant_payment_config", MerchantID: &merchantID, Detail: gin.H{
+			"audit_status": req.AuditStatus, "status": req.Status, "audit_remark": req.AuditRemark,
+		}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_payment_config_review",
-		TargetType: "merchant_payment_config",
-		TargetID:   config.ID,
-		TargetName: config.AccountName,
-		MerchantID: &merchantID,
-		Detail: gin.H{
-			"audit_status": req.AuditStatus,
-			"status":       req.Status,
-			"audit_remark": req.AuditRemark,
-		},
-	})
 	utils.Success(c, gin.H{"config": config, "reviewed": true})
 }
 
@@ -674,7 +668,7 @@ func (ctl *MerchantController) GeneratePromotionDraft(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	promotion, err := ctl.merchant.GeneratePromotionDraft(merchantID, req)
 	if err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
+		utils.Error(c, aiUnavailableHTTPStatus(err), err.Error())
 		return
 	}
 	utils.Success(c, gin.H{"promotion": promotion, "created": true})
@@ -690,7 +684,7 @@ func (ctl *MerchantController) GenerateAIMarketingCopy(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	result, err := ctl.merchant.GenerateAIMarketingCopy(merchantID, req)
 	if err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
+		utils.Error(c, aiUnavailableHTTPStatus(err), err.Error())
 		return
 	}
 	quota, _ := ctl.merchant.AIQuota(merchantID)
@@ -707,7 +701,7 @@ func (ctl *MerchantController) GenerateAIReferralCopy(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	result, err := ctl.merchant.GenerateAIReferralCopies(merchantID, req)
 	if err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
+		utils.Error(c, aiUnavailableHTTPStatus(err), err.Error())
 		return
 	}
 	utils.Success(c, result)
@@ -723,10 +717,17 @@ func (ctl *MerchantController) GenerateAIShareReview(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	result, err := ctl.merchant.GenerateAIShareReview(merchantID, req)
 	if err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
+		utils.Error(c, aiUnavailableHTTPStatus(err), err.Error())
 		return
 	}
 	utils.Success(c, result)
+}
+
+func aiUnavailableHTTPStatus(err error) int {
+	if errors.Is(err, service.ErrAIUnavailable) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusBadRequest
 }
 
 func (ctl *MerchantController) AIQuota(c *gin.Context) {

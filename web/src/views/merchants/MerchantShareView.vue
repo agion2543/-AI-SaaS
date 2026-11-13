@@ -119,9 +119,9 @@
               <h2>AI 活动效果复盘</h2>
             </div>
             <div class="ai-copy-actions">
-              <small v-if="aiQuota.remaining !== undefined">今日剩余 {{ aiQuota.remaining }} 次</small>
-              <el-button type="primary" :loading="reviewLoading" @click="generateShareReview">
-                AI 复盘当前活动
+              <small>AI 服务尚未接入</small>
+              <el-button type="primary" disabled>
+                AI 复盘未开放
               </el-button>
             </div>
           </div>
@@ -172,7 +172,7 @@
             </el-button>
           </div>
         </div>
-        <el-empty v-else description="点击 AI 复盘后，系统会判断是否加大优惠、继续观察、优化文案或停用活动。" />
+        <el-empty v-else description="AI 服务接入前，自动复盘与建议不可用；可继续查看和管理已有活动数据。" />
       </el-card>
     </section>
 
@@ -283,9 +283,9 @@
               <h2>一键可用营销动作</h2>
             </div>
             <div class="ai-copy-actions">
-              <small v-if="aiQuota.remaining !== undefined">今日剩余 {{ aiQuota.remaining }} 次</small>
-              <el-button type="primary" :loading="generatingCopy" @click="generateReferralCopy">
-                AI 生成多版本文案
+              <small>AI 服务尚未接入</small>
+              <el-button type="primary" disabled>
+                AI 文案生成未开放
               </el-button>
             </div>
           </div>
@@ -641,7 +641,7 @@ const applyToPoster = async (action) => {
   form.poster_title = action.title || form.poster_title
   form.poster_copy = trimText(action.copy || action.text || defaultCopy, 480)
   await save()
-  ElMessage.success('已把 AI 文案应用到裂变海报，顾客支付成功页会按新海报展示')
+  ElMessage.success('文案已应用到裂变海报，顾客支付成功页会按新海报展示')
 }
 
 const createPromotionFromAction = async (action) => {

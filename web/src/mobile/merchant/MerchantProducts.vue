@@ -9,9 +9,14 @@
       @click-left="router.back()"
     >
       <template #right>
-        <van-button size="small" type="primary" @click="showAddProduct">添加商品</van-button>
+        <van-button v-if="canWrite" size="small" type="primary" @click="showAddProduct">添加商品</van-button>
       </template>
     </van-nav-bar>
+
+    <div v-if="!canWrite" class="readonly-banner" role="status">
+      订阅已到期：商品仅可只读查看，新增、编辑、上下架和删除已关闭。
+      <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+    </div>
 
     <!-- 门店选择 -->
     <van-tabs v-if="stores.length > 1" v-model:active="currentStoreIndex" sticky @change="onStoreChange">
@@ -36,13 +41,13 @@
     >
       <div v-if="products.length === 0 && !loading" class="empty-products">
         <van-empty description="暂无商品">
-          <van-button type="primary" size="small" @click="showAddProduct">添加商品</van-button>
+          <van-button v-if="canWrite" type="primary" size="small" @click="showAddProduct">添加商品</van-button>
         </van-empty>
       </div>
 
       <van-cell-group inset>
         <div v-for="product in products" :key="product.id" class="product-item">
-          <van-swipe-cell>
+          <van-swipe-cell :disabled="!canWrite">
             <van-card
               :price="formatPrice(product.price)"
               :title="product.name"
@@ -65,7 +70,7 @@
               </template>
             </van-card>
 
-            <template #right>
+            <template v-if="canWrite" #right>
               <van-button
                 square
                 type="primary"
@@ -92,6 +97,7 @@
 
     <!-- 添加/编辑商品弹窗 -->
     <van-popup
+      v-if="canWrite"
       v-model:show="showProductPopup"
       position="bottom"
       round
@@ -176,8 +182,10 @@ import {
   updateMerchantStoreProduct,
   deleteMerchantStoreProduct
 } from '@/api/modules'
+import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const router = useRouter()
+const canWrite = mobileSubscriptionActions(cachedMobileMerchantSubscriptionState()).canWriteBusiness
 
 const loading = ref(false)
 const finished = ref(false)
@@ -218,7 +226,7 @@ function searchProducts() {
 async function loadStores() {
   try {
     const res = await fetchMerchantStores()
-    stores.value = res.data || []
+    stores.value = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data) ? res.data : [])
     if (stores.value.length > 0 && currentStoreIndex.value === 0) {
       loadProducts()
     }
@@ -372,6 +380,7 @@ onMounted(() => {
   background: #f7f8fa;
   padding-bottom: 20px;
 }
+.readonly-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 12px; padding: 10px 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
 .filter-bar {
   background: white;

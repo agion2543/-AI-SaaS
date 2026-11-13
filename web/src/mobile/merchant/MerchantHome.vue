@@ -19,7 +19,10 @@
             </div>
           </div>
         </div>
-        <van-icon name="setting-o" size="24" @click="$router.push('/m/merchant/settings')" />
+        <div class="header-actions">
+          <van-button size="small" plain type="primary" @click="router.push('/m/merchant/subscription')">订阅状态 / 续费</van-button>
+            <van-icon v-if="canWrite" name="setting-o" size="24" @click="$router.push('/m/merchant/settings')" />
+        </div>
       </div>
     </div>
 
@@ -29,6 +32,11 @@
     </div>
 
     <template v-else>
+      <div v-if="subscriptionState === 'expired'" class="readonly-banner" role="status">
+        订阅已到期：当前页面仅展示可只读查看的数据，订单处理等写操作已关闭。
+        <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+      </div>
+
       <!-- 统计卡片 -->
       <div class="stats-section">
         <van-grid :column="4" :border="false">
@@ -65,8 +73,9 @@
         <van-grid :column="4" :gutter="10">
           <van-grid-item icon="orders-o" text="订单" @click="$router.push('/m/merchant/orders')" />
           <van-grid-item icon="shop-o" text="商品" @click="$router.push('/m/merchant/products')" />
-          <van-grid-item icon="coupon-o" text="优惠券" @click="$router.push('/m/merchant/coupons')" />
-          <van-grid-item icon="chat-o" text="AI助手" @click="$router.push('/m/merchant/ai')" />
+          <van-grid-item v-if="canWrite" icon="coupon-o" text="优惠券" @click="$router.push('/m/merchant/coupons')" />
+          <van-grid-item icon="qr" text="团购渠道" @click="$router.push('/m/merchant/group-buy')" />
+          <van-grid-item v-if="canWrite" icon="chat-o" text="AI未接入" @click="$router.push('/m/merchant/ai')" />
         </van-grid>
       </div>
 
@@ -97,11 +106,19 @@
               </van-tag>
             </template>
             <template #num>
-              <div class="order-price">¥{{ formatPrice(order.amount) }}</div>
+              <div class="order-price">¥{{ formatPrice(order.total_amount ?? order.amount ?? 0) }}</div>
             </template>
             <template #footer>
               <van-button
-                v-if="order.status === 'pending'"
+                v-if="canWrite && order.status === 'payment_confirming'"
+                size="mini"
+                type="warning"
+                @click.stop="confirmPayment(order.id)"
+              >
+                确认收款
+              </van-button>
+              <van-button
+                v-if="canWrite && ['submitted', 'received'].includes(order.status) && (order.status === 'submitted' || isConfirmedPaid(order) || Number(order.total_amount ?? order.amount ?? 0) === 0)"
                 size="mini"
                 type="primary"
                 @click.stop="acceptOrder(order.id)"
@@ -109,7 +126,7 @@
                 接单
               </van-button>
               <van-button
-                v-if="order.status === 'pending'"
+                v-if="canWrite && ['submitted', 'received', 'payment_confirming'].includes(order.status)"
                 size="mini"
                 type="danger"
                 plain
@@ -190,9 +207,11 @@ import {
   fetchMerchantSubscription,
   fetchMerchantOrders,
   acceptMerchantOrder,
+  confirmMerchantOrderPayment,
   closeMerchantOrder,
   fetchMerchantStores
 } from '@/api/modules'
+import { mobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const router = useRouter()
 
@@ -218,17 +237,19 @@ const rejectReason = ref('')
 const defaultAvatar = 'https://via.placeholder.com/48x48?text=商家'
 
 const subscriptionStatus = computed(() => {
-  if (!subscription.value) return { type: 'default', text: '未订阅' }
-  const endDate = new Date(subscription.value.end_date)
-  if (endDate < new Date()) {
-    return { type: 'danger', text: '已过期' }
-  }
-  return { type: 'success', text: '使用中' }
+  const state = mobileMerchantSubscriptionState(subscription.value)
+  if (state === 'active') return { type: 'success', text: '服务中' }
+  if (state === 'expired') return { type: 'warning', text: '已过期 · 只读' }
+  if (state === 'paused') return { type: 'danger', text: '业务已暂停' }
+  return { type: 'default', text: '状态待确认' }
 })
+const subscriptionState = computed(() => mobileMerchantSubscriptionState(subscription.value))
+const canWrite = computed(() => mobileSubscriptionActions(subscriptionState.value).canWriteBusiness)
 
 const pendingOrders = computed(() => {
-  return orders.value.filter(o => ['pending', 'paid'].includes(o.status)).slice(0, 5)
+  return orders.value.filter(o => ['pending', 'failed', 'payment_confirming', 'submitted', 'received'].includes(o.status)).slice(0, 5)
 })
+const isConfirmedPaid = (order) => Boolean(order?.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0
 
 function formatPrice(price) {
   return parseFloat(price || 0).toFixed(2)
@@ -237,25 +258,29 @@ function formatPrice(price) {
 function getOrderType(status) {
   const typeMap = {
     pending: 'warning',
-    paid: 'primary',
+    failed: 'danger',
+    payment_confirming: 'warning',
+    submitted: 'primary',
+    received: 'primary',
+    accepted: 'primary',
     preparing: 'primary',
-    ready: 'success',
     completed: 'success',
-    cancelled: 'default',
-    refunded: 'danger'
+    closed: 'default'
   }
   return typeMap[status] || 'default'
 }
 
 function getStatusText(status) {
   const textMap = {
-    pending: '待接单',
-    paid: '已支付',
+    pending: '待付款',
+    failed: '支付失败',
+    payment_confirming: '待确认收款',
+    submitted: '已提交/后结算',
+    received: '已收款待接单',
+    accepted: '已接单',
     preparing: '制作中',
-    ready: '待取餐',
     completed: '已完成',
-    cancelled: '已取消',
-    refunded: '已退款'
+    closed: '已关闭'
   }
   return textMap[status] || status
 }
@@ -268,6 +293,16 @@ async function acceptOrder(id) {
   try {
     await acceptMerchantOrder(id)
     showSuccessToast('已接单')
+    loadOrders()
+  } catch (e) {
+    showFailToast(e.response?.data?.message || '操作失败')
+  }
+}
+
+async function confirmPayment(id) {
+  try {
+    await confirmMerchantOrderPayment(id)
+    showSuccessToast('已确认收款')
     loadOrders()
   } catch (e) {
     showFailToast(e.response?.data?.message || '操作失败')
@@ -295,25 +330,37 @@ async function confirmReject() {
 }
 
 async function loadMerchantInfo() {
+  let subRes
   try {
-    const [infoRes, subRes, storesRes] = await Promise.all([
+    subRes = await fetchMerchantSubscription()
+  } catch {
+    await router.replace('/m/merchant/subscription')
+    return false
+  }
+  subscription.value = subRes?.data || null
+  const state = mobileMerchantSubscriptionState(subscription.value)
+  if (!mobileSubscriptionActions(state).canReadBusiness) {
+    await router.replace('/m/merchant/subscription')
+    return false
+  }
+  try {
+    const [infoRes, storesRes] = await Promise.all([
       fetchMerchantInfo().catch(() => ({ data: {} })),
-      fetchMerchantSubscription().catch(() => ({ data: null })),
-      fetchMerchantStores().catch(() => ({ data: [] }))
+      fetchMerchantStores().catch(() => ({ data: { list: [] } }))
     ])
-    merchantInfo.value = infoRes.data || {}
-    subscription.value = subRes.data
-    stores.value = storesRes.data || []
+    merchantInfo.value = infoRes.data?.merchant || infoRes.data || {}
+    stores.value = storesRes.data?.list || (Array.isArray(storesRes.data) ? storesRes.data : [])
     stats.value.totalStores = stores.value.length
   } catch (e) {
     console.error('加载商家信息失败:', e)
   }
+  return true
 }
 
 async function loadOrders() {
   try {
     const res = await fetchMerchantOrders({ status: '', page: 1, page_size: 20 })
-    orders.value = res.data?.items || res.data || []
+    orders.value = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []))
 
     // 计算统计数据
     const today = new Date().toDateString()
@@ -330,20 +377,20 @@ async function loadOrders() {
       const orderDate = new Date(order.created_at)
       if (orderDate.toDateString() === today) {
         todayOrders++
-        if (order.status !== 'cancelled' && order.status !== 'refunded') {
-          todayRevenue += parseFloat(order.amount || 0)
-        }
       }
       if (orderDate >= monthStart) {
         monthOrders++
-        if (order.status !== 'cancelled' && order.status !== 'refunded') {
-          monthRevenue += parseFloat(order.amount || 0)
-        }
       }
-      if (['pending', 'paid'].includes(order.status)) {
+      const paidDate = order.paid_at ? new Date(order.paid_at) : null
+      const payable = Number(order.total_amount ?? order.amount ?? 0)
+      if (paidDate && payable > 0) {
+        if (paidDate.toDateString() === today) todayRevenue += payable
+        if (paidDate >= monthStart) monthRevenue += payable
+      }
+      if (['pending', 'failed', 'payment_confirming', 'submitted', 'received'].includes(order.status)) {
         pendingOrders++
       }
-      if (order.status === 'refund_requested') {
+      if (Number(order.refunded_amount || 0) > 0) {
         refundRequests++
       }
     })
@@ -361,7 +408,8 @@ async function loadOrders() {
 
 onMounted(async () => {
   loading.value = true
-  await Promise.all([loadMerchantInfo(), loadOrders()])
+  const canLoadBusinessData = await loadMerchantInfo()
+  if (canLoadBusinessData) await loadOrders()
   loading.value = false
 })
 </script>
@@ -384,6 +432,8 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
 }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.readonly-banner { display: grid; gap: 8px; margin: 12px 16px; padding: 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
 .user-info {
   display: flex;

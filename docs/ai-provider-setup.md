@@ -1,87 +1,31 @@
-# AI 模型接入说明
+# AI 经营模块：当前状态与后续接入步骤
 
-本项目的 AI 能力采用 OpenAI-compatible `/chat/completions` 协议，优先适配国内可访问模型服务，避免主链路依赖境外网络。
+## 当前状态
 
-## 推荐接入顺序
+- 商家端 AI 经营页和平台后台 AI 管理区目前是功能脚手架，不代表已上线的 AI 能力。
+- 应用默认通过 `DisabledAIProvider`；即使环境中出现 `AI_ENABLED`、Base URL 或凭据，默认服务也不会调用模型。
+- 未接入时 AI 生成接口返回明确的“暂不可用”错误，不再返回模板文案伪装为 AI 结果，也不创建或发布活动。
+- 平台后台不提供启用开关或 API Key 输入框；本轮没有配置、测试或调用任何真实 provider。
+- `OpenAICompatibleAIProvider` 仅作为未来 adapter 代码入口，尚未接入应用 bootstrap。不要仅通过环境变量开启；接入前需完成下列准备和验证。
 
-1. 开发和演示阶段：`AI_ENABLED=false`，系统使用内置模板兜底，不消耗模型费用。
-2. 小规模商家测试：接入 DeepSeek 或阿里云百炼通义千问，先开放 AI 经营建议和裂变海报文案。
-3. 商用阶段：增加调用次数限制、缓存、套餐权限和生成记录，避免无控制调用。
+## 未来接入顺序
 
-## 当前技术口径
+1. **确认产品范围与授权**：确认商家可见的分析、经营问答、商品建议或活动建议场景；确定商家/门店隔离、数据用途、用户告知/同意、保留与删除规则。
+2. **数据上下文与来源**：为订单、退款、商品、券和核销定义字段映射、统计口径、时间范围和来源。模型输入只包含当前商家已授权且必要的数据，并为每条结论保留来源。
+3. **Provider Adapter**：通过 `AIProvider` 接口实现供应商适配器，隔离供应商协议和错误处理。应用默认仍保持禁用；只有经过单独审查和部署变更后，才能显式注入 adapter。
+4. **安全与预算**：凭据放在批准的密钥管理位置，不写入代码、数据库明文或后台页面；设置超时、频率/套餐额度、成本上限、缓存、失败降级和供应商退出方案。
+5. **审计与版本**：记录请求场景、授权数据上下文及来源、provider/模型/提示版本、输出、耗时、失败、token/成本、商家和操作者；定义敏感字段脱敏、访问权限和留存期限。
+6. **合成验证后再小范围真实验证**：先用合成数据覆盖成功、超时、错误、禁用和权限边界；随后经商家授权，用脱敏真实样本做人工质量评估。不得把单测结果描述为生产验证。
+7. **人工确认后执行**：AI 只提供可追溯建议或草稿。任何改价、发券、创建/发布营销活动或资金相关动作，都必须经商家明确确认，不能自动执行。
 
-- 后端统一调用 `AI_BASE_URL + /chat/completions`。
-- 请求头统一使用 `Authorization: Bearer ${AI_API_KEY}`。
-- 当前适合优先接入兼容 OpenAI 协议的国内模型；不兼容该协议的供应商后续再新增独立 adapter。
-- 没有开启或配置不完整时，系统会返回本地模板兜底，保证商家端功能不空白。
+## 代码扩展点
 
-## 国内供应商配置参考
+- Provider 接口和默认禁用实现：`internal/service/ai_service.go`
+- 应用注入点：`internal/service/merchant_service.go` 中 `NewAIService(cfg)`；当前必须保持默认禁用。
+- 商家端预留界面：`web/src/views/merchants/MerchantAIView.vue`
+- 平台后台预留界面：`web/src/views/system/SystemView.vue`
+- 真实样本和上线环境验证清单：`docs/REAL_VALIDATION_CHECKLIST.md`
 
-| 供应商 | AI_PROVIDER | AI_BASE_URL | 推荐模型 | 适合阶段 |
-| --- | --- | --- | --- | --- |
-| DeepSeek | `deepseek` | `https://api.deepseek.com/v1` | `deepseek-chat` | MVP、小规模试运营 |
-| 阿里云百炼通义 | `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 稳定商用、国内云资源整合 |
-| 智谱开放平台 | `zhipu` | 以官方兼容模式地址为准 | 以官方兼容模型名为准 | 备选供应商 |
-| Moonshot/Kimi | `moonshot` | 以官方兼容模式地址为准 | 以官方兼容模型名为准 | 长文本营销素材备选 |
+## 当前不做的事
 
-> 注意：不同供应商的 base url、模型名和额度政策会变动，正式接入前以供应商控制台最新说明为准。
-
-## DeepSeek 示例
-
-```env
-AI_ENABLED=true
-AI_PROVIDER=deepseek
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_API_KEY=sk-xxxx
-AI_MODEL=deepseek-chat
-AI_TIMEOUT_SECONDS=20
-```
-
-## 阿里云百炼通义千问示例
-
-```env
-AI_ENABLED=true
-AI_PROVIDER=qwen
-AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-AI_API_KEY=sk-xxxx
-AI_MODEL=qwen-plus
-AI_TIMEOUT_SECONDS=20
-```
-
-## 智谱 / Kimi 等后续供应商
-
-如果供应商提供 OpenAI-compatible `/chat/completions`：
-
-```env
-AI_ENABLED=true
-AI_PROVIDER=provider_name
-AI_BASE_URL=https://provider-compatible-base-url/v1
-AI_API_KEY=replace-with-provider-api-key
-AI_MODEL=provider-model-name
-AI_TIMEOUT_SECONDS=20
-```
-
-如果供应商不兼容 OpenAI 协议，建议后续在 `internal/service/ai_service.go` 里按 `AI_PROVIDER` 增加 adapter，不要把不同供应商的特殊参数散落到业务代码里。
-
-## 当前已接入的业务场景
-
-- 商家端 `AI 经营增长中心` 可生成裂变海报文案、召回文案、朋友圈推广文案。
-- 没有配置 API Key 时，会自动返回本地模板文案，保证演示稳定。
-- 顾客支付成功页已增加分享领券海报入口，先使用模板二维码和文案，后续可接入真实裂变追踪。
-
-## 上线前检查清单
-
-1. `AI_ENABLED=true` 只在准备好 Key、额度和计费预警后开启。
-2. `AI_API_KEY` 不提交到 GitHub，只放服务器环境变量或部署平台密钥管理。
-3. 先在商家端生成一次“今日经营建议”和“短视频脚本”，确认响应速度和内容质量。
-4. 设置 `AI_TIMEOUT_SECONDS=20` 左右，避免模型慢响应拖垮商家页面。
-5. 如果供应商不可用，页面应提示失败，但业务主链路仍可继续使用。
-
-## 商用前建议补齐
-
-- AI 调用日志：记录商家、场景、模型、token 估算、生成结果。
-- 套餐额度：按月限制 AI 生成次数，高级版增加更多额度。
-- 缓存策略：同一商家同一天经营建议默认缓存，降低成本。
-- 合规提示：AI 文案避免承诺疗效、收益、夸大折扣或诱导分享。
-- 裂变追踪：为分享链接生成 `share_code`，记录扫码、领券、下单和奖励发放。
-- 成本预警：每天统计调用次数和失败率，超过阈值时暂停非核心 AI 功能。
+不连接模型 API，不提交/保存 API Key，不读取真实商家数据作为 AI 上下文，不生成示例经营结论，不自动建活动或发布营销内容。待系统和真实验证条件准备好后，再按上述顺序逐步实现和开放。

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getCustomerOrderAccessToken } from '../utils/customerOrderAccess'
 
 // 根据当前页面判断是否为移动端
 const isMobile = window.location.pathname.includes('mobile.html') ||
@@ -33,6 +34,12 @@ http.interceptors.request.use((config) => {
   }
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  const customerOrderMatch = String(config.url || '').match(/\/customer\/orders\/([^/?#]+)/)
+  if (customerOrderMatch) {
+    const orderNo = decodeURIComponent(customerOrderMatch[1])
+    const accessToken = getCustomerOrderAccessToken(orderNo)
+    if (accessToken) config.headers['X-Order-Access-Token'] = accessToken
   }
   return config
 })

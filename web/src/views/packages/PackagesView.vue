@@ -4,7 +4,7 @@
       <div>
         <div class="eyebrow">SAAS PLANS</div>
         <h2 class="page-title">平台套餐</h2>
-        <p class="muted">这里配置平台卖给商家的 SaaS 订阅服务。当前建议先按“月付服务版 / 年付服务版 / 技术支持版”表达，功能默认完整可用，后续再做权益限制。</p>
+        <p class="muted">这里配置平台卖给商家的 SaaS 订阅服务。当前套餐开放相同的已上线工作台功能；尚未接入的模块不作为可用权益，后续再做权益限制。</p>
       </div>
       <el-button type="primary" @click="openDialog()">新增平台套餐</el-button>
     </section>
@@ -27,8 +27,8 @@
       </article>
       <article>
         <span>当前策略</span>
-        <strong>完整功能</strong>
-        <p>暂不做复杂功能限制，先跑通收费闭环。</p>
+        <strong>已上线功能</strong>
+        <p>月付与年付开放相同的已上线功能；AI 等未接入模块当前不可用。</p>
       </article>
     </section>
 
@@ -51,7 +51,7 @@
     </section>
 
     <section class="page-card module-note">
-      <div><strong>现阶段策略</strong><span>月付和年付都开放完整功能，避免权限体系未完善时影响商家体验。</span></div>
+      <div><strong>现阶段策略</strong><span>月付和年付都开放相同的已上线功能；未接入模块不作为可用权益。</span></div>
       <div><strong>销售表达</strong><span>月付适合试用，年付适合稳定门店，技术支持版可用于人工部署、培训或定制服务。</span></div>
       <div><strong>后续权益版</strong><span>若要做基础版/高级版，需要补套餐权益表、菜单权限、接口权限和降级策略。</span></div>
     </section>
@@ -184,7 +184,7 @@ const planPitch = (plan) => {
 const planFeatures = (plan) => {
   const name = displayPlanName(plan)
   if (name.includes('技术')) return ['部署协助', '配置指导', '使用培训', '上线检查']
-  return ['扫码点单', '订单管理', '商品管理', '财务对账', '优惠活动', 'AI 建议']
+  return ['扫码点单', '订单管理', '商品管理', '财务对账', '优惠活动']
 }
 
 const openDialog = (row) => {

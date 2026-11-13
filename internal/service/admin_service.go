@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
@@ -32,6 +33,13 @@ type AdminService struct {
 	packages  *repository.PackageRepository
 	cards     *repository.CardRepository
 	systems   *repository.SystemRepository
+}
+
+type MerchantSubscriptionActor struct {
+	ID        uint
+	Type      string
+	IP        string
+	UserAgent string
 }
 
 type MerchantSettlementPrepare struct {
@@ -216,7 +224,7 @@ func (s *AdminService) ListCustomerProfiles(page, pageSize int, filter CustomerP
 		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
 		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
 		Where("orders.order_type = ? AND orders.customer_phone <> ''", "store_order").
-		Where("orders.status IN ?", []string{"received", "accepted", "completed", "closed"})
+		Where("orders.paid_at IS NOT NULL AND orders.total_amount > 0")
 
 	keyword := strings.TrimSpace(filter.Keyword)
 	if keyword != "" {
@@ -305,7 +313,7 @@ func (s *AdminService) ListMerchantCustomerProfiles(merchantID uint, limit int) 
 		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
 		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
 		Where("orders.merchant_id = ? AND orders.order_type = ? AND orders.customer_phone <> ''", merchantID, "store_order").
-		Where("orders.status IN ?", []string{"received", "accepted", "completed", "closed"}).
+		Where("orders.paid_at IS NOT NULL AND orders.total_amount > 0").
 		Group("orders.customer_phone, orders.merchant_id").
 		Order("total_amount desc, last_order_at desc").
 		Limit(limit).
@@ -361,13 +369,13 @@ func (s *AdminService) ListMerchants(page, pageSize int) ([]MerchantListRow, int
 	if err := s.db.Table("orders").
 		Select(`merchant_id,
 			COUNT(*) AS order_count,
-			COALESCE(SUM(total_amount),0) AS trade_amount,
+			COALESCE(SUM(CASE WHEN paid_at IS NOT NULL AND total_amount > 0 THEN total_amount ELSE 0 END),0) AS trade_amount,
 			COALESCE(SUM(refunded_amount),0) AS refund_amount,
 			SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_order_count,
 			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_order_count,
 			SUM(CASE WHEN status = 'received' THEN 1 ELSE 0 END) AS received_order_count,
 			SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed_order_count,
-			SUM(CASE WHEN settlement_id IS NULL AND status IN ('received','accepted','completed') THEN 1 ELSE 0 END) AS unsettled_order_count`).
+			SUM(CASE WHEN settlement_id IS NULL AND paid_at IS NOT NULL AND total_amount > 0 AND status IN ('received','accepted','completed') THEN 1 ELSE 0 END) AS unsettled_order_count`).
 		Where("merchant_id IN ? AND order_type = ?", ids, "store_order").
 		Group("merchant_id").
 		Scan(&orderAggs).Error; err != nil {
@@ -486,13 +494,30 @@ func (s *AdminService) SaveMerchantPlan(id uint, req dto.SaveMerchantPlanRequest
 	return plan, nil
 }
 
-func (s *AdminService) UpdateMerchantStatus(id uint, status string) error {
-	merchant, err := s.merchants.FindByID(id)
-	if err != nil {
-		return err
-	}
-	merchant.Status = status
-	return s.merchants.Save(merchant)
+func (s *AdminService) UpdateMerchantStatus(id uint, status string, audit ...AuditEvent) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var merchant model.Merchant
+		if err := tx.First(&merchant, id).Error; err != nil {
+			return err
+		}
+		merchant.Status = status
+		if err := tx.Save(&merchant).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant"
+			event.Input.TargetID = merchant.ID
+			event.Input.TargetName = merchant.Name
+			event.Input.MerchantID = &merchant.ID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["status"] = status
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 }
 
 func (s *AdminService) ListMerchantFollowUps(merchantID uint) ([]model.MerchantFollowUp, error) {
@@ -581,62 +606,285 @@ func (s *AdminService) UpdateMerchantFollowUpStatus(id uint, status string) (*mo
 	return &row, nil
 }
 
-func (s *AdminService) OpenMerchantSubscription(id uint, req dto.OpenMerchantSubscriptionRequest) (*model.Merchant, error) {
-	merchant, err := s.merchants.FindByID(id)
-	if err != nil {
-		return nil, err
-	}
-
+func (s *AdminService) OpenMerchantSubscription(id uint, req dto.OpenMerchantSubscriptionRequest, audit ...AuditEvent) (*model.Merchant, error) {
 	plan := strings.TrimSpace(req.Plan)
 	note := strings.TrimSpace(req.Note)
 	days := req.DurationDays
+	if days < 0 {
+		return nil, errors.New("subscription duration must be greater than zero")
+	}
 	if plan != "month" && plan != "year" {
 		return nil, errors.New("subscription plan is invalid")
 	}
-	merchantPlanName := map[string]string{"month": "月付", "year": "年付"}[plan]
-	merchantPlan, err := s.plans.FindByName(merchantPlanName)
+	var merchant model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&merchant, id).Error; err != nil {
+			return err
+		}
+		merchantPlanName := map[string]string{"month": "月付", "year": "年付"}[plan]
+		var merchantPlan model.MerchantPlan
+		if err := tx.Where("name = ?", merchantPlanName).First(&merchantPlan).Error; err != nil {
+			return errors.New("merchant subscription plan is not initialized")
+		}
+		durationDays := days
+		if durationDays == 0 {
+			durationDays = merchantPlan.DurationDays
+		}
+		if durationDays <= 0 {
+			return errors.New("subscription duration must be greater than zero")
+		}
+		merchant.SubscriptionPlan = plan
+		merchant.SubscriptionStatus = "active"
+		merchant.SubscriptionNote = note
+		merchant.SubscriptionPauseReason = ""
+		merchant.SubscriptionPausedAt = nil
+		baseTime := time.Now()
+		if merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(baseTime) {
+			baseTime = *merchant.SubscriptionExpireAt
+		} else if merchant.SubscriptionExpiredAt != nil && merchant.SubscriptionExpiredAt.After(baseTime) {
+			baseTime = *merchant.SubscriptionExpiredAt
+		}
+		expiredAt := baseTime.AddDate(0, 0, durationDays)
+		if expiredAt.Before(time.Now()) {
+			merchant.SubscriptionStatus = "inactive"
+		}
+		merchant.SubscriptionExpiredAt = &expiredAt
+		merchant.SubscriptionPlanID = &merchantPlan.ID
+		merchant.SubscriptionExpireAt = &expiredAt
+		if err := tx.Save(&merchant).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant"
+			event.Input.TargetID = merchant.ID
+			event.Input.TargetName = merchant.Name
+			event.Input.MerchantID = &merchant.ID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["plan"] = plan
+			event.Input.Detail["duration_days"] = durationDays
+			event.Input.Detail["note"] = note
+			event.Input.Detail["expire_at"] = expiredAt
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, errors.New("merchant subscription plan is not initialized")
-	}
-	if days == 0 {
-		days = merchantPlan.DurationDays
-	}
-
-	merchant.SubscriptionPlan = plan
-	merchant.SubscriptionStatus = "active"
-	merchant.SubscriptionNote = note
-	baseTime := time.Now()
-	if merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(baseTime) {
-		baseTime = *merchant.SubscriptionExpireAt
-	} else if merchant.SubscriptionExpiredAt != nil && merchant.SubscriptionExpiredAt.After(baseTime) {
-		baseTime = *merchant.SubscriptionExpiredAt
-	}
-	expiredAt := baseTime.AddDate(0, 0, days)
-	if expiredAt.Before(time.Now()) {
-		merchant.SubscriptionStatus = "inactive"
-	}
-	merchant.SubscriptionExpiredAt = &expiredAt
-	merchant.SubscriptionPlanID = &merchantPlan.ID
-	merchant.SubscriptionExpireAt = &expiredAt
-
-	if err := s.merchants.Save(merchant); err != nil {
 		return nil, err
 	}
-	return merchant, nil
+	return &merchant, nil
 }
 
-func (s *AdminService) StopMerchantSubscription(id uint) (*model.Merchant, error) {
-	merchant, err := s.merchants.FindByID(id)
+func (s *AdminService) StopMerchantSubscription(id uint, audit ...AuditEvent) (*model.Merchant, error) {
+	var merchant model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&merchant, id).Error; err != nil {
+			return err
+		}
+		merchant.SubscriptionStatus = "inactive"
+		merchant.SubscriptionExpireAt = nil
+		merchant.SubscriptionExpiredAt = nil
+		if err := tx.Save(&merchant).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant"
+			event.Input.TargetID = merchant.ID
+			event.Input.TargetName = merchant.Name
+			event.Input.MerchantID = &merchant.ID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	merchant.SubscriptionStatus = "inactive"
-	merchant.SubscriptionExpireAt = nil
-	merchant.SubscriptionExpiredAt = nil
-	if err := s.merchants.Save(merchant); err != nil {
+	return &merchant, nil
+}
+
+type merchantSubscriptionAuditState struct {
+	Status      string     `json:"status"`
+	ExpireAt    *time.Time `json:"expire_at"`
+	PauseReason string     `json:"pause_reason,omitempty"`
+	PausedAt    *time.Time `json:"paused_at,omitempty"`
+}
+
+func subscriptionAuditState(merchant model.Merchant) merchantSubscriptionAuditState {
+	return merchantSubscriptionAuditState{
+		Status:      merchant.SubscriptionStatus,
+		ExpireAt:    subscriptionExpiry(&merchant),
+		PauseReason: merchant.SubscriptionPauseReason,
+		PausedAt:    merchant.SubscriptionPausedAt,
+	}
+}
+
+func subscriptionExpiry(merchant *model.Merchant) *time.Time {
+	if merchant.SubscriptionExpireAt != nil {
+		return merchant.SubscriptionExpireAt
+	}
+	return merchant.SubscriptionExpiredAt
+}
+
+func (s *AdminService) PauseMerchantSubscription(id uint, reason string, actor MerchantSubscriptionActor) (*model.Merchant, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, errors.New("pause reason is required")
+	}
+	if len([]rune(reason)) > 255 {
+		return nil, errors.New("pause reason must be 255 characters or fewer")
+	}
+
+	now := time.Now()
+	var updated model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var merchant model.Merchant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&merchant, id).Error; err != nil {
+			return err
+		}
+		if !merchant.HasActiveSubscriptionAt(now) {
+			return errors.New("only an unexpired active subscription can be paused")
+		}
+
+		before := subscriptionAuditState(merchant)
+		result := tx.Model(&model.Merchant{}).
+			Where("id = ? AND subscription_status = ?", id, "active").
+			Updates(map[string]interface{}{
+				"subscription_status":       "paused",
+				"subscription_pause_reason": reason,
+				"subscription_paused_at":    now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("subscription changed while pausing; reload and try again")
+		}
+
+		merchant.SubscriptionStatus = "paused"
+		merchant.SubscriptionPauseReason = reason
+		merchant.SubscriptionPausedAt = &now
+		if err := recordMerchantSubscriptionAudit(tx, id, merchant.Name, "merchant_subscription_pause", reason, before, subscriptionAuditState(merchant), actor, now); err != nil {
+			return err
+		}
+		updated = merchant
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return merchant, nil
+	return &updated, nil
+}
+
+func (s *AdminService) ResumeMerchantSubscription(id uint, actor MerchantSubscriptionActor) (*model.Merchant, error) {
+	now := time.Now()
+	var updated model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var merchant model.Merchant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&merchant, id).Error; err != nil {
+			return err
+		}
+		if merchant.SubscriptionStatus != "paused" {
+			return errors.New("only a subscription paused through this flow can be resumed")
+		}
+		expireAt := subscriptionExpiry(&merchant)
+		if expireAt == nil || !expireAt.After(now) {
+			return errors.New("paused subscription has expired and must be renewed")
+		}
+
+		before := subscriptionAuditState(merchant)
+		reason := merchant.SubscriptionPauseReason
+		result := tx.Model(&model.Merchant{}).
+			Where("id = ? AND subscription_status = ?", id, "paused").
+			Updates(map[string]interface{}{
+				"subscription_status":       "active",
+				"subscription_pause_reason": "",
+				"subscription_paused_at":    nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("subscription changed while resuming; reload and try again")
+		}
+
+		merchant.SubscriptionStatus = "active"
+		merchant.SubscriptionPauseReason = ""
+		merchant.SubscriptionPausedAt = nil
+		if err := recordMerchantSubscriptionAudit(tx, id, merchant.Name, "merchant_subscription_resume", reason, before, subscriptionAuditState(merchant), actor, now); err != nil {
+			return err
+		}
+		updated = merchant
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func recordMerchantSubscriptionAudit(tx *gorm.DB, merchantID uint, merchantName, action, reason string, before, after merchantSubscriptionAuditState, actor MerchantSubscriptionActor, at time.Time) error {
+	role := strings.TrimSpace(actor.Type)
+	if role == "" {
+		role = "unknown"
+	}
+	detail, err := json.Marshal(map[string]interface{}{
+		"action":    action,
+		"reason":    reason,
+		"timestamp": at,
+		"before":    before,
+		"after":     after,
+	})
+	if err != nil {
+		return err
+	}
+	merchantIDCopy := merchantID
+	log := &model.AuditLog{
+		BaseModel:  model.BaseModel{CreatedAt: at, UpdatedAt: at},
+		ActorID:    actor.ID,
+		ActorType:  role,
+		ActorName:  merchantSubscriptionActorName(tx, actor.ID, role),
+		Action:     action,
+		TargetType: "merchant",
+		TargetID:   merchantID,
+		TargetName: merchantName,
+		MerchantID: &merchantIDCopy,
+		IP:         trimTo(actor.IP, 80),
+		UserAgent:  trimTo(actor.UserAgent, 255),
+		Detail:     string(detail),
+	}
+	return tx.Create(log).Error
+}
+
+func merchantSubscriptionActorName(tx *gorm.DB, actorID uint, actorType string) string {
+	if actorID == 0 {
+		return "system"
+	}
+	if actorType == "admin" || actorType == "super_admin" {
+		var admin model.AdminUser
+		if err := tx.Select("id", "username", "display_name").First(&admin, actorID).Error; err == nil {
+			if admin.DisplayName != "" {
+				return admin.DisplayName
+			}
+			return admin.Username
+		}
+		return "unknown"
+	}
+	var user model.User
+	if err := tx.Select("id", "display_name", "phone", "email").First(&user, actorID).Error; err == nil {
+		if user.DisplayName != "" {
+			return user.DisplayName
+		}
+		if user.Phone != "" {
+			return user.Phone
+		}
+		if user.Email != "" {
+			return user.Email
+		}
+	}
+	return "unknown"
 }
 
 func (s *AdminService) GetMerchant(id uint) (*model.Merchant, error) {
@@ -699,7 +947,7 @@ func (s *AdminService) PrepareMerchantSettlement(merchantID uint) (*MerchantSett
 	return prepare, nil
 }
 
-func (s *AdminService) CreateMerchantSettlement(merchantID uint, req dto.CreateMerchantSettlementRequest) (*model.MerchantSettlement, []model.Order, error) {
+func (s *AdminService) CreateMerchantSettlement(merchantID uint, req dto.CreateMerchantSettlementRequest, audit ...AuditEvent) (*model.MerchantSettlement, []model.Order, error) {
 	if _, err := s.merchants.FindByID(merchantID); err != nil {
 		return nil, nil, errors.New("商家不存在")
 	}
@@ -753,6 +1001,18 @@ func (s *AdminService) CreateMerchantSettlement(merchantID uint, req dto.CreateM
 			return err
 		}
 		settledOrders = orders
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant_settlement"
+			event.Input.TargetID = settlement.ID
+			event.Input.MerchantID = &merchantID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["order_count"] = settlement.OrderCount
+			event.Input.Detail["net_amount"] = settlement.NetAmountCents
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
 		return nil
 	})
 	if err != nil {
@@ -780,18 +1040,35 @@ func (s *AdminService) GetMerchantSettlement(id uint) (*model.MerchantSettlement
 	return &settlement, orders, err
 }
 
-func (s *AdminService) MarkMerchantSettlementPaid(id uint, req dto.MarkMerchantSettlementPaidRequest) (*model.MerchantSettlement, error) {
+func (s *AdminService) MarkMerchantSettlementPaid(id uint, req dto.MarkMerchantSettlementPaidRequest, audit ...AuditEvent) (*model.MerchantSettlement, error) {
 	var settlement model.MerchantSettlement
-	if err := s.db.First(&settlement, id).Error; err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	settlement.Status = "paid"
-	settlement.PaidAt = &now
-	if remark := strings.TrimSpace(req.Remark); remark != "" {
-		settlement.Remark = remark
-	}
-	if err := s.db.Save(&settlement).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&settlement, id).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		settlement.Status = "paid"
+		settlement.PaidAt = &now
+		if remark := strings.TrimSpace(req.Remark); remark != "" {
+			settlement.Remark = remark
+		}
+		if err := tx.Save(&settlement).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant_settlement"
+			event.Input.TargetID = settlement.ID
+			event.Input.MerchantID = &settlement.MerchantID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["net_amount"] = settlement.NetAmountCents
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &settlement, nil
@@ -805,17 +1082,10 @@ func (s *AdminService) unsettledMerchantOrdersTx(tx *gorm.DB, merchantID uint) (
 	var orders []model.Order
 	err := tx.Preload("Store").
 		Where("merchant_id = ? AND order_type = ? AND settlement_id IS NULL", merchantID, "store_order").
-		Where("status IN ?", []string{"accepted", "completed"}).
+		Where("status IN ? AND paid_at IS NOT NULL AND total_amount > 0", []string{"accepted", "completed"}).
 		Order("created_at asc").
 		Find(&orders).Error
 	return orders, err
-}
-
-func settlementOrderAmount(order model.Order) int64 {
-	if order.TotalAmount > 0 {
-		return order.TotalAmount
-	}
-	return order.Amount
 }
 
 func (s *AdminService) ListMerchantStores(merchantID uint, page, pageSize int) ([]model.Store, int64, error) {
@@ -1023,7 +1293,7 @@ func (s *AdminService) merchantOrderStats(merchantID uint) map[string]int64 {
 		Amount int64
 	}
 	s.db.Model(&model.Order{}).
-		Select("status, COUNT(*) AS count, COALESCE(SUM(total_amount),0) AS amount").
+		Select("status, COUNT(*) AS count, COALESCE(SUM(CASE WHEN paid_at IS NOT NULL AND total_amount > 0 THEN total_amount ELSE 0 END),0) AS amount").
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
 		Group("status").
 		Scan(&rows)
@@ -1047,7 +1317,7 @@ func (s *AdminService) merchantOrderStats(merchantID uint) map[string]int64 {
 
 func (s *AdminService) hotProducts(merchantID uint, desc bool) []map[string]interface{} {
 	var orders []model.Order
-	if err := s.db.Where("merchant_id = ? AND order_type = ? AND status IN ?", merchantID, "store_order", []string{"received", "accepted", "completed"}).Find(&orders).Error; err != nil {
+	if err := s.db.Where("merchant_id = ? AND order_type = ? AND paid_at IS NOT NULL AND total_amount > 0", merchantID, "store_order").Find(&orders).Error; err != nil {
 		return []map[string]interface{}{}
 	}
 	type productAgg struct {
@@ -1195,13 +1465,29 @@ func (s *AdminService) DisableMerchantStore(merchantID, storeID uint) error {
 	return s.stores.Save(store)
 }
 
-func (s *AdminService) UpdateUserStatus(id uint, status string) error {
-	user, err := s.users.FindByID(id)
-	if err != nil {
-		return err
-	}
-	user.Status = status
-	return s.users.Save(user)
+func (s *AdminService) UpdateUserStatus(id uint, status string, audit ...AuditEvent) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.First(&user, id).Error; err != nil {
+			return err
+		}
+		user.Status = status
+		if err := tx.Save(&user).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "user"
+			event.Input.TargetID = user.ID
+			event.Input.TargetName = user.DisplayName
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["status"] = status
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 }
 
 func (s *AdminService) ManualOpenMember(id, packageID uint) error {
@@ -1220,60 +1506,66 @@ func (s *AdminService) ManualOpenMember(id, packageID uint) error {
 	return orderService.applyPackageToUser(user, pkg, false)
 }
 
-func (s *AdminService) AdjustUserMember(id uint, req dto.ManualOpenMemberRequest) (*model.User, error) {
-	user, err := s.users.FindByID(id)
+func (s *AdminService) AdjustUserMember(id uint, req dto.ManualOpenMemberRequest, audit ...AuditEvent) (*model.User, error) {
+	var user model.User
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&user, id).Error; err != nil {
+			return err
+		}
+		if req.PackageID > 0 {
+			var pkg model.MembershipPackage
+			if err := tx.First(&pkg, req.PackageID).Error; err != nil {
+				return err
+			}
+			if err := NewOrderService(tx).applyPackageToUserTx(tx, &user, &pkg, req.AutoRenew); err != nil {
+				return err
+			}
+		}
+
+		level := strings.TrimSpace(req.MemberLevel)
+		if level != "" {
+			user.MemberLevel = level
+		}
+		if req.DurationDays > 0 {
+			now := time.Now()
+			base := now
+			if user.ExpiredAt != nil && user.ExpiredAt.After(now) {
+				base = *user.ExpiredAt
+			}
+			expiredAt := base.AddDate(0, 0, req.DurationDays)
+			user.ExpiredAt = &expiredAt
+		}
+		if strings.TrimSpace(req.ExpiredAt) != "" {
+			expiredAt, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(req.ExpiredAt), time.Local)
+			if err != nil {
+				return errors.New("expired_at format must be YYYY-MM-DD")
+			}
+			expiredAt = time.Date(expiredAt.Year(), expiredAt.Month(), expiredAt.Day(), 23, 59, 59, 0, time.Local)
+			user.ExpiredAt = &expiredAt
+		}
+		if req.QuotaDelta != 0 {
+			user.RemainingQuota += req.QuotaDelta
+			if user.RemainingQuota < 0 {
+				user.RemainingQuota = 0
+			}
+		}
+		user.AutoRenew = req.AutoRenew
+		if err := tx.Save(&user).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "user"
+			event.Input.TargetID = user.ID
+			event.Input.TargetName = user.DisplayName
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	if req.PackageID > 0 {
-		pkg, err := s.packages.FindByID(req.PackageID)
-		if err != nil {
-			return nil, err
-		}
-		orderService := NewOrderService(s.db)
-		if err := orderService.applyPackageToUser(user, pkg, req.AutoRenew); err != nil {
-			return nil, err
-		}
-		user, err = s.users.FindByID(id)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	level := strings.TrimSpace(req.MemberLevel)
-	if level != "" {
-		user.MemberLevel = level
-	}
-	if req.DurationDays > 0 {
-		now := time.Now()
-		base := now
-		if user.ExpiredAt != nil && user.ExpiredAt.After(now) {
-			base = *user.ExpiredAt
-		}
-		expiredAt := base.AddDate(0, 0, req.DurationDays)
-		user.ExpiredAt = &expiredAt
-	}
-	if strings.TrimSpace(req.ExpiredAt) != "" {
-		expiredAt, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(req.ExpiredAt), time.Local)
-		if err != nil {
-			return nil, errors.New("expired_at format must be YYYY-MM-DD")
-		}
-		expiredAt = time.Date(expiredAt.Year(), expiredAt.Month(), expiredAt.Day(), 23, 59, 59, 0, time.Local)
-		user.ExpiredAt = &expiredAt
-	}
-	if req.QuotaDelta != 0 {
-		user.RemainingQuota += req.QuotaDelta
-		if user.RemainingQuota < 0 {
-			user.RemainingQuota = 0
-		}
-	}
-	user.AutoRenew = req.AutoRenew
-
-	if err := s.users.Save(user); err != nil {
-		return nil, err
-	}
-	return user, nil
+	return &user, nil
 }
 
 func (s *AdminService) UpdateUserPhone(id uint, phone string) error {
@@ -1375,6 +1667,9 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 }
 
 func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest) (AIConfigPolicy, error) {
+	if req.Enabled {
+		return AIConfigPolicy{}, errors.New("AI provider 尚未接入，当前不能启用 AI 经营功能")
+	}
 	provider := strings.ToLower(strings.TrimSpace(req.Provider))
 	if provider == "" {
 		return AIConfigPolicy{}, errors.New("AI 供应商不能为空")
@@ -1485,50 +1780,17 @@ func (s *AdminService) SecurityCheck() SecurityCheckReport {
 
 func (s *AdminService) AIConfigStatus() AIConfigStatus {
 	policy := s.loadAIConfigPolicy()
-	provider := strings.TrimSpace(s.cfg.AIProvider)
-	if provider == "" {
-		provider = policy.Provider
-	}
-	if provider == "" {
-		provider = "template"
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(s.cfg.AIBaseURL), "/")
-	if baseURL == "" {
-		baseURL = policy.BaseURL
-	}
-	modelName := strings.TrimSpace(s.cfg.AIModel)
-	if modelName == "" {
-		modelName = policy.Model
-	}
-	hasKey := strings.TrimSpace(s.cfg.AIAPIKey) != ""
-	ready := s.cfg.AIEnabled && baseURL != "" && modelName != "" && hasKey
-	status := "warning"
-	summary := "AI 当前使用模板兜底，商家端功能可演示但不会调用真实模型。"
-	suggestion := "准备好 API Key、额度和计费预警后，再开启 AI_ENABLED=true。"
-	if s.cfg.AIEnabled && !ready {
-		status = "danger"
-		summary = "AI 已开启，但供应商地址、模型或 API Key 配置不完整。"
-		suggestion = "补齐 AI_BASE_URL、AI_API_KEY、AI_MODEL 后重启后端，并先生成一次经营建议测试。"
-	}
-	if ready {
-		status = "pass"
-		summary = fmt.Sprintf("AI 已配置为 %s / %s，可用于商家端经营建议。", provider, modelName)
-		suggestion = "建议继续接入调用日志、套餐额度、缓存和成本预警。"
-	}
+	policy.Enabled = false
 	return AIConfigStatus{
-		Enabled:        s.cfg.AIEnabled,
-		Provider:       provider,
-		BaseURL:        baseURL,
-		Model:          modelName,
-		TimeoutSeconds: s.cfg.AITimeoutSeconds,
-		HasAPIKey:      hasKey,
-		Ready:          ready,
-		Status:         status,
-		Summary:        summary,
-		Suggestion:     suggestion,
-		EnvExample:     aiEnvExample(provider, baseURL, modelName),
-		Presets:        aiProviderPresets(),
-		Policy:         policy,
+		Enabled:    false,
+		Provider:   "not_connected",
+		Ready:      false,
+		Status:     "warning",
+		Summary:    "AI 经营模块目前只是功能框架，尚未接入真实 provider/API；当前应用默认禁用，不会调用模型或生成模板假建议。",
+		Suggestion: "后续按阶段接入 provider adapter、授权数据上下文与来源记录、调用审计和成本控制，并在任何营销/财务操作前保留人工确认。",
+		EnvExample: "AI_ENABLED=false\n# provider 未接入；此处不收集或保存 API Key",
+		Presets:    aiProviderPresets(),
+		Policy:     policy,
 	}
 }
 
@@ -1704,8 +1966,8 @@ func (s *AdminService) transactionHealthBlock() OperationHealthBlock {
 	pending := s.countOrders("order_type = ? AND status = ?", "store_order", "pending")
 	failed := s.countOrders("order_type = ? AND status = ?", "store_order", "failed")
 	paymentConfirming := s.countOrders("order_type = ? AND status = ?", "store_order", "payment_confirming")
-	received := s.countOrders("order_type = ? AND status = ?", "store_order", "received")
-	staleAccepted := s.countOrders("order_type = ? AND status = ? AND updated_at < ?", "store_order", "accepted", time.Now().Add(-2*time.Hour))
+	received := s.countOrders("order_type = ? AND status = ? AND paid_at IS NOT NULL AND total_amount > 0", "store_order", "received")
+	staleAccepted := s.countOrders("order_type = ? AND status = ? AND paid_at IS NOT NULL AND total_amount > 0 AND updated_at < ?", "store_order", "accepted", time.Now().Add(-2*time.Hour))
 	status := healthStatus(paymentConfirming+received+staleAccepted, pending+failed)
 	return OperationHealthBlock{
 		Key:        "transaction",
@@ -1750,7 +2012,7 @@ func (s *AdminService) paymentRefundHealthBlock() OperationHealthBlock {
 func (s *AdminService) settlementHealthBlock() OperationHealthBlock {
 	pendingSettlements := s.countRows(&model.MerchantSettlement{}, "status = ?", "pending")
 	overdueSettlements := s.countRows(&model.MerchantSettlement{}, "status = ? AND created_at < ?", "pending", time.Now().AddDate(0, 0, -7))
-	unsettledOrders := s.countOrders("order_type = ? AND settlement_id IS NULL AND status IN ?", "store_order", []string{"received", "accepted", "completed"})
+	unsettledOrders := s.countOrders("order_type = ? AND settlement_id IS NULL AND paid_at IS NOT NULL AND total_amount > 0 AND status IN ?", "store_order", []string{"received", "accepted", "completed"})
 	paymentConfigPending := s.countRows(&model.MerchantPaymentConfig{}, "audit_status = ?", "pending")
 	status := healthStatus(overdueSettlements+paymentConfigPending, pendingSettlements+unsettledOrders)
 	return OperationHealthBlock{
@@ -1962,13 +2224,7 @@ func (s *AdminService) checkAlipayConfig() SecurityCheckItem {
 }
 
 func (s *AdminService) checkAIConfig() SecurityCheckItem {
-	if !s.cfg.AIEnabled {
-		return securityItem("ai", "AI 模型接入", "warning", "AI_ENABLED 当前为 false，商家端会使用模板兜底。", "如果要把 AI 作为核心卖点，建议接入 DeepSeek、通义千问或智谱等兼容 OpenAI 协议的模型。")
-	}
-	if strings.TrimSpace(s.cfg.AIBaseURL) == "" || strings.TrimSpace(s.cfg.AIAPIKey) == "" || strings.TrimSpace(s.cfg.AIModel) == "" {
-		return securityItem("ai", "AI 模型接入", "danger", "AI 已启用，但 BASE_URL、API_KEY 或 MODEL 未完整配置。", "补齐 AI_BASE_URL、AI_API_KEY、AI_MODEL 后重启后端，并测试商家端 AI 经营分析。")
-	}
-	return securityItem("ai", "AI 模型接入", "pass", fmt.Sprintf("AI 已启用，当前模型：%s / %s。", s.cfg.AIProvider, s.cfg.AIModel), "继续监控调用成本、失败率和生成质量；建议给商家端设置日调用额度。")
+	return securityItem("ai", "AI 模型接入", "warning", "AI provider 适配器当前未接入，商家端 AI 经营能力保持禁用。", "后续完成数据授权与来源、provider 隔离、调用审计、额度/成本控制和人工审核后，再独立验证并启用；仅设置 AI_ENABLED 不会启用当前应用。")
 }
 
 func (s *AdminService) checkBackupScripts() SecurityCheckItem {
@@ -2148,22 +2404,13 @@ func aiProviderPresets() []AIProviderPreset {
 	}
 }
 
-func aiEnvExample(provider, baseURL, modelName string) string {
-	if strings.TrimSpace(provider) == "" || provider == "template" {
-		provider = "deepseek"
-	}
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = "https://api.deepseek.com/v1"
-	}
-	if strings.TrimSpace(modelName) == "" {
-		modelName = "deepseek-chat"
-	}
-	return fmt.Sprintf("AI_ENABLED=true\nAI_PROVIDER=%s\nAI_BASE_URL=%s\nAI_API_KEY=replace-with-ai-api-key\nAI_MODEL=%s\nAI_TIMEOUT_SECONDS=20", provider, baseURL, modelName)
+func aiEnvExample(_, _, _ string) string {
+	return "AI_ENABLED=false\n# provider 未接入；当前不要配置或收集 API Key"
 }
 
 func aiUsageSuggestion(total, failed, fallback, nearLimitMerchants, estimatedCost, costLimit int64) string {
 	if total == 0 {
-		return "今日暂无 AI 调用，接入真实模型后建议先观察经营建议、菜单优化和裂变文案三个高频场景。"
+		return "AI provider 尚未接入；当前不产生模型调用统计，后续接入前先完成授权、成本和审计准备。"
 	}
 	if costLimit > 0 && estimatedCost >= costLimit {
 		return "今日 AI 预估成本已达到后台设置上限，建议暂停高频生成、降低长文本输出或切换更低成本模型。"
@@ -2175,7 +2422,7 @@ func aiUsageSuggestion(total, failed, fallback, nearLimitMerchants, estimatedCos
 		return "今日存在 AI 调用失败，建议检查供应商额度、Key、网络和超时设置。"
 	}
 	if fallback > 0 {
-		return "今日存在模板兜底结果，说明部分调用未走真实模型；可用于演示，但商用前建议接入真实 API。"
+		return "发现旧版本记录的 fallback 标记；这不代表真实模型调用或有效 AI 结果，需与后续真实验证数据分开审阅。"
 	}
 	return "今日 AI 调用正常，后续建议继续接入套餐额度、缓存和成本预警。"
 }

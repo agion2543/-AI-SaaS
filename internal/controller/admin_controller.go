@@ -188,22 +188,14 @@ func (ctl *AdminController) CreateMerchantSettlement(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
 	var req dto.CreateMerchantSettlementRequest
 	_ = c.ShouldBindJSON(&req)
-	settlement, orders, err := ctl.admin.CreateMerchantSettlement(id, req)
+	settlement, orders, err := ctl.admin.CreateMerchantSettlement(id, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_settlement_create", TargetType: "merchant_settlement", MerchantID: &id, Detail: gin.H{"remark": req.Remark}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_settlement_create",
-		TargetType: "merchant_settlement",
-		TargetID:   settlement.ID,
-		MerchantID: &id,
-		Detail: gin.H{
-			"order_count": settlement.OrderCount,
-			"net_amount":  settlement.NetAmountCents,
-			"remark":      req.Remark,
-		},
-	})
 	utils.Success(c, gin.H{"settlement": settlement, "orders": orders})
 }
 
@@ -211,21 +203,14 @@ func (ctl *AdminController) MarkMerchantSettlementPaid(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
 	var req dto.MarkMerchantSettlementPaidRequest
 	_ = c.ShouldBindJSON(&req)
-	settlement, err := ctl.admin.MarkMerchantSettlementPaid(id, req)
+	settlement, err := ctl.admin.MarkMerchantSettlementPaid(id, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_settlement_paid", TargetType: "merchant_settlement", Detail: gin.H{"remark": req.Remark}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_settlement_paid",
-		TargetType: "merchant_settlement",
-		TargetID:   settlement.ID,
-		MerchantID: &settlement.MerchantID,
-		Detail: gin.H{
-			"net_amount": settlement.NetAmountCents,
-			"remark":     req.Remark,
-		},
-	})
 	utils.Success(c, gin.H{"settlement": settlement})
 }
 
@@ -381,23 +366,13 @@ func (ctl *AdminController) UpdateMerchantStatus(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := ctl.admin.UpdateMerchantStatus(id, req.Status); err != nil {
+	if err := ctl.admin.UpdateMerchantStatus(id, req.Status, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_status_update", TargetType: "merchant", MerchantID: &id, Detail: gin.H{"status": req.Status}},
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	merchant, _ := ctl.admin.GetMerchant(id)
-	targetName := ""
-	if merchant != nil {
-		targetName = merchant.Name
-	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_status_update",
-		TargetType: "merchant",
-		TargetID:   id,
-		TargetName: targetName,
-		MerchantID: &id,
-		Detail:     gin.H{"status": req.Status},
-	})
 	utils.Success(c, gin.H{"updated": true})
 }
 
@@ -488,42 +463,64 @@ func (ctl *AdminController) OpenMerchantSubscription(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	merchant, err := ctl.admin.OpenMerchantSubscription(id, req)
+	merchant, err := ctl.admin.OpenMerchantSubscription(id, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_subscription_open", TargetType: "merchant", MerchantID: &id},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_subscription_open",
-		TargetType: "merchant",
-		TargetID:   id,
-		TargetName: merchant.Name,
-		MerchantID: &id,
-		Detail: gin.H{
-			"plan":          req.Plan,
-			"duration_days": req.DurationDays,
-			"note":          req.Note,
-			"expire_at":     merchant.SubscriptionExpireAt,
-		},
-	})
 	utils.Success(c, gin.H{"merchant": merchant})
 }
 
 func (ctl *AdminController) StopMerchantSubscription(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
-	merchant, err := ctl.admin.StopMerchantSubscription(id)
+	merchant, err := ctl.admin.StopMerchantSubscription(id, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_subscription_stop", TargetType: "merchant", MerchantID: &id},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_subscription_stop",
-		TargetType: "merchant",
-		TargetID:   id,
-		TargetName: merchant.Name,
-		MerchantID: &id,
-	})
 	utils.Success(c, gin.H{"merchant": merchant})
+}
+
+func (ctl *AdminController) PauseMerchantSubscription(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.PauseMerchantSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	merchant, err := ctl.admin.PauseMerchantSubscription(id, req.Reason, merchantSubscriptionActor(c))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"merchant": merchant})
+}
+
+func (ctl *AdminController) ResumeMerchantSubscription(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	merchant, err := ctl.admin.ResumeMerchantSubscription(id, merchantSubscriptionActor(c))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"merchant": merchant})
+}
+
+func merchantSubscriptionActor(c *gin.Context) service.MerchantSubscriptionActor {
+	role, _ := c.Get("role")
+	roleText, _ := role.(string)
+	return service.MerchantSubscriptionActor{
+		ID:        c.GetUint("user_id"),
+		Type:      roleText,
+		IP:        c.ClientIP(),
+		UserAgent: c.GetHeader("User-Agent"),
+	}
 }
 
 func (ctl *AdminController) UpdateUserStatus(c *gin.Context) {
@@ -533,16 +530,13 @@ func (ctl *AdminController) UpdateUserStatus(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := ctl.admin.UpdateUserStatus(id, req.Status); err != nil {
+	if err := ctl.admin.UpdateUserStatus(id, req.Status, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "user_status_update", TargetType: "user", Detail: gin.H{"status": req.Status}},
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "user_status_update",
-		TargetType: "user",
-		TargetID:   id,
-		Detail:     gin.H{"status": req.Status},
-	})
 	utils.Success(c, gin.H{"updated": true})
 }
 
@@ -553,25 +547,17 @@ func (ctl *AdminController) ManualOpenMember(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	user, err := ctl.admin.AdjustUserMember(id, req)
+	user, err := ctl.admin.AdjustUserMember(id, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "user_member_adjust", TargetType: "user", Detail: gin.H{
+			"package_id": req.PackageID, "member_level": req.MemberLevel, "duration_days": req.DurationDays,
+			"expired_at": req.ExpiredAt, "quota_delta": req.QuotaDelta, "auto_renew": req.AutoRenew,
+		}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "user_member_adjust",
-		TargetType: "user",
-		TargetID:   id,
-		TargetName: user.DisplayName,
-		Detail: gin.H{
-			"package_id":    req.PackageID,
-			"member_level":  req.MemberLevel,
-			"duration_days": req.DurationDays,
-			"expired_at":    req.ExpiredAt,
-			"quota_delta":   req.QuotaDelta,
-			"auto_renew":    req.AutoRenew,
-		},
-	})
 	utils.Success(c, gin.H{"updated": true, "user": user})
 }
 

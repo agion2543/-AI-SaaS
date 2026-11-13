@@ -5,11 +5,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server \
+    && CGO_ENABLED=0 GOOS=linux go build -o schema-migrate ./cmd/schema-migrate
 
 FROM alpine:3.20
 WORKDIR /app
 COPY --from=builder /app/server /app/server
+COPY --from=builder /app/schema-migrate /app/schema-migrate
 COPY --from=builder /app/.env.example /app/.env.example
 EXPOSE 8080
 CMD ["/app/server"]

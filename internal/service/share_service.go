@@ -206,9 +206,12 @@ func (s *ShareService) DisableLowPerformanceCampaign(merchantID uint) (*model.Sh
 	return &campaign, nil
 }
 
-func (s *ShareService) EnsureCampaignForOrder(orderNo string) (*model.ShareCampaign, error) {
+func (s *ShareService) EnsureCampaignForOrder(orderNo, accessToken string) (*model.ShareCampaign, error) {
 	var order model.Order
 	if err := s.db.Preload("Store").Preload("Merchant").Where("order_no = ? AND order_type = ?", orderNo, "store_order").First(&order).Error; err != nil {
+		return nil, errors.New("订单不存在")
+	}
+	if !customerOrderAccessTokenMatches(&order, accessToken) {
 		return nil, errors.New("订单不存在")
 	}
 	if order.MerchantID == nil || order.StoreID == nil {

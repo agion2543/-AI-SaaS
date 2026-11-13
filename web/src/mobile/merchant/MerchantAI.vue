@@ -2,13 +2,15 @@
   <div class="merchant-ai">
     <!-- 顶部导航 -->
     <van-nav-bar
-      title="AI 运营助手"
+      title="AI 运营助手（未接入）"
       left-arrow
       fixed
       placeholder
       @click-left="router.back()"
     />
 
+    <van-empty v-if="!aiAvailable" description="AI 服务尚未接入，分析、营销文案和活动方案生成当前不可用。" />
+    <template v-else>
     <!-- AI 洞察 -->
     <div class="ai-insights">
       <div class="section-title">经营洞察</div>
@@ -195,6 +197,7 @@
         </div>
       </div>
     </van-popup>
+    </template>
   </div>
 </template>
 
@@ -205,6 +208,7 @@ import { showToast, showSuccessToast } from 'vant'
 import { fetchMerchantAIInsights, generateMerchantAIMarketingCopy, fetchMerchantShareStats } from '@/api/modules'
 
 const router = useRouter()
+const aiAvailable = false
 
 const loading = ref(true)
 const insights = ref([])
@@ -287,46 +291,23 @@ async function loadInsights() {
 }
 
 function openAIMarketing() {
+  if (!aiAvailable) {
+    showToast('AI 服务尚未接入，当前不可用')
+    return
+  }
   showMarketingDialog.value = true
 }
 
 function openAIActivity() {
+  if (!aiAvailable) {
+    showToast('AI 服务尚未接入，当前不可用')
+    return
+  }
   showActivityDialog.value = true
 }
 
-async function openAISuggestions() {
-  showSuggestionsDialog.value = true
-  loadingSuggestions.value = true
-
-  try {
-    // 模拟 AI 建议
-    await new Promise(resolve => setTimeout(resolve, 1500))
-
-    suggestions.value = [
-      {
-        title: '优化商品价格',
-        description: '根据市场调研，建议适当降低 2-3 款主力商品价格，可提升约 15% 的订单转化率',
-        priority: 'high',
-        action: '查看详情'
-      },
-      {
-        title: '增加午间优惠',
-        description: '11:00-14:00 时段订单较少，建议推出午市特惠套餐，吸引更多顾客',
-        priority: 'medium',
-        action: '创建活动'
-      },
-      {
-        title: '会员积分体系',
-        description: '建议开启会员积分功能，提升用户复购率',
-        priority: 'low',
-        action: '了解更多'
-      }
-    ]
-  } catch (e) {
-    showToast('加载失败')
-  } finally {
-    loadingSuggestions.value = false
-  }
+function openAISuggestions() {
+  showToast('AI 服务尚未接入，当前不可用')
 }
 
 function openAIAutoGenerate() {
@@ -339,6 +320,10 @@ function onTypeConfirm({ selectedOptions }) {
 }
 
 async function generateMarketingCopy() {
+  if (!aiAvailable) {
+    showToast('AI 服务尚未接入，当前不可用')
+    return
+  }
   if (!marketingForm.value.store_name) {
     showToast('请输入门店名称')
     return
@@ -356,21 +341,7 @@ async function generateMarketingCopy() {
     generatedCopy.value = res.data?.content || '生成的文案内容'
     showSuccessToast('文案已生成')
   } catch (e) {
-    // 模拟生成
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    generatedCopy.value = `【${marketingForm.value.store_name}】
-
-${marketingForm.value.type === '朋友圈文案' ? '📣 新品上市！' : '✨ 好消息！'}
-
-${marketingForm.value.products ? `我们的主打商品「${marketingForm.value.products}」` : '本店商品'}现在有优惠活动！
-
-${marketingForm.value.keywords || '优惠多多，实惠多多'} 🛒
-
-快来尝鲜吧~ 地址：[门店地址]
-
-#${marketingForm.value.store_name} #美食探店`
-
-    showSuccessToast('文案已生成')
+    showToast(e.response?.data?.message || 'AI 服务当前不可用')
   } finally {
     generating.value = false
   }
@@ -384,49 +355,8 @@ function copyContent() {
   })
 }
 
-async function generateActivity() {
-  if (!activityForm.value.theme) {
-    showToast('请输入活动主题')
-    return
-  }
-
-  generatingActivity.value = true
-  try {
-    await new Promise(resolve => setTimeout(resolve, 1500))
-
-    generatedActivity.value = `【${activityForm.value.theme}活动策划方案】
-
-📅 活动时长: ${activityForm.value.duration || '一周'}
-💰 预算: ¥${activityForm.value.budget || '1000'}
-
-一、活动目标
-- 提升门店曝光度
-- 增加新顾客到店
-- 促进老顾客复购
-
-二、活动内容
-1. 限时折扣：全店商品 8 折
-2. 满减活动：满 50 减 10
-3. 会员专享：会员额外优惠 5%
-
-三、宣传渠道
-1. 朋友圈海报
-2. 小红书种草笔记
-3. 抖音短视频推广
-
-四、预期效果
-- 活动期间订单量提升 30%
-- 新增会员 50 人
-- 营收增长 20%
-
-请根据实际情况调整方案！`
-
-    showSuccessToast('方案已生成')
-  } catch (e) {
-    showToast('生成失败')
-  } finally {
-    generatingActivity.value = false
-  }
+function generateActivity() {
+  showToast('AI 服务尚未接入，当前不可用')
 }
 
 function copyActivity() {
@@ -438,7 +368,7 @@ function copyActivity() {
 }
 
 onMounted(() => {
-  loadInsights()
+  if (aiAvailable) loadInsights()
 })
 </script>
 

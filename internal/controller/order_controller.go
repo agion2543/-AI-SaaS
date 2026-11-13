@@ -84,31 +84,38 @@ func (ctl *OrderController) CreateCustomerOrder(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	accessToken := order.CustomerAccessToken
+	publicOrder := serializePublicCustomerOrder(order)
+	if order.TotalAmount == 0 {
+		utils.Success(c, gin.H{"order": publicOrder, "access_token": accessToken, "payment_required": false})
+		return
+	}
 
 	if req.PaymentChannel != "" && req.PaymentChannel != "alipay" {
-		utils.Success(c, gin.H{"order": serializeOrder(order)})
+		utils.Success(c, gin.H{"order": publicOrder, "access_token": accessToken})
 		return
 	}
 	if order.Status != "pending" {
-		utils.Success(c, gin.H{"order": serializeOrder(order), "payment_required": false})
+		utils.Success(c, gin.H{"order": publicOrder, "access_token": accessToken, "payment_required": false})
 		return
 	}
 
-	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode)
+	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode, accessToken)
 	if err != nil {
 		utils.Success(c, gin.H{
-			"order":         serializeOrder(order),
+			"order":         publicOrder,
+			"access_token":  accessToken,
 			"payment_error": err.Error(),
-			"retry_path":    "/customer/orders/" + url.PathEscape(order.OrderNo),
+			"retry_path":    "/customer/orders/" + url.PathEscape(order.OrderNo) + "#access_token=" + url.QueryEscape(accessToken),
 		})
 		return
 	}
 
-	utils.Success(c, gin.H{"order": serializeOrder(order), "payment": payment})
+	utils.Success(c, gin.H{"order": publicOrder, "access_token": accessToken, "payment": payment})
 }
 
 func (ctl *OrderController) CustomerOrderDetail(c *gin.Context) {
-	order, err := ctl.service.PublicOrderDetail(c.Param("orderNo"))
+	order, err := ctl.service.PublicOrderDetail(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"))
 	if err != nil {
 		utils.Error(c, http.StatusNotFound, err.Error())
 		return
@@ -118,17 +125,17 @@ func (ctl *OrderController) CustomerOrderDetail(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig)})
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig)})
 }
 
 func (ctl *OrderController) MarkCustomerOrderPaid(c *gin.Context) {
-	order, err := ctl.service.MarkCustomerStoreOrderPaid(c.Param("orderNo"))
+	order, err := ctl.service.MarkCustomerStoreOrderPaid(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	paymentConfig, _ := ctl.service.PublicPaymentConfigForOrder(order)
-	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "marked": true})
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "marked": true})
 }
 
 func (ctl *OrderController) AppendCustomerOrderItems(c *gin.Context) {
@@ -138,32 +145,34 @@ func (ctl *OrderController) AppendCustomerOrderItems(c *gin.Context) {
 		return
 	}
 
-	order, err := ctl.service.AppendCustomerStoreOrderItems(c.Param("orderNo"), req)
+	order, err := ctl.service.AppendCustomerStoreOrderItems(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"), req)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	paymentConfig, _ := ctl.service.PublicPaymentConfigForOrder(order)
-	utils.Success(c, gin.H{"order": serializeOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "appended": true})
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "appended": true})
 }
 
 func (ctl *OrderController) RetryCustomerOrderPayment(c *gin.Context) {
 	var req dto.RetryCustomerOrderPaymentRequest
 	_ = c.ShouldBindJSON(&req)
 
-	order, err := ctl.service.PrepareCustomerOrderRetry(c.Param("orderNo"))
+	accessToken := c.GetHeader("X-Order-Access-Token")
+	order, err := ctl.service.PrepareCustomerOrderRetry(c.Param("orderNo"), accessToken)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode)
+	order.CustomerAccessToken = accessToken
+	payment, err := ctl.alipay.BuildCheckoutPayload(order, req.PayMode, accessToken)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.Success(c, gin.H{"order": serializeOrder(order), "payment": payment})
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "payment": payment})
 }
 
 func (ctl *OrderController) ReviewCustomerOrder(c *gin.Context) {
@@ -173,12 +182,12 @@ func (ctl *OrderController) ReviewCustomerOrder(c *gin.Context) {
 		return
 	}
 
-	order, err := ctl.service.ReviewCustomerOrder(c.Param("orderNo"), req)
+	order, err := ctl.service.ReviewCustomerOrder(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"), req)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "reviewed": true})
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "reviewed": true})
 }
 
 func (ctl *OrderController) ListMine(c *gin.Context) {
@@ -241,19 +250,26 @@ func (ctl *OrderController) PaymentCallback(c *gin.Context) {
 	tradeStatus := values.Get("trade_status")
 	if !service.IsAlipaySuccessStatus(tradeStatus) {
 		if service.IsAlipayClosedStatus(tradeStatus) {
-			amount, _ := utils.YuanToFen(values.Get("total_amount"))
+			amount, err := utils.YuanToFen(values.Get("total_amount"))
+			if err != nil {
+				c.String(http.StatusBadRequest, "failure")
+				return
+			}
 			transactionNo := values.Get("trade_no")
 			if transactionNo == "" {
 				transactionNo = values.Get("out_trade_no") + "-closed"
 			}
-			_, _ = ctl.service.HandlePaymentCallback(dto.PaymentCallbackRequest{
+			if _, err := ctl.service.HandlePaymentCallback(dto.PaymentCallbackRequest{
 				OrderNo:        values.Get("out_trade_no"),
 				TransactionNo:  transactionNo,
 				PaymentChannel: "alipay",
 				Amount:         amount,
 				Status:         "failed",
 				RawPayload:     values,
-			})
+			}); err != nil {
+				c.String(http.StatusBadRequest, "failure")
+				return
+			}
 			alipay.AckNotification(c.Writer)
 			return
 		}
@@ -419,23 +435,16 @@ func (ctl *OrderController) RefundMerchantOrder(c *gin.Context) {
 		return
 	}
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.RefundMerchantOrder(merchantID, orderID, req, c.GetUint("user_id"), "merchant")
+	order, err := ctl.service.RefundMerchantOrder(merchantID, orderID, req, c.GetUint("user_id"), "merchant", service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_order_refund", TargetType: "order", Detail: gin.H{
+			"amount": req.Amount, "full_refund": req.Full, "reason": req.Reason,
+		}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_order_refund",
-		TargetType: "order",
-		TargetID:   order.ID,
-		TargetName: order.OrderNo,
-		MerchantID: order.MerchantID,
-		Detail: gin.H{
-			"amount":      req.Amount,
-			"full_refund": req.Full,
-			"reason":      req.Reason,
-		},
-	})
 	utils.Success(c, gin.H{"order": serializeOrder(order), "refunded": true})
 }
 
@@ -446,23 +455,16 @@ func (ctl *OrderController) RefundAdminOrder(c *gin.Context) {
 		return
 	}
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.RefundAdminOrder(orderID, req, c.GetUint("user_id"))
+	order, err := ctl.service.RefundAdminOrder(orderID, req, c.GetUint("user_id"), service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "admin_order_refund", TargetType: "order", Detail: gin.H{
+			"amount": req.Amount, "full_refund": req.Full, "reason": req.Reason,
+		}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "admin_order_refund",
-		TargetType: "order",
-		TargetID:   order.ID,
-		TargetName: order.OrderNo,
-		MerchantID: order.MerchantID,
-		Detail: gin.H{
-			"amount":      req.Amount,
-			"full_refund": req.Full,
-			"reason":      req.Reason,
-		},
-	})
 	utils.Success(c, gin.H{"order": serializeOrder(order), "refunded": true})
 }
 
@@ -488,29 +490,116 @@ func (ctl *OrderController) ConfirmMerchantSubscriptionPayment(c *gin.Context) {
 	var req dto.ConfirmSubscriptionPaymentRequest
 	_ = c.ShouldBindJSON(&req)
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.ConfirmMerchantSubscriptionPayment(orderID, req.Remark)
+	order, err := ctl.service.ConfirmMerchantSubscriptionPayment(orderID, req.Remark, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_subscription_payment_confirm", TargetType: "order", Detail: gin.H{"remark": req.Remark}},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_subscription_payment_confirm",
-		TargetType: "order",
-		TargetID:   order.ID,
-		TargetName: order.OrderNo,
-		MerchantID: order.MerchantID,
-		Detail: gin.H{
-			"amount":       order.TotalAmount,
-			"merchant":     order.Merchant,
-			"plan":         order.MerchantPlan,
-			"order_no":     order.OrderNo,
-			"payment_mode": "platform_qr",
-			"remark":       req.Remark,
-			"expire_at":    order.SubscriptionEndAt,
-			"result":       "subscription_opened",
-		},
-	})
 	utils.Success(c, gin.H{"order": serializeOrder(order), "confirmed": true})
+}
+
+func (ctl *OrderController) ManualReviewLegacyMerchantSubscription(c *gin.Context) {
+	var req dto.ManualReviewLegacyMerchantSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	roleValue, _ := c.Get("role")
+	role, _ := roleValue.(string)
+	result, err := ctl.service.ReviewLegacyMerchantSubscriptionOrder(
+		uint(atoi(c.Param("id"))),
+		req,
+		service.ManualSubscriptionReviewActor{ID: c.GetUint("user_id"), Role: role},
+	)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{
+		"order":                      serializeOrder(result.Order),
+		"manual_review":              result.Review,
+		"audit":                      result.Audit,
+		"idempotent":                 result.Idempotent,
+		"external_payment_attested":  result.Review.PaymentOccurredAttested,
+		"provider_payment_confirmed": false,
+	})
+}
+
+func (ctl *OrderController) ManualSubscriptionReviews(c *gin.Context) {
+	orders, err := ctl.service.AllOrders()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	list := make([]dto.ManualSubscriptionReviewOrder, 0)
+	for _, order := range orders {
+		if order.OrderType != "merchant_subscription" || order.Status != "manually_verified" || order.ManualReview == nil || order.ManualReviewAudit == nil {
+			continue
+		}
+		review := order.ManualReview
+		audit := order.ManualReviewAudit
+		item := dto.ManualSubscriptionReviewOrder{
+			OrderID:           order.ID,
+			OrderNo:           order.OrderNo,
+			MerchantID:        order.MerchantID,
+			Status:            order.Status,
+			SubscriptionEndAt: order.SubscriptionEndAt,
+			CreatedAt:         order.CreatedAt,
+			ManualReview: dto.ManualSubscriptionReviewRecord{
+				ID:                      review.ID,
+				OrderID:                 review.OrderID,
+				OrderNo:                 review.OrderNo,
+				MerchantID:              review.MerchantID,
+				ActorID:                 review.ActorID,
+				ActorRole:               review.ActorRole,
+				PlanName:                review.PlanName,
+				AmountCents:             review.AmountCents,
+				DurationDays:            review.DurationDays,
+				PaymentOccurredAttested: review.PaymentOccurredAttested,
+				EvidenceReference:       review.EvidenceReference,
+				Reason:                  review.Reason,
+				ReviewStatus:            review.ReviewStatus,
+				CreatedAt:               review.CreatedAt,
+				UpdatedAt:               review.UpdatedAt,
+			},
+			ManualReviewAudit: dto.ManualSubscriptionReviewAuditRecord{
+				ID:                         audit.ID,
+				ReviewID:                   audit.ReviewID,
+				OrderID:                    audit.OrderID,
+				MerchantID:                 audit.MerchantID,
+				ActorID:                    audit.ActorID,
+				ActorRole:                  audit.ActorRole,
+				EvidenceReference:          audit.EvidenceReference,
+				Reason:                     audit.Reason,
+				PlanName:                   audit.PlanName,
+				AmountCents:                audit.AmountCents,
+				DurationDays:               audit.DurationDays,
+				PaymentOccurredAttested:    audit.PaymentOccurredAttested,
+				OrderStatusBefore:          audit.OrderStatusBefore,
+				OrderStatusAfter:           audit.OrderStatusAfter,
+				OrderPaidAtBefore:          audit.OrderPaidAtBefore,
+				OrderPaidAtAfter:           audit.OrderPaidAtAfter,
+				OrderUpdatedAtBefore:       audit.OrderUpdatedAtBefore,
+				OrderUpdatedAtAfter:        audit.OrderUpdatedAtAfter,
+				SubscriptionStatusBefore:   audit.SubscriptionStatusBefore,
+				SubscriptionStatusAfter:    audit.SubscriptionStatusAfter,
+				SubscriptionPlanBefore:     audit.SubscriptionPlanBefore,
+				SubscriptionPlanAfter:      audit.SubscriptionPlanAfter,
+				SubscriptionExpireAtBefore: audit.SubscriptionExpireAtBefore,
+				SubscriptionExpireAtAfter:  audit.SubscriptionExpireAtAfter,
+				ReviewedAt:                 audit.ReviewedAt,
+				CreatedAt:                  audit.CreatedAt,
+			},
+		}
+		if order.Merchant != nil && order.MerchantID != nil {
+			item.Merchant = &dto.ManualReviewMerchantSummary{ID: *order.MerchantID, Name: order.Merchant.Name}
+		}
+		list = append(list, item)
+	}
+	utils.Success(c, gin.H{"list": list})
 }
 
 func (ctl *OrderController) Refunds(c *gin.Context) {
@@ -520,6 +609,52 @@ func (ctl *OrderController) Refunds(c *gin.Context) {
 		return
 	}
 	utils.Success(c, list)
+}
+
+func (ctl *OrderController) AdminUnknownRefundReservations(c *gin.Context) {
+	list, err := ctl.service.UnknownRefundReservations()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": list})
+}
+
+func (ctl *OrderController) AdminRefundReconciliationDetail(c *gin.Context) {
+	detail, err := ctl.service.RefundReconciliationDetail(uint(atoi(c.Param("id"))))
+	if err != nil {
+		utils.Error(c, http.StatusNotFound, "refund reconciliation not found")
+		return
+	}
+	utils.Success(c, gin.H{"detail": detail})
+}
+
+func (ctl *OrderController) MarkStaleAdminRefundForManualReview(c *gin.Context) {
+	var req dto.RefundManualReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	detail, err := ctl.service.MarkStaleProcessingRefundUnknown(uint(atoi(c.Param("id"))), req.Reason, c.GetUint("user_id"), c.GetString("role"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"detail": detail})
+}
+
+func (ctl *OrderController) ResolveAdminRefundReconciliation(c *gin.Context) {
+	var req dto.RefundReconciliationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	detail, err := ctl.service.ResolveUnknownRefund(uint(atoi(c.Param("id"))), req, c.GetUint("user_id"), c.GetString("role"))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"detail": detail})
 }
 
 func (ctl *OrderController) MerchantRefunds(c *gin.Context) {
@@ -561,45 +696,116 @@ func serializeOrders(orders []model.Order) []gin.H {
 
 func serializeOrder(order *model.Order) gin.H {
 	return gin.H{
-		"id":                  order.ID,
-		"order_no":            order.OrderNo,
-		"order_type":          order.OrderType,
-		"user_id":             order.UserID,
-		"merchant_id":         order.MerchantID,
-		"settlement_id":       order.SettlementID,
-		"store_id":            order.StoreID,
-		"customer_phone":      order.CustomerPhone,
-		"package_id":          order.PackageID,
-		"merchant_plan_id":    order.MerchantPlanID,
-		"amount":              order.Amount,
-		"total_amount":        order.TotalAmount,
-		"discount_amount":     order.DiscountAmount,
-		"refunded_amount":     order.RefundedAmount,
-		"refund_status":       order.RefundStatus,
-		"promotion_id":        order.PromotionID,
-		"referral_coupon_id":  order.CouponID,
-		"coupon_no":           order.CouponNo,
-		"items":               parseOrderItems(order.Items),
-		"customer_note":       order.CustomerNote,
-		"merchant_note":       order.MerchantNote,
-		"customer_rating":     order.CustomerRating,
-		"customer_review":     order.CustomerReview,
-		"reviewed_at":         order.ReviewedAt,
-		"operation_logs":      parseOrderLogs(order.OperationLogs),
-		"status":              order.Status,
-		"payment_channel":     order.PaymentChannel,
-		"auto_renew":          order.AutoRenew,
-		"paid_at":             order.PaidAt,
-		"transaction_no":      order.TransactionNo,
-		"subscription_end_at": order.SubscriptionEndAt,
-		"created_at":          order.CreatedAt,
-		"updated_at":          order.UpdatedAt,
-		"user":                order.User,
-		"merchant":            order.Merchant,
-		"store":               order.Store,
-		"package":             order.Package,
-		"merchant_plan":       order.MerchantPlan,
-		"promotion":           order.Promotion,
+		"id":                                   order.ID,
+		"order_no":                             order.OrderNo,
+		"order_type":                           order.OrderType,
+		"user_id":                              order.UserID,
+		"merchant_id":                          order.MerchantID,
+		"settlement_id":                        order.SettlementID,
+		"store_id":                             order.StoreID,
+		"customer_phone":                       order.CustomerPhone,
+		"package_id":                           order.PackageID,
+		"merchant_plan_id":                     order.MerchantPlanID,
+		"merchant_plan_name_snapshot":          order.PlanNameSnapshot,
+		"merchant_plan_price_cents_snapshot":   order.PlanPriceCentsSnapshot,
+		"merchant_plan_duration_days_snapshot": order.PlanDurationDaysSnapshot,
+		"amount":                               order.Amount,
+		"total_amount":                         order.TotalAmount,
+		"discount_amount":                      order.DiscountAmount,
+		"refunded_amount":                      order.RefundedAmount,
+		"refund_status":                        order.RefundStatus,
+		"promotion_id":                         order.PromotionID,
+		"referral_coupon_id":                   order.CouponID,
+		"coupon_no":                            order.CouponNo,
+		"items":                                parseOrderItems(order.Items),
+		"customer_note":                        order.CustomerNote,
+		"merchant_note":                        order.MerchantNote,
+		"customer_rating":                      order.CustomerRating,
+		"customer_review":                      order.CustomerReview,
+		"reviewed_at":                          order.ReviewedAt,
+		"operation_logs":                       parseOrderLogs(order.OperationLogs),
+		"status":                               order.Status,
+		"payment_channel":                      order.PaymentChannel,
+		"auto_renew":                           order.AutoRenew,
+		"paid_at":                              order.PaidAt,
+		"transaction_no":                       order.TransactionNo,
+		"subscription_end_at":                  order.SubscriptionEndAt,
+		"created_at":                           order.CreatedAt,
+		"updated_at":                           order.UpdatedAt,
+		"user":                                 order.User,
+		"merchant":                             order.Merchant,
+		"store":                                order.Store,
+		"package":                              order.Package,
+		"merchant_plan":                        order.MerchantPlan,
+		"promotion":                            order.Promotion,
+		"manual_review":                        order.ManualReview,
+		"manual_review_audit":                  order.ManualReviewAudit,
+	}
+}
+
+func serializePublicCustomerOrder(order *model.Order) gin.H {
+	items := make([]gin.H, 0)
+	for _, item := range parseOrderItems(order.Items) {
+		items = append(items, gin.H{
+			"product_id":   item.ProductID,
+			"name":         item.Name,
+			"product_name": item.Name,
+			"price":        item.Price,
+			"quantity":     item.Quantity,
+			"line_amount":  item.LineAmount,
+			"description":  item.Description,
+			"image_url":    item.ImageURL,
+		})
+	}
+	logs := make([]gin.H, 0)
+	for _, log := range parseOrderLogs(order.OperationLogs) {
+		switch log.Action {
+		case "submitted", "auto_accepted", "payment_retry", "customer_paid", "merchant_payment_confirmed", "accepted", "completed", "closed", "refund", "customer_reviewed", "items_appended":
+			logs = append(logs, gin.H{"action": log.Action, "time": log.Time})
+		}
+	}
+	var store gin.H
+	if order.Store != nil {
+		store = gin.H{
+			"id":             order.Store.ID,
+			"name":           order.Store.Name,
+			"address":        order.Store.Address,
+			"contact_phone":  order.Store.ContactPhone,
+			"business_hours": order.Store.BusinessHours,
+			"order_mode":     order.Store.OrderMode,
+		}
+	}
+	return gin.H{
+		"id":         order.ID,
+		"order_no":   order.OrderNo,
+		"order_type": order.OrderType,
+		"store_id":   order.StoreID,
+		"store_name": func() string {
+			if order.Store != nil {
+				return order.Store.Name
+			}
+			return ""
+		}(),
+		"store":           store,
+		"amount":          order.TotalAmount,
+		"subtotal_amount": order.Amount,
+		"total_amount":    order.TotalAmount,
+		"discount_amount": order.DiscountAmount,
+		"refunded_amount": order.RefundedAmount,
+		"refund_status":   order.RefundStatus,
+		"items":           items,
+		"customer_note":   order.CustomerNote,
+		"remark":          order.CustomerNote,
+		"customer_rating": order.CustomerRating,
+		"customer_review": order.CustomerReview,
+		"reviewed_at":     order.ReviewedAt,
+		"operation_logs":  logs,
+		"status":          order.Status,
+		"payment_channel": order.PaymentChannel,
+		"pay_type":        order.PaymentChannel,
+		"paid_at":         order.PaidAt,
+		"created_at":      order.CreatedAt,
+		"updated_at":      order.UpdatedAt,
 	}
 }
 
@@ -615,8 +821,6 @@ func serializePublicPaymentConfig(config *model.MerchantPaymentConfig) gin.H {
 		"alipay_qr_code": config.AlipayQRCode,
 		"wechat_qr_code": config.WechatQRCode,
 		"contact_phone":  config.ContactPhone,
-		"status":         config.Status,
-		"audit_status":   config.AuditStatus,
 	}
 }
 

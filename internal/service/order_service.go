@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
@@ -41,6 +42,11 @@ type MerchantSettlementSummary struct {
 	PaidSettlementAmount   int64 `json:"paid_settlement_amount"`
 }
 
+type refundGateway interface {
+	Enabled() bool
+	Refund(order *model.Order, refundNo string, amount int64, reason string) (string, error)
+}
+
 type OrderService struct {
 	db            *gorm.DB
 	users         *repository.UserRepository
@@ -53,7 +59,7 @@ type OrderService struct {
 	promotions    *repository.PromotionRepository
 	cards         *repository.CardRepository
 	systems       *repository.SystemRepository
-	alipay        *AlipayService
+	alipay        refundGateway
 	shares        *ShareService
 }
 
@@ -208,6 +214,8 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		if store.AutoAccept {
 			status = "preparing"
 		}
+	} else if payable == 0 {
+		status = "submitted"
 	}
 
 	order := &model.Order{
@@ -230,6 +238,8 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		if store.AutoAccept {
 			order.OperationLogs = s.appendOrderLog(order.OperationLogs, "auto_accepted", "门店已开启自动接单，订单进入处理中")
 		}
+	} else if payable == 0 {
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "submitted", "本单无需付款，已发送给门店")
 	}
 	if coupon != nil {
 		order.CouponID = &coupon.ID
@@ -240,6 +250,12 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		order.PromotionID = &promotion.ID
 		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "promotion_applied", fmt.Sprintf("已自动匹配优惠：%s，优惠 %s 元", promotion.Title, formatFen(promotionDiscount)))
 	}
+	accessToken, tokenHash, err := newCustomerOrderAccessToken()
+	if err != nil {
+		return nil, errors.New("could not generate customer order access token")
+	}
+	order.CustomerAccessTokenHash = tokenHash
+	order.CustomerAccessToken = accessToken
 
 	if err := s.orders.Create(order); err != nil {
 		return nil, err
@@ -275,12 +291,13 @@ func (s *OrderService) PublicStoreCoupons(storeID uint, phone string) ([]model.R
 	return s.shares.ListUsableCoupons(storeID, phone)
 }
 
-func (s *OrderService) PublicOrderDetail(orderNo string) (*model.Order, error) {
+func (s *OrderService) PublicOrderDetail(orderNo, accessToken string) (*model.Order, error) {
+	return s.findCustomerOrderWithAccess(orderNo, accessToken)
+}
+
+func (s *OrderService) findCustomerOrderWithAccess(orderNo, accessToken string) (*model.Order, error) {
 	order, err := s.orders.FindByOrderNo(orderNo)
-	if err != nil {
-		return nil, errors.New("order not found")
-	}
-	if order.OrderType != "store_order" {
+	if err != nil || order.OrderType != "store_order" || !customerOrderAccessTokenMatches(order, accessToken) {
 		return nil, errors.New("order not found")
 	}
 	return order, nil
@@ -307,16 +324,16 @@ func (s *OrderService) PublicPaymentConfigForOrder(order *model.Order) (*model.M
 	return &config, nil
 }
 
-func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo string) (*model.Order, error) {
-	order, err := s.orders.FindByOrderNo(orderNo)
+func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo, accessToken string) (*model.Order, error) {
+	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
 	if err != nil {
-		return nil, errors.New("order not found")
+		return nil, err
 	}
-	if order.OrderType != "store_order" {
-		return nil, errors.New("order not found")
-	}
-	if order.PaidAt != nil || order.Status == "received" || order.Status == "accepted" || order.Status == "completed" {
+	if order.PaidAt != nil {
 		return order, nil
+	}
+	if order.TotalAmount <= 0 {
+		return nil, errors.New("this order does not require payment")
 	}
 	if order.Status != "submitted" && order.Status != "preparing" {
 		return nil, errors.New("only submitted orders can be marked as paid")
@@ -329,12 +346,9 @@ func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo string) (*model.Order,
 	return s.orders.FindByOrderNo(orderNo)
 }
 
-func (s *OrderService) AppendCustomerStoreOrderItems(orderNo string, req dto.AppendCustomerOrderItemsRequest) (*model.Order, error) {
-	order, err := s.orders.FindByOrderNo(orderNo)
-	if err != nil {
-		return nil, errors.New("order not found")
-	}
-	if order.OrderType != "store_order" || order.StoreID == nil {
+func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string, req dto.AppendCustomerOrderItemsRequest) (*model.Order, error) {
+	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
+	if err != nil || order.StoreID == nil {
 		return nil, errors.New("order not found")
 	}
 	if order.PaidAt != nil || order.Status == "payment_confirming" || order.Status == "received" || order.Status == "accepted" || order.Status == "completed" || order.Status == "closed" {
@@ -447,13 +461,13 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo string, req dto.App
 	return s.orders.FindByOrderNo(orderNo)
 }
 
-func (s *OrderService) PrepareCustomerOrderRetry(orderNo string) (*model.Order, error) {
-	order, err := s.orders.FindByOrderNo(orderNo)
+func (s *OrderService) PrepareCustomerOrderRetry(orderNo, accessToken string) (*model.Order, error) {
+	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
 	if err != nil {
-		return nil, errors.New("order not found")
+		return nil, err
 	}
-	if order.OrderType != "store_order" {
-		return nil, errors.New("order not found")
+	if order.TotalAmount <= 0 || order.PaidAt != nil {
+		return nil, errors.New("this order does not require payment")
 	}
 	if order.Status != "pending" && order.Status != "failed" {
 		return nil, errors.New("order status does not allow payment retry")
@@ -468,13 +482,13 @@ func (s *OrderService) PrepareCustomerOrderRetry(orderNo string) (*model.Order, 
 	return order, nil
 }
 
-func (s *OrderService) ReviewCustomerOrder(orderNo string, req dto.ReviewCustomerOrderRequest) (*model.Order, error) {
-	order, err := s.orders.FindByOrderNo(orderNo)
+func (s *OrderService) ReviewCustomerOrder(orderNo, accessToken string, req dto.ReviewCustomerOrderRequest) (*model.Order, error) {
+	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
 	if err != nil {
-		return nil, errors.New("order not found")
+		return nil, err
 	}
-	if order.OrderType != "store_order" {
-		return nil, errors.New("order not found")
+	if !orderPaymentSatisfied(*order) {
+		return nil, errors.New("unpaid orders cannot be reviewed")
 	}
 	if order.Status != "accepted" && order.Status != "completed" {
 		return nil, errors.New("only accepted or completed orders can be reviewed")
@@ -603,21 +617,52 @@ func (s *OrderService) CancelOrder(userID uint, orderNo string) error {
 	return s.orders.Save(order)
 }
 
+type merchantSubscriptionOrderTerms struct {
+	Name         string
+	PriceCents   int64
+	DurationDays int
+}
+
+func merchantSubscriptionTermsFromOrder(order *model.Order) (merchantSubscriptionOrderTerms, error) {
+	if order == nil || order.OrderType != "merchant_subscription" || order.MerchantID == nil || order.MerchantPlanID == nil || order.PlanNameSnapshot == nil || order.PlanPriceCentsSnapshot == nil || order.PlanDurationDaysSnapshot == nil {
+		return merchantSubscriptionOrderTerms{}, errors.New("merchant subscription order is invalid or missing immutable snapshot")
+	}
+	terms := merchantSubscriptionOrderTerms{
+		Name:         strings.TrimSpace(*order.PlanNameSnapshot),
+		PriceCents:   *order.PlanPriceCentsSnapshot,
+		DurationDays: *order.PlanDurationDaysSnapshot,
+	}
+	if terms.Name == "" || terms.PriceCents < 0 || terms.DurationDays <= 0 {
+		return merchantSubscriptionOrderTerms{}, errors.New("merchant subscription order snapshot is invalid")
+	}
+	if order.Amount != terms.PriceCents || order.TotalAmount != terms.PriceCents {
+		return merchantSubscriptionOrderTerms{}, errors.New("merchant subscription order amount does not match its snapshot")
+	}
+	return terms, nil
+}
+
 func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*model.Order, error) {
 	var result model.Order
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var order model.Order
-		if err := tx.Preload("Package").Preload("User").Preload("Merchant").Preload("MerchantPlan").Preload("Store").Where("order_no = ?", req.OrderNo).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Package").Preload("User").Preload("Merchant").Preload("MerchantPlan").Preload("Store").Where("order_no = ?", req.OrderNo).First(&order).Error; err != nil {
 			return err
 		}
 
-		expectedAmount := order.TotalAmount
-		if expectedAmount <= 0 {
-			expectedAmount = order.Amount
+		if req.Status != "success" && req.Status != "failed" {
+			return errors.New("unsupported payment callback status")
 		}
-		if req.Status != "failed" && expectedAmount != req.Amount {
-			return errors.New("payment amount mismatch")
+		if err := validatePaymentCallbackAmount(order, req.Amount); err != nil {
+			return err
+		}
+		var subscriptionTerms merchantSubscriptionOrderTerms
+		if req.Status == "success" && order.OrderType == "merchant_subscription" {
+			terms, err := merchantSubscriptionTermsFromOrder(&order)
+			if err != nil {
+				return err
+			}
+			subscriptionTerms = terms
 		}
 
 		var existingPayment model.PaymentRecord
@@ -632,7 +677,6 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 		if paymentErr != nil && !errors.Is(paymentErr, gorm.ErrRecordNotFound) {
 			return paymentErr
 		}
-
 		rawPayload := ""
 		if req.RawPayload != nil {
 			bytes, err := json.Marshal(req.RawPayload)
@@ -645,6 +689,20 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 		paymentStatus := "success"
 		if req.Status == "failed" {
 			paymentStatus = "failed"
+		}
+		exceptionAction := ""
+		exceptionText := ""
+		if req.Status == "success" {
+			alreadySettled := order.PaidAt != nil || order.Status == "paid" || order.Status == "received" || order.Status == "accepted" || order.Status == "completed"
+			if alreadySettled {
+				paymentStatus = "duplicate_success"
+				exceptionAction = "duplicate_payment_exception"
+				exceptionText = fmt.Sprintf("检测到同一订单的另一笔成功收款，已登记为重复收款异常；交易号：%s，金额：%s 元", req.TransactionNo, formatFen(req.Amount))
+			} else if order.Status != "pending" {
+				paymentStatus = "late_success_exception"
+				exceptionAction = "late_payment_exception"
+				exceptionText = fmt.Sprintf("订单状态不允许履约，但支付渠道已报告成功；已登记待核查收款异常；交易号：%s，金额：%s 元", req.TransactionNo, formatFen(req.Amount))
+			}
 		}
 
 		record := &model.PaymentRecord{
@@ -666,6 +724,14 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 				if err := tx.Save(&order).Error; err != nil {
 					return err
 				}
+			}
+			result = order
+			return nil
+		}
+		if exceptionAction != "" {
+			order.OperationLogs = s.appendOrderLog(order.OperationLogs, exceptionAction, exceptionText)
+			if err := tx.Save(&order).Error; err != nil {
+				return err
 			}
 			result = order
 			return nil
@@ -706,9 +772,6 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 
 		order.Status = "paid"
 		if order.OrderType == "merchant_subscription" {
-			if order.MerchantID == nil || order.MerchantPlanID == nil || order.MerchantPlan == nil {
-				return errors.New("merchant subscription order is invalid")
-			}
 			var merchant model.Merchant
 			if err := tx.First(&merchant, *order.MerchantID).Error; err != nil {
 				return err
@@ -717,14 +780,14 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 			if merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(base) {
 				base = *merchant.SubscriptionExpireAt
 			}
-			expire := base.AddDate(0, 0, order.MerchantPlan.DurationDays)
+			expire := base.AddDate(0, 0, subscriptionTerms.DurationDays)
 			order.SubscriptionEndAt = &expire
 			if err := tx.Save(&order).Error; err != nil {
 				return err
 			}
 			merchant.SubscriptionPlanID = order.MerchantPlanID
 			merchant.SubscriptionExpireAt = &expire
-			merchant.SubscriptionPlan = order.MerchantPlan.Name
+			merchant.SubscriptionPlan = subscriptionTerms.Name
 			merchant.SubscriptionStatus = "active"
 			merchant.SubscriptionExpiredAt = &expire
 			if err := tx.Save(&merchant).Error; err != nil {
@@ -768,11 +831,11 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 	return &result, nil
 }
 
-func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark string) (*model.Order, error) {
+func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark string, audit ...AuditEvent) (*model.Order, error) {
 	var result model.Order
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var order model.Order
-		if err := tx.Preload("MerchantPlan").Preload("Merchant").Where("id = ?", orderID).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Merchant").Where("id = ?", orderID).First(&order).Error; err != nil {
 			return err
 		}
 		if order.OrderType != "merchant_subscription" {
@@ -781,8 +844,9 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 		if order.Status != "pending" {
 			return errors.New("only pending subscription orders can be confirmed")
 		}
-		if order.MerchantID == nil || order.MerchantPlanID == nil || order.MerchantPlan == nil {
-			return errors.New("merchant subscription order is invalid")
+		terms, err := merchantSubscriptionTermsFromOrder(&order)
+		if err != nil {
+			return err
 		}
 
 		var merchant model.Merchant
@@ -790,17 +854,13 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 			return err
 		}
 
-		amount := order.TotalAmount
-		if amount <= 0 {
-			amount = order.Amount
-		}
 		paidAt := time.Now()
 		base := paidAt
 		if merchant.SubscriptionExpireAt != nil && merchant.SubscriptionExpireAt.After(base) {
 			base = *merchant.SubscriptionExpireAt
 		}
-		expire := base.AddDate(0, 0, order.MerchantPlan.DurationDays)
-		transactionNo := fmt.Sprintf("MANUAL-MSUB-%d-%d", order.ID, paidAt.UnixNano())
+		expire := base.AddDate(0, 0, terms.DurationDays)
+		transactionNo := fmt.Sprintf("MANUAL-MSUB-%d", order.ID)
 		rawPayload, err := json.Marshal(map[string]interface{}{
 			"source": "admin_manual_confirm",
 			"remark": strings.TrimSpace(remark),
@@ -813,7 +873,7 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 			OrderID:        order.ID,
 			PaymentChannel: "platform_qr",
 			TransactionNo:  transactionNo,
-			Amount:         amount,
+			Amount:         terms.PriceCents,
 			Status:         "success",
 			RawPayload:     string(rawPayload),
 		}
@@ -835,13 +895,33 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 		}
 
 		merchant.SubscriptionPlanID = order.MerchantPlanID
-		merchant.SubscriptionPlan = order.MerchantPlan.Name
+		merchant.SubscriptionPlan = terms.Name
 		merchant.SubscriptionStatus = "active"
 		merchant.SubscriptionExpireAt = &expire
 		merchant.SubscriptionExpiredAt = &expire
 		merchant.SubscriptionNote = "平台确认订阅款到账后开通"
 		if err := tx.Save(&merchant).Error; err != nil {
 			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "order"
+			event.Input.TargetID = order.ID
+			event.Input.TargetName = order.OrderNo
+			event.Input.MerchantID = order.MerchantID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["amount"] = terms.PriceCents
+			event.Input.Detail["merchant"] = merchant.Name
+			event.Input.Detail["plan"] = terms.Name
+			event.Input.Detail["order_no"] = order.OrderNo
+			event.Input.Detail["payment_mode"] = "platform_qr"
+			event.Input.Detail["expire_at"] = expire
+			event.Input.Detail["result"] = "subscription_opened"
+			if err := appendOptionalAuditTx(tx, []AuditEvent{event}); err != nil {
+				return fmt.Errorf("persist subscription payment audit: %w", err)
+			}
 		}
 
 		result = order
@@ -954,6 +1034,9 @@ func (s *OrderService) AcceptMerchantOrder(merchantID, orderID uint) error {
 	if order.Status != "received" && order.Status != "submitted" {
 		return errors.New("only submitted or received orders can be accepted")
 	}
+	if !orderCanProceedToFulfillment(*order) {
+		return errors.New("payment must be confirmed before accepting this order")
+	}
 	order.Status = "accepted"
 	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "accepted", "商家已接单")
 	return s.orders.Save(order)
@@ -972,6 +1055,9 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*m
 		if order.PaidAt != nil {
 			result = order
 			return nil
+		}
+		if order.TotalAmount <= 0 {
+			return errors.New("this order does not require payment")
 		}
 		if order.Status != "payment_confirming" && order.Status != "submitted" && order.Status != "preparing" {
 			return errors.New("only unpaid submitted orders can be confirmed")
@@ -1032,6 +1118,9 @@ func (s *OrderService) CompleteMerchantOrder(merchantID, orderID uint) error {
 	if order.Status != "accepted" && order.Status != "preparing" {
 		return errors.New("only accepted or preparing orders can be completed")
 	}
+	if !orderCanProceedToFulfillment(*order) {
+		return errors.New("payment must be confirmed before completing this order")
+	}
 	order.Status = "completed"
 	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "completed", "商家已完成订单")
 	return s.orders.Save(order)
@@ -1073,102 +1162,24 @@ func (s *OrderService) UpdateMerchantOrderNote(merchantID, orderID uint, note st
 	return order, nil
 }
 
-func (s *OrderService) RefundMerchantOrder(merchantID, orderID uint, req dto.RefundOrderRequest, operatorID uint, operatorRole string) (*model.Order, error) {
+func (s *OrderService) RefundMerchantOrder(merchantID, orderID uint, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, error) {
 	order, err := s.orders.FindByMerchantAndID(merchantID, orderID)
 	if err != nil {
 		return nil, errors.New("order not found")
 	}
-	return s.refundOrder(order, req, operatorID, operatorRole)
+	return s.refundOrder(order, req, operatorID, operatorRole, audit...)
 }
 
-func (s *OrderService) RefundAdminOrder(orderID uint, req dto.RefundOrderRequest, operatorID uint) (*model.Order, error) {
+func (s *OrderService) RefundAdminOrder(orderID uint, req dto.RefundOrderRequest, operatorID uint, audit ...AuditEvent) (*model.Order, error) {
 	var order model.Order
 	if err := s.db.Preload("Store").Preload("Merchant").First(&order, orderID).Error; err != nil {
 		return nil, errors.New("order not found")
 	}
-	return s.refundOrder(&order, req, operatorID, "admin")
+	return s.refundOrder(&order, req, operatorID, "admin", audit...)
 }
 
-func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderRequest, operatorID uint, operatorRole string) (*model.Order, error) {
-	if order.OrderType != "store_order" {
-		return nil, errors.New("only store orders can be refunded here")
-	}
-	if order.Status != "received" && order.Status != "accepted" && order.Status != "completed" && order.Status != "closed" {
-		return nil, errors.New("order status does not allow refund")
-	}
-	refundable := order.TotalAmount - order.RefundedAmount
-	if refundable <= 0 {
-		return nil, errors.New("order has no refundable amount")
-	}
-	amount := req.Amount
-	if req.Full || amount <= 0 {
-		amount = refundable
-	}
-	if amount <= 0 || amount > refundable {
-		return nil, errors.New("refund amount is invalid")
-	}
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = "售后退款"
-	}
-	if len([]rune(reason)) > 255 {
-		return nil, errors.New("refund reason cannot exceed 255 characters")
-	}
-
-	refundNo := fmt.Sprintf("RF%d", time.Now().UnixNano())
-	refundStatus := "success"
-	rawPayload := `{"mode":"manual_record","note":"真实退款需由商家收款账户或支付渠道执行，本记录用于财务核对"}`
-	if order.PaymentChannel == "alipay" && order.TransactionNo != "" && s.alipay != nil && s.alipay.Enabled() {
-		payload, err := s.alipay.Refund(order, refundNo, amount, reason)
-		if err != nil {
-			return nil, err
-		}
-		rawPayload = payload
-	}
-
-	var updated model.Order
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var current model.Order
-		if err := tx.Preload("Store").Preload("Merchant").First(&current, order.ID).Error; err != nil {
-			return err
-		}
-		refundable := current.TotalAmount - current.RefundedAmount
-		if amount > refundable {
-			return errors.New("refund amount exceeds remaining refundable amount")
-		}
-		refund := &model.RefundRecord{
-			OrderID:       current.ID,
-			MerchantID:    current.MerchantID,
-			StoreID:       current.StoreID,
-			RefundNo:      refundNo,
-			TransactionNo: current.TransactionNo,
-			Amount:        amount,
-			Reason:        reason,
-			OperatorRole:  operatorRole,
-			OperatorID:    operatorID,
-			Status:        refundStatus,
-			RawPayload:    rawPayload,
-		}
-		if err := tx.Create(refund).Error; err != nil {
-			return err
-		}
-		current.RefundedAmount += amount
-		if current.RefundedAmount >= current.TotalAmount {
-			current.RefundStatus = "full"
-		} else {
-			current.RefundStatus = "partial"
-		}
-		current.OperationLogs = s.appendOrderLog(current.OperationLogs, "refund", fmt.Sprintf("%s发起退款：%s 元，原因：%s", operatorRole, formatFen(amount), reason))
-		if err := tx.Save(&current).Error; err != nil {
-			return err
-		}
-		updated = current
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &updated, nil
+func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, error) {
+	return s.processReservedRefund(order, req, operatorID, operatorRole, audit...)
 }
 
 func (s *OrderService) bestPromotionForStore(merchantID, storeID uint, amount int64) (*model.Promotion, int64) {
@@ -1240,7 +1251,60 @@ func (s *OrderService) UsageRecords(userID uint) ([]model.UsageRecord, error) {
 }
 
 func (s *OrderService) AllOrders() ([]model.Order, error) {
-	return s.orders.ListAll()
+	orders, err := s.orders.ListAll()
+	if err != nil || len(orders) == 0 {
+		return orders, err
+	}
+	hasReviews := s.db.Migrator().HasTable(&model.MerchantSubscriptionManualReview{})
+	hasAudits := s.db.Migrator().HasTable(&model.MerchantSubscriptionManualReviewAudit{})
+	if !hasReviews && !hasAudits {
+		return orders, nil
+	}
+	if hasReviews != hasAudits {
+		return nil, errors.New("subscription manual review schema is incomplete")
+	}
+	orderIDs := make([]uint, 0, len(orders))
+	for _, order := range orders {
+		if order.OrderType == "merchant_subscription" {
+			orderIDs = append(orderIDs, order.ID)
+		}
+	}
+	if len(orderIDs) == 0 {
+		return orders, nil
+	}
+	var reviews []model.MerchantSubscriptionManualReview
+	if err := s.db.Where("order_id IN ?", orderIDs).Find(&reviews).Error; err != nil {
+		return nil, fmt.Errorf("load subscription manual review records: %w", err)
+	}
+	reviewByOrder := make(map[uint]model.MerchantSubscriptionManualReview, len(reviews))
+	reviewIDs := make([]uint, 0, len(reviews))
+	for _, review := range reviews {
+		reviewByOrder[review.OrderID] = review
+		reviewIDs = append(reviewIDs, review.ID)
+	}
+	audits := make([]model.MerchantSubscriptionManualReviewAudit, 0, len(reviewIDs))
+	if len(reviewIDs) > 0 {
+		if err := s.db.Where("review_id IN ?", reviewIDs).Find(&audits).Error; err != nil {
+			return nil, fmt.Errorf("load subscription manual review audits: %w", err)
+		}
+	}
+	auditByReview := make(map[uint]model.MerchantSubscriptionManualReviewAudit, len(audits))
+	for _, audit := range audits {
+		auditByReview[audit.ReviewID] = audit
+	}
+	for i := range orders {
+		review, ok := reviewByOrder[orders[i].ID]
+		if !ok {
+			continue
+		}
+		audit, auditOK := auditByReview[review.ID]
+		if !auditOK {
+			return nil, fmt.Errorf("manual review %d is missing its immutable audit", review.ID)
+		}
+		orders[i].ManualReview = &review
+		orders[i].ManualReviewAudit = &audit
+	}
+	return orders, nil
 }
 
 func (s *OrderService) AllPayments() ([]model.PaymentRecord, error) {
@@ -1275,17 +1339,13 @@ func (s *OrderService) MerchantSettlements(merchantID uint) (*MerchantSettlement
 
 	var orders []model.Order
 	if err := s.db.Where("merchant_id = ? AND order_type = ? AND settlement_id IS NULL", merchantID, "store_order").
-		Where("status IN ?", []string{"accepted", "completed"}).
+		Where("status IN ? AND paid_at IS NOT NULL AND total_amount > 0", []string{"accepted", "completed"}).
 		Find(&orders).Error; err != nil {
 		return nil, nil, err
 	}
 	for _, order := range orders {
 		summary.PendingOrderCount++
-		amount := order.TotalAmount
-		if amount <= 0 {
-			amount = order.Amount
-		}
-		summary.PendingOrderAmount += amount
+		summary.PendingOrderAmount += settlementOrderAmount(order)
 		summary.PendingRefundAmount += order.RefundedAmount
 	}
 	summary.PendingNetAmount = summary.PendingOrderAmount - summary.PendingRefundAmount

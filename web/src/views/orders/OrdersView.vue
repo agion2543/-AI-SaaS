@@ -105,7 +105,7 @@
               <template #default="{ row }">{{ row.merchant_plan?.name || '-' }}</template>
             </el-table-column>
             <el-table-column label="金额" width="120">
-              <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
+              <template #default="{ row }">{{ formatMoney(row.total_amount ?? row.amount ?? 0) }}</template>
             </el-table-column>
             <el-table-column label="支付方式" width="130">
               <template #default="{ row }">{{ paymentChannelLabel(row.payment_channel) }}</template>
@@ -155,7 +155,7 @@
               </template>
             </el-table-column>
             <el-table-column label="金额" width="120">
-              <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
+              <template #default="{ row }">{{ formatMoney(row.total_amount ?? row.amount ?? 0) }}</template>
             </el-table-column>
             <el-table-column label="状态" width="110">
               <template #default="{ row }">
@@ -189,7 +189,7 @@
               <template #default="{ row }">{{ row.merchant?.name || row.user?.display_name || row.user?.phone || '-' }}</template>
             </el-table-column>
             <el-table-column label="金额" width="120">
-              <template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template>
+              <template #default="{ row }">{{ formatMoney(row.total_amount ?? row.amount ?? 0) }}</template>
             </el-table-column>
             <el-table-column label="已退款" width="120">
               <template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template>
@@ -228,6 +228,15 @@
         </el-tab-pane>
 
         <el-tab-pane label="支付记录">
+          <el-alert
+            v-if="paymentExceptionRows.length"
+            class="finance-exception-alert"
+            type="error"
+            show-icon
+            :closable="false"
+            :title="`${paymentExceptionRows.length} 笔付款异常，待人工对账`"
+            :description="paymentExceptionSummary"
+          />
           <el-table :data="filteredPayments" empty-text="暂无支付记录">
             <el-table-column prop="transaction_no" label="交易号" min-width="220" />
             <el-table-column label="关联订单" min-width="180">
@@ -237,7 +246,9 @@
               <template #default="{ row }">{{ formatMoney(row.amount) }}</template>
             </el-table-column>
             <el-table-column prop="payment_channel" label="渠道" width="120" />
-            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column label="状态" width="170">
+              <template #default="{ row }"><el-tag :type="paymentStatusType(row.status)">{{ paymentStatusLabel(row.status) }}</el-tag></template>
+            </el-table-column>
             <el-table-column label="创建时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
@@ -265,7 +276,9 @@
             <el-table-column label="操作方" width="120">
               <template #default="{ row }">{{ row.operator_role === 'admin' ? '平台后台' : '商家端' }}</template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }"><el-tag :type="refundRecordStatusType(row.status)">{{ refundRecordStatusLabel(row.status) }}</el-tag></template>
+            </el-table-column>
             <el-table-column label="创建时间" min-width="170">
               <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
             </el-table-column>
@@ -280,7 +293,7 @@
         type="warning"
         show-icon
         :closable="false"
-        title="当前操作会创建财务退款记录。真实退款仍需在实际支付渠道或商家收款账户中同步处理。"
+        title="系统会先预占可退金额，再调用支付宝退款；若渠道结果不确定，额度将继续预占，请先核对渠道，不要重复发起。"
       />
       <el-form label-width="100px">
         <el-form-item label="订单号">
@@ -325,6 +338,7 @@ import ActionCard from '../../components/design/ActionCard.vue'
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
+import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '../../utils/refundIdempotency'
 import { exportRowsToXlsx } from '../../utils/xlsx'
 
 const orders = ref([])
@@ -336,35 +350,43 @@ const loading = ref(false)
 const refundDialogVisible = ref(false)
 const refundSaving = ref(false)
 const refundOrder = ref(null)
+const refundIdempotencyKey = ref('')
+const refundIdempotencyPayload = ref('')
 const refundForm = reactive({ full: true, amount_yuan: 0, reason: '' })
 const filters = reactive({ dateRange: [], keyword: '', orderType: '', status: '', exception: '' })
 
-const paidStoreStatuses = ['received', 'accepted', 'completed', 'closed']
 const filteredOrders = computed(() => orders.value.filter((item) => matchOrderFilters(item)))
 const filteredPayments = computed(() => payments.value.filter((item) => {
   if (!matchDate(item.created_at)) return false
   const text = `${item.transaction_no || ''} ${item.order?.order_no || ''} ${item.order?.merchant?.name || ''}`.toLowerCase()
   return !filters.keyword || text.includes(filters.keyword.toLowerCase())
 }))
+const paymentExceptionRows = computed(() => filteredPayments.value.filter((item) => ['duplicate_success', 'late_success_exception'].includes(item.status)))
+const paymentExceptionSummary = computed(() => paymentExceptionRows.value.slice(0, 3).map((item) => {
+  const status = item.status === 'duplicate_success' ? '重复收款异常' : '迟到成功待核查'
+  const amount = `¥${(Number(item.amount || 0) / 100).toFixed(2)}`
+  return `订单 ${item.order?.order_no || item.order_id}｜交易 ${item.transaction_no}｜${amount}｜${status}，待人工对账`
+}).join('；'))
 const filteredRefunds = computed(() => refunds.value.filter((item) => {
   if (!matchDate(item.created_at)) return false
   const text = `${item.refund_no || ''} ${item.order?.order_no || ''} ${item.order?.merchant?.name || ''}`.toLowerCase()
   return !filters.keyword || text.includes(filters.keyword.toLowerCase())
 }))
+const isConfirmedPaid = (row) => Boolean(row?.paid_at) && Number(row.total_amount ?? row.amount ?? 0) > 0
 const refundableAmount = computed(() => {
   const row = refundOrder.value || {}
-  return Math.max(Number(row.total_amount || row.amount || 0) - Number(row.refunded_amount || 0), 0)
+  return Math.max(Number(row.total_amount ?? row.amount ?? 0) - Number(row.refunded_amount || 0), 0)
 })
 const platformSubscriptionIncome = computed(() => filteredOrders.value
-  .filter((item) => item.order_type === 'merchant_subscription' && item.status === 'paid')
-  .reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
+  .filter((item) => item.order_type === 'merchant_subscription' && item.status === 'paid' && Boolean(item.paid_at))
+  .reduce((sum, item) => sum + Number(item.total_amount ?? item.amount ?? 0), 0))
 const pendingSubscriptionOrders = computed(() => filteredOrders.value
   .filter((item) => item.order_type === 'merchant_subscription' && item.status === 'pending')
   .sort((a, b) => dateValue(b.created_at) - dateValue(a.created_at)))
 const customerTradeIncome = computed(() => filteredOrders.value
-  .filter((item) => item.order_type === 'store_order' && paidStoreStatuses.includes(item.status))
-  .reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
-const totalRefunded = computed(() => filteredRefunds.value.reduce((sum, item) => sum + Number(item.amount || 0), 0))
+  .filter((item) => item.order_type === 'store_order' && isConfirmedPaid(item))
+  .reduce((sum, item) => sum + Number(item.total_amount ?? item.amount ?? 0), 0))
+const totalRefunded = computed(() => filteredRefunds.value.filter((item) => item.status === 'success').reduce((sum, item) => sum + Number(item.amount || 0), 0))
 const customerTradeNet = computed(() => Math.max(customerTradeIncome.value - totalRefunded.value, 0))
 const allExceptionOrders = computed(() => orders.value
   .filter((item) => item.order_type === 'store_order' && exceptionTags(item).length)
@@ -376,8 +398,8 @@ const exceptionQuickFilters = computed(() => [
   { label: '全部异常', value: '', count: allExceptionOrders.value.length, hint: '按风险优先展示' },
   { label: '订阅待确认', value: 'subscription_pending', count: orders.value.filter((item) => item.order_type === 'merchant_subscription' && item.status === 'pending').length, hint: '平台收款码待核对' },
   { label: '支付异常', value: 'payment', count: orders.value.filter((item) => item.order_type === 'store_order' && ['pending', 'failed'].includes(item.status)).length, hint: '待支付或支付失败' },
-  { label: '待接单', value: 'received', count: orders.value.filter((item) => item.order_type === 'store_order' && item.status === 'received').length, hint: '顾客已付款，商家未处理' },
-  { label: '退款售后', value: 'refund', count: orders.value.filter((item) => Number(item.refunded_amount || 0) > 0 || ['partial', 'full'].includes(item.refund_status)).length, hint: '需核对真实退款渠道' },
+  { label: '待接单', value: 'received', count: orders.value.filter((item) => item.order_type === 'store_order' && item.status === 'received' && isConfirmedPaid(item)).length, hint: '已确认收款，商家未处理' },
+  { label: '退款售后', value: 'refund', count: orders.value.filter((item) => Number(item.refunded_amount || 0) > 0 || ['partial', 'full', 'processing'].includes(item.refund_status)).length, hint: '含待核查的退款预占' },
   { label: '待结算', value: 'settlement', count: orders.value.filter((item) => isUnsettledOrder(item)).length, hint: '已形成实收，未入结算' }
 ])
 
@@ -416,8 +438,8 @@ const matchOrderFilters = (item) => {
 const matchExceptionFilter = (item, value) => {
   if (value === 'subscription_pending') return item.order_type === 'merchant_subscription' && item.status === 'pending'
   if (value === 'payment') return ['pending', 'failed'].includes(item.status)
-  if (value === 'received') return item.status === 'received'
-  if (value === 'refund') return Number(item.refunded_amount || 0) > 0 || ['partial', 'full'].includes(item.refund_status)
+  if (value === 'received') return item.status === 'received' && isConfirmedPaid(item)
+  if (value === 'refund') return Number(item.refunded_amount || 0) > 0 || ['partial', 'full', 'processing'].includes(item.refund_status)
   if (value === 'settlement') return isUnsettledOrder(item)
   if (value === 'closed') return item.status === 'closed'
   return true
@@ -429,22 +451,25 @@ const matchDate = (value) => {
   return day >= filters.dateRange[0] && day <= filters.dateRange[1]
 }
 
-const isUnsettledOrder = (row) => row?.order_type === 'store_order' && !row.settlement_id && ['received', 'accepted', 'completed'].includes(row.status)
+const isUnsettledOrder = (row) => row?.order_type === 'store_order' && isConfirmedPaid(row) && !row.settlement_id && ['accepted', 'completed'].includes(row.status)
 const exceptionTags = (row) => {
   const tags = []
   if (row.status === 'failed') tags.push('支付失败')
   if (row.status === 'pending') tags.push('待支付')
-  if (row.status === 'received') tags.push('待接单')
+  if (row.status === 'received' && isConfirmedPaid(row)) tags.push('待接单')
+  if (['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at) tags.push('收款信息异常')
   if (row.status === 'closed') tags.push('已关闭')
   if (Number(row.refunded_amount || 0) > 0 || ['partial', 'full'].includes(row.refund_status)) tags.push('退款售后')
+  if (row.refund_status === 'processing') tags.push('退款待核查')
   if (isUnsettledOrder(row)) tags.push('待结算')
   return tags
 }
 const exceptionLevel = (row) => {
-  if (row.status === 'failed' || (row.status === 'received' && orderAgeHours(row) >= 2) || Number(row.refunded_amount || 0) >= Number(row.total_amount || row.amount || 0)) {
+  const paymentMismatch = ['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at
+  if (row.status === 'failed' || paymentMismatch || (row.status === 'received' && orderAgeHours(row) >= 2) || Number(row.refunded_amount || 0) >= Number(row.total_amount ?? row.amount ?? 0)) {
     return { label: '高风险', type: 'danger', score: 3 }
   }
-  if (row.status === 'received' || Number(row.refunded_amount || 0) > 0 || row.status === 'closed') {
+  if ((row.status === 'received' && isConfirmedPaid(row)) || Number(row.refunded_amount || 0) > 0 || row.status === 'closed' || exceptionTags(row).includes('收款信息异常')) {
     return { label: '需处理', type: 'warning', score: 2 }
   }
   if (row.status === 'pending' || isUnsettledOrder(row)) {
@@ -453,8 +478,11 @@ const exceptionLevel = (row) => {
   return { label: '正常', type: 'success', score: 0 }
 }
 const exceptionAdvice = (row) => {
+  if (row.refund_status === 'processing') return '退款渠道结果尚未确认，额度仍被预占；先核对渠道结果，不要再次发起退款。'
+  if (['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at) return '订单履约状态与收款记录不一致；请核对真实到账，当前不计入实收或结算。'
   if (row.status === 'failed') return '引导顾客回订单页重新支付；核对支付回调和交易号，避免重复付款。'
   if (row.status === 'pending') return '订单未付款，不计入实收；顾客咨询时引导继续支付或重新下单。'
+  if (['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at) return '订单履约状态与收款记录不一致；请核对真实到账，当前不计入实收或结算。'
   if (row.status === 'received') return '顾客已付款，需提醒商家尽快接单；超时可联系商家或协助退款。'
   if (Number(row.refunded_amount || 0) > 0) return '核对退款原因、真实渠道到账和结算抵扣，必要时补充跟进记录。'
   if (row.status === 'closed') return '核对关闭原因，如已付款后关闭需确认退款或补偿方案。'
@@ -465,8 +493,10 @@ const tagType = (tag) => ({
   支付失败: 'danger',
   待支付: 'warning',
   待接单: 'primary',
+  收款信息异常: 'danger',
   已关闭: 'info',
   退款售后: 'warning',
+  退款待核查: 'danger',
   待结算: 'success'
 }[tag] || 'info')
 const orderAgeHours = (row) => {
@@ -476,7 +506,7 @@ const orderAgeHours = (row) => {
 const merchantID = (row) => row?.merchant_id || row?.merchant?.id
 const followUpType = (row) => {
   if (row.status === 'failed' || row.status === 'pending') return 'payment'
-  if (Number(row.refunded_amount || 0) > 0 || ['partial', 'full'].includes(row.refund_status)) return 'refund'
+  if (row.refund_status === 'processing' || Number(row.refunded_amount || 0) > 0 || ['partial', 'full'].includes(row.refund_status)) return 'refund'
   if (isUnsettledOrder(row)) return 'settlement'
   return 'risk'
 }
@@ -494,7 +524,7 @@ const createExceptionFollowUp = async (row) => {
     content: [
       `异常订单：${row.order_no || row.id}`,
       `异常原因：${exceptionTags(row).join('、') || '待核对'}`,
-      `订单金额：${formatMoney(row.total_amount || row.amount)}，状态：${statusLabel(row.status)}`,
+      `订单金额：${formatMoney(row.total_amount ?? row.amount ?? 0)}，状态：${statusLabel(row.status)}`,
       `处理建议：${exceptionAdvice(row)}`
     ].join('\n')
   })
@@ -503,8 +533,8 @@ const createExceptionFollowUp = async (row) => {
 
 const canRefund = (row) => {
   if (!row || row.order_type !== 'store_order') return false
-  const refundable = Number(row.total_amount || row.amount || 0) - Number(row.refunded_amount || 0)
-  return refundable > 0 && paidStoreStatuses.includes(row.status)
+  const refundable = Number(row.total_amount ?? row.amount ?? 0) - Number(row.refunded_amount || 0)
+  return refundable > 0 && row.refund_status !== 'processing' && isConfirmedPaid(row) && row.payment_channel === 'alipay' && Boolean(row.transaction_no)
 }
 
 const canConfirmSubscription = (row) => row?.order_type === 'merchant_subscription' && row.status === 'pending'
@@ -525,23 +555,44 @@ const openRefund = (row) => {
   refundForm.full = true
   refundForm.amount_yuan = refundableAmount.value / 100
   refundForm.reason = ''
+  refundIdempotencyKey.value = ''
+  refundIdempotencyPayload.value = ''
   refundDialogVisible.value = true
 }
 
 const submitRefund = async () => {
   if (!refundOrder.value) return
   const amount = refundForm.full ? 0 : Math.round(Number(refundForm.amount_yuan || 0) * 100)
-  await ElMessageBox.confirm('请确认真实支付渠道已可执行该退款。本操作会写入平台退款记录用于财务核对。', '确认退款', { type: 'warning' })
+  await ElMessageBox.confirm('请确认退款金额和原因。系统将调用支付宝；若结果不确定，需先核对渠道后再处理。', '确认退款', { type: 'warning' })
+  const requestPayload = { full: refundForm.full, amount, reason: refundForm.reason }
+  const orderID = refundOrder.value.id
+  const idempotency = getOrCreateRefundIdempotency(orderID, requestPayload, refundIdempotencyKey.value, refundIdempotencyPayload.value)
+  if (idempotency.conflict) {
+    ElMessage.warning('上一笔退款请求仍待核查或请求内容已改变，请保持原请求内容重试或先完成渠道对账。')
+    return
+  }
+  refundIdempotencyKey.value = idempotency.key
+  refundIdempotencyPayload.value = idempotency.fingerprint
   refundSaving.value = true
   try {
-    await refundAdminOrder(refundOrder.value.id, {
-      full: refundForm.full,
-      amount,
-      reason: refundForm.reason
+    await refundAdminOrder(orderID, {
+      ...requestPayload,
+      idempotency_key: refundIdempotencyKey.value
     })
-    ElMessage.success('退款记录已创建')
+    ElMessage.success('支付宝退款已确认成功')
+    clearRefundIdempotency(orderID)
+    refundIdempotencyKey.value = ''
+    refundIdempotencyPayload.value = ''
     refundDialogVisible.value = false
     await load()
+  } catch (error) {
+    const message = String(error?.response?.data?.message || error?.message || '')
+    if (message.toLowerCase().includes('definitively rejected')) {
+      clearRefundIdempotency(orderID)
+      refundIdempotencyKey.value = ''
+      refundIdempotencyPayload.value = ''
+    }
+    throw error
   } finally {
     refundSaving.value = false
   }
@@ -552,7 +603,7 @@ const exportOrdersXlsx = () => {
     订单号: item.order_no,
     类型: orderTypeLabel(item.order_type),
     商家或用户: item.merchant?.name || item.user?.display_name || item.user?.phone || '',
-    金额: (Number(item.total_amount || item.amount || 0) / 100).toFixed(2),
+    金额: (Number(item.total_amount ?? item.amount ?? 0) / 100).toFixed(2),
     已退款: (Number(item.refunded_amount || 0) / 100).toFixed(2),
     退款状态: refundLabel(item.refund_status),
     状态: statusLabel(item.status),
@@ -589,14 +640,23 @@ const statusType = (status) => ({
   closed: 'info',
   failed: 'danger'
 }[status] || 'info')
+const paymentStatusLabel = (status) => ({
+  success: '已到账',
+  duplicate_success: '重复收款异常（待人工对账）',
+  late_success_exception: '迟到收款（待人工核查）',
+  failed: '支付失败'
+}[status] || status || '-')
+const paymentStatusType = (status) => ({ success: 'success', duplicate_success: 'danger', late_success_exception: 'warning', failed: 'info' }[status] || 'info')
+const refundRecordStatusLabel = (status) => ({ success: '渠道已确认', processing: '处理中', unknown: '结果待核查', failed: '渠道明确拒绝' }[status] || status || '-')
+const refundRecordStatusType = (status) => ({ success: 'success', processing: 'warning', unknown: 'danger', failed: 'info' }[status] || 'info')
 const paymentChannelLabel = (channel) => ({
   platform_qr: '平台收款码',
   alipay: '支付宝',
   mock_wechat: '微信/模拟',
   merchant_qr: '商家收款码'
 }[channel] || channel || '-')
-const refundLabel = (status) => ({ none: '未退款', partial: '部分退款', full: '全额退款' }[status] || '未退款')
-const refundType = (status) => ({ partial: 'warning', full: 'success' }[status] || 'info')
+const refundLabel = (status) => ({ none: '未退款', partial: '部分退款', full: '全额退款', processing: '退款待核查' }[status] || '未退款')
+const refundType = (status) => ({ partial: 'warning', full: 'success', processing: 'danger' }[status] || 'info')
 
 onMounted(() => {
   filters.keyword = route.query.keyword || ''

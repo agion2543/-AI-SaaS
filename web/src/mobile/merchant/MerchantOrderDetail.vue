@@ -9,6 +9,11 @@
       @click-left="router.back()"
     />
 
+    <div v-if="!canWrite" class="readonly-banner" role="status">
+      订阅已到期：订单详情仅供查看，不能确认收款、接单、拒单、完成或处理退款。
+      <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+    </div>
+
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <van-loading type="spinner" size="40px">加载中...</van-loading>
@@ -22,13 +27,16 @@
         </div>
         <div class="status-text">{{ statusText }}</div>
       </div>
+      <p v-if="order.status === 'payment_confirming'" class="payment-confirmation-note">
+        顾客的操作只会通知门店核对，不代表平台已验证到账。请先在商户自己的收款账户核实实际到账，再手动确认；系统只记录商户的确认。
+      </p>
 
       <!-- 订单信息 -->
       <van-cell-group inset title="订单信息">
         <van-cell title="订单编号" :value="order.order_no" />
         <van-cell title="下单时间" :value="formatTime(order.created_at)" />
         <van-cell title="门店" :value="order.store_name || '-'" />
-        <van-cell v-if="order.pay_type" title="支付方式" :value="getPayTypeText(order.pay_type)" />
+        <van-cell v-if="order.payment_channel || order.pay_type" title="支付方式" :value="getPayTypeText(order.payment_channel || order.pay_type)" />
         <van-cell v-if="order.paid_at" title="支付时间" :value="formatTime(order.paid_at)" />
       </van-cell-group>
 
@@ -50,19 +58,19 @@
           </template>
         </van-cell>
 
-        <van-cell title="订单总价">
+        <van-cell title="应付金额">
           <template #value>
-            <span class="total-price">¥{{ formatPrice(order.total_amount || order.amount) }}</span>
+            <span class="total-price">¥{{ formatPrice(order.total_amount ?? order.amount ?? 0) }}</span>
+          </template>
+        </van-cell>
+        <van-cell title="已确认实收">
+          <template #value>
+            <span class="final-price">¥{{ formatPrice(isConfirmedPaid ? (order.total_amount ?? order.amount ?? 0) : 0) }}</span>
           </template>
         </van-cell>
         <van-cell v-if="order.discount_amount > 0" title="优惠">
           <template #value>
             <span class="discount">-¥{{ formatPrice(order.discount_amount) }}</span>
-          </template>
-        </van-cell>
-        <van-cell title="实付金额">
-          <template #value>
-            <span class="final-price">¥{{ formatPrice(order.amount) }}</span>
           </template>
         </van-cell>
       </van-cell-group>
@@ -84,7 +92,15 @@
       <!-- 操作按钮 -->
       <div class="action-buttons">
         <van-button
-          v-if="order.status === 'pending'"
+          v-if="canWrite && order.status === 'payment_confirming'"
+          type="warning"
+          block
+          @click="confirmPayment"
+        >
+          核实到账后，确认收款
+        </van-button>
+        <van-button
+          v-if="canWrite && ['submitted', 'received'].includes(order.status) && (order.status === 'submitted' || isConfirmedPaid || Number(order.total_amount ?? order.amount ?? 0) === 0)"
           type="primary"
           block
           @click="acceptOrder"
@@ -92,7 +108,7 @@
           接单
         </van-button>
         <van-button
-          v-if="order.status === 'pending'"
+          v-if="canWrite && ['submitted', 'received', 'payment_confirming'].includes(order.status)"
           type="danger"
           plain
           block
@@ -101,7 +117,7 @@
           拒单
         </van-button>
         <van-button
-          v-if="order.status === 'paid'"
+          v-if="canWrite && ['accepted', 'preparing'].includes(order.status)"
           type="success"
           block
           @click="completeOrder"
@@ -109,7 +125,7 @@
           完成订单
         </van-button>
         <van-button
-          v-if="order.status === 'refund_requested'"
+          v-if="canWrite && canRefund"
           type="warning"
           block
           @click="showRefundDialog = true"
@@ -144,7 +160,7 @@
       @confirm="confirmRefund"
     >
       <div style="padding: 16px;">
-        <p>订单金额: ¥{{ formatPrice(order?.amount || 0) }}</p>
+        <p>订单金额: ¥{{ formatPrice(order?.total_amount ?? order?.amount ?? 0) }}</p>
         <van-radio-group v-model="refundAction">
           <van-cell-group>
             <van-cell title="同意退款" clickable @click="refundAction = 'approve'">
@@ -179,14 +195,18 @@ import { showToast, showSuccessToast, showFailToast } from 'vant'
 import {
   fetchMerchantOrderDetail,
   acceptMerchantOrder,
+  confirmMerchantOrderPayment,
   completeMerchantOrder,
   closeMerchantOrder,
   refundMerchantOrder
 } from '@/api/modules'
+import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '@/utils/refundIdempotency'
+import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const route = useRoute()
 const router = useRouter()
 const orderId = route.params.id
+const canWrite = computed(() => mobileSubscriptionActions(cachedMobileMerchantSubscriptionState()).canWriteBusiness)
 
 const loading = ref(true)
 const order = ref(null)
@@ -195,16 +215,22 @@ const rejectReason = ref('')
 const showRefundDialog = ref(false)
 const refundAction = ref('approve')
 const refundReason = ref('')
+const refundIdempotencyKey = ref('')
+const refundIdempotencyPayload = ref('')
+const isConfirmedPaid = computed(() => Boolean(order.value?.paid_at) && Number(order.value?.total_amount ?? order.value?.amount ?? 0) > 0)
+const canRefund = computed(() => order.value?.refund_status !== 'processing' && isConfirmedPaid.value && order.value?.payment_channel === 'alipay' && Boolean(order.value?.transaction_no) && Number(order.value?.refunded_amount || 0) < Number(order.value?.total_amount ?? order.value?.amount ?? 0))
 
 const statusClass = computed(() => {
   const map = {
     pending: 'status-pending',
-    paid: 'status-paid',
+    failed: 'status-pending',
+    payment_confirming: 'status-pending',
+    submitted: 'status-paid',
+    received: 'status-paid',
+    accepted: 'status-preparing',
     preparing: 'status-preparing',
-    ready: 'status-ready',
     completed: 'status-completed',
-    cancelled: 'status-cancelled',
-    refunded: 'status-refunded'
+    closed: 'status-cancelled'
   }
   return map[order.value?.status] || ''
 })
@@ -212,25 +238,29 @@ const statusClass = computed(() => {
 const statusIcon = computed(() => {
   const map = {
     pending: 'clock-o',
-    paid: 'paid',
+    failed: 'cross',
+    payment_confirming: 'question-o',
+    submitted: 'orders-o',
+    received: 'paid',
+    accepted: 'orders-o',
     preparing: 'orders-o',
-    ready: 'bag-o',
     completed: 'success',
-    cancelled: 'cross',
-    refunded: 'refund-o'
+    closed: 'cross'
   }
   return map[order.value?.status] || 'info-o'
 })
 
 const statusText = computed(() => {
   const map = {
-    pending: '待接单',
-    paid: '已支付，等待商家接单',
-    preparing: '制作中',
-    ready: '待取餐',
+    pending: '等待顾客付款',
+    failed: '支付未完成',
+    payment_confirming: '待核对收款',
+    submitted: Number(order.value?.total_amount ?? order.value?.amount ?? 0) === 0 ? '无需付款，等待商家处理' : '已提交，稍后结算',
+    received: '已确认收款，等待商家接单',
+    accepted: '商家已接单',
+    preparing: '商家处理中',
     completed: '已完成',
-    cancelled: '已取消',
-    refunded: '已退款'
+    closed: '已关闭'
   }
   return map[order.value?.status] || '未知状态'
 })
@@ -248,6 +278,7 @@ function getPayTypeText(payType) {
   const map = {
     wechat: '微信支付',
     alipay: '支付宝',
+    merchant_qr: '商户自有收款码（直接付给门店）',
     mock: '模拟支付'
   }
   return map[payType] || payType || '-'
@@ -257,7 +288,7 @@ async function loadOrder() {
   loading.value = true
   try {
     const res = await fetchMerchantOrderDetail(orderId)
-    order.value = res.data
+    order.value = res.data.order || res.data
   } catch (e) {
     console.error('加载订单失败:', e)
     showToast('加载失败')
@@ -270,6 +301,16 @@ async function acceptOrder() {
   try {
     await acceptMerchantOrder(orderId)
     showSuccessToast('已接单')
+    loadOrder()
+  } catch (e) {
+    showFailToast(e.response?.data?.message || '操作失败')
+  }
+}
+
+async function confirmPayment() {
+  try {
+    await confirmMerchantOrderPayment(orderId)
+    showSuccessToast('已确认收款')
     loadOrder()
   } catch (e) {
     showFailToast(e.response?.data?.message || '操作失败')
@@ -311,8 +352,19 @@ function confirmRefund() {
 async function doRefund() {
   try {
     if (refundAction.value === 'approve') {
-      await refundMerchantOrder(orderId, { reason: '同意退款' })
-      showSuccessToast('已同意退款')
+      const requestPayload = { full: true, reason: '同意退款' }
+      const idempotency = getOrCreateRefundIdempotency(orderId, requestPayload, refundIdempotencyKey.value, refundIdempotencyPayload.value)
+      if (idempotency.conflict) {
+        showToast('上一笔退款请求仍待核查或请求内容已改变，请先完成渠道对账。')
+        return
+      }
+      refundIdempotencyKey.value = idempotency.key
+      refundIdempotencyPayload.value = idempotency.fingerprint
+      await refundMerchantOrder(orderId, { ...requestPayload, idempotency_key: idempotency.key })
+      showSuccessToast('退款渠道已确认处理')
+      clearRefundIdempotency(orderId)
+      refundIdempotencyKey.value = ''
+      refundIdempotencyPayload.value = ''
     } else {
       if (!refundReason.value.trim()) {
         showToast('请输入拒绝原因')
@@ -323,7 +375,13 @@ async function doRefund() {
     }
     router.back()
   } catch (e) {
-    showFailToast(e.response?.data?.message || '操作失败')
+    const message = String(e.response?.data?.message || e.message || '')
+    if (message.toLowerCase().includes('definitively rejected')) {
+      clearRefundIdempotency(orderId)
+      refundIdempotencyKey.value = ''
+      refundIdempotencyPayload.value = ''
+    }
+    showFailToast(message || '操作失败')
   }
 }
 
@@ -338,6 +396,7 @@ onMounted(() => {
   background: #f7f8fa;
   padding-bottom: 80px;
 }
+.readonly-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 12px; padding: 10px 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
 .loading-container {
   display: flex;
@@ -380,6 +439,16 @@ onMounted(() => {
 .status-text {
   font-size: 16px;
   margin-top: 8px;
+}
+
+.payment-confirmation-note {
+  margin: 12px 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: #8a5a00;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .product-info {

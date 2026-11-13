@@ -3,7 +3,7 @@
     <PageHero
       eyebrow="OPS HEALTH CENTER"
       title="运营健康中心"
-      description="每天查看交易、退款、结算、商家运营、部署配置和 AI 可用性风险；这里只做摘要和处理入口，不重复商家运营和订单列表。"
+      description="每天查看交易、退款、结算、商家运营、部署配置和 AI 接入状态；这里只做摘要和处理入口，不重复商家运营和订单列表。"
       compact
     >
       <template #actions>
@@ -191,139 +191,43 @@
       </div>
     </DataPanel>
 
-    <DataPanel title="AI 接入配置中心" description="用于上线前确认国内模型供应商、环境变量和可用状态；API Key 仍建议放服务器环境变量，不在后台明文保存。" eyebrow="AI PROVIDER">
+    <DataPanel title="AI 经营模块管理（框架预留）" description="管理端预留 provider 接入、功能/权限策略、调用审计与成本观察位置；目前默认禁用，不连接模型、不收集凭据，也不展示模拟调用统计。" eyebrow="AI OPERATIONS · NOT CONNECTED">
       <template #actions>
-        <el-button plain :loading="aiChecking" @click="loadAIStatus">刷新 AI 状态</el-button>
-        <el-button type="primary" plain @click="copyText(aiStatus.env_example || '')">复制环境变量</el-button>
+        <el-tag type="warning" effect="light">未接入 · 默认禁用</el-tag>
       </template>
-      <section class="ai-config-center">
-        <article :class="['ai-status-card', aiStatus.status]">
-          <span>当前 AI 状态</span>
-          <strong>{{ aiStatus.ready ? '已可调用' : aiStatus.enabled ? '配置不完整' : '模板兜底' }}</strong>
-          <p>{{ aiStatus.summary || '正在读取 AI 配置状态。' }}</p>
-          <div class="ai-status-meta">
-            <el-tag :type="statusType(aiStatus.status)">{{ aiStatus.provider || 'template' }}</el-tag>
-            <el-tag effect="plain">{{ aiStatus.model || '未配置模型' }}</el-tag>
-            <el-tag :type="aiStatus.has_api_key ? 'success' : 'warning'">{{ aiStatus.has_api_key ? 'Key 已配置' : 'Key 未配置' }}</el-tag>
-          </div>
+      <el-alert
+        class="ai-scaffold-alert"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="当前不能启用 AI provider"
+        description="即使部署环境存在 AI_ENABLED 或 API 凭据，应用默认服务仍使用 DisabledAIProvider；后台不提供启用开关或密钥录入。"
+      />
+      <section class="ai-scaffold-grid">
+        <article>
+          <span>01 · Provider Adapter</span>
+          <strong>供应商隔离配置（预留）</strong>
+          <p>未来按统一接口适配供应商协议、模型、超时和失败降级；真实凭据只通过密钥管理，不在页面或数据库明文保存。</p>
         </article>
-        <article class="ai-env-card">
-          <span>推荐生产配置</span>
-          <pre>{{ aiStatus.env_example || 'AI_ENABLED=true\nAI_PROVIDER=deepseek\nAI_BASE_URL=https://api.deepseek.com/v1\nAI_API_KEY=replace-with-ai-api-key\nAI_MODEL=deepseek-chat\nAI_TIMEOUT_SECONDS=20' }}</pre>
-          <p>{{ aiStatus.suggestion || '开启前先确认 API Key、额度、超时和计费预警。' }}</p>
+        <article>
+          <span>02 · Feature & Access</span>
+          <strong>功能开关与商家权限（预留）</strong>
+          <p>按套餐/商家控制分析、问答和活动建议入口，并校验商家隔离、授权范围与可用额度。</p>
+        </article>
+        <article>
+          <span>03 · Audit & Observability</span>
+          <strong>数据来源、版本与成本审计（预留）</strong>
+          <p>后续记录授权数据上下文、统计口径、provider/模型版本、结果、失败、耗时、token 与成本。</p>
+        </article>
+        <article>
+          <span>04 · Human Approval</span>
+          <strong>人工复核与执行边界（预留）</strong>
+          <p>AI 只生成可追溯建议或草稿；改价、发券、创建/发布活动和资金相关动作必须由商家确认。</p>
         </article>
       </section>
-      <section class="ai-usage-panel">
-        <div class="ai-usage-head">
-          <div>
-            <span>AI COST & QUOTA</span>
-            <strong>今日调用与成本观察</strong>
-            <p>{{ aiUsage.suggestion || '记录每次 AI 生成，方便后续做套餐额度、缓存和成本预警。' }}</p>
-          </div>
-          <el-button text type="primary" :loading="aiChecking" @click="loadAIStatus">刷新</el-button>
-        </div>
-        <div class="ai-usage-grid">
-          <article>
-            <span>今日调用</span>
-            <strong>{{ aiUsage.today_total || 0 }}</strong>
-            <small>{{ aiUsage.active_merchants || 0 }} 个商家使用</small>
-          </article>
-          <article>
-            <span>成功 / 失败</span>
-            <strong>{{ aiUsage.today_success || 0 }} / {{ aiUsage.today_failed || 0 }}</strong>
-            <small>失败率 {{ aiUsage.failure_rate || 0 }}%</small>
-          </article>
-          <article>
-            <span>模板兜底</span>
-            <strong>{{ aiUsage.today_fallback || 0 }}</strong>
-            <small>未走真实模型的调用</small>
-          </article>
-          <article>
-            <span>平均耗时</span>
-            <strong>{{ aiUsage.average_latency_ms || 0 }}ms</strong>
-            <small>用于观察供应商响应速度</small>
-          </article>
-          <article :class="{ warning: aiUsage.near_limit_merchants > 0 }">
-            <span>接近额度</span>
-            <strong>{{ aiUsage.near_limit_merchants || 0 }}</strong>
-            <small>达到日额度 80% 的商家</small>
-          </article>
-          <article :class="{ warning: aiUsage.cost_alert }">
-            <span>预估成本</span>
-            <strong>{{ formatMoney(aiUsage.estimated_cost_cents || 0) }}</strong>
-            <small>上限 {{ formatMoney(aiUsage.cost_limit_cents || 0) }}</small>
-          </article>
-        </div>
-        <div class="ai-scenario-list">
-          <span>高频场景</span>
-          <el-tag v-for="item in aiUsage.top_scenarios || []" :key="item.scenario" effect="plain">
-            {{ item.scenario || 'unknown' }} · {{ item.count }}
-          </el-tag>
-          <small v-if="!(aiUsage.top_scenarios || []).length">今日暂无场景数据</small>
-        </div>
-      </section>
-      <section class="ai-policy-panel">
-        <div class="ai-policy-head">
-          <div>
-            <span>AI RUNTIME POLICY</span>
-            <strong>运行策略与额度控制</strong>
-            <p>后台只保存供应商、模型、额度和告警阈值；真实 API Key 仍放服务器环境变量，避免泄露。</p>
-          </div>
-          <el-switch v-model="aiPolicyForm.enabled" active-text="计划启用" inactive-text="模板兜底" />
-        </div>
-        <el-form :model="aiPolicyForm" label-width="120px" class="ai-policy-form">
-          <div class="ai-policy-grid">
-            <el-form-item label="供应商">
-              <el-select v-model="aiPolicyForm.provider" placeholder="选择或填写供应商">
-                <el-option label="DeepSeek" value="deepseek" />
-                <el-option label="通义千问" value="qwen" />
-                <el-option label="智谱" value="zhipu" />
-                <el-option label="Kimi" value="moonshot" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="模型名">
-              <el-input v-model="aiPolicyForm.model" placeholder="例如 deepseek-chat / qwen-plus" />
-            </el-form-item>
-            <el-form-item label="Base URL">
-              <el-input v-model="aiPolicyForm.base_url" placeholder="兼容 OpenAI 协议的接口地址" />
-            </el-form-item>
-            <el-form-item label="超时时间">
-              <el-input-number v-model="aiPolicyForm.timeout_seconds" :min="5" :max="120" />
-            </el-form-item>
-            <el-form-item label="单商家日额度">
-              <el-input-number v-model="aiPolicyForm.daily_quota_per_merchant" :min="1" :max="5000" />
-            </el-form-item>
-            <el-form-item label="每日成本上限">
-              <el-input-number v-model="aiPolicyForm.daily_cost_limit_cents" :min="0" :step="1000" />
-            </el-form-item>
-            <el-form-item label="失败率告警">
-              <el-input-number v-model="aiPolicyForm.failure_rate_alert_percent" :min="1" :max="100" />
-            </el-form-item>
-            <el-form-item label="备注">
-              <el-input v-model="aiPolicyForm.remark" />
-            </el-form-item>
-          </div>
-          <div class="ai-policy-actions">
-            <el-button
-              v-for="item in aiStatus.presets || []"
-              :key="item.provider"
-              plain
-              @click="selectAIPreset(item)"
-            >
-              套用 {{ item.name }}
-            </el-button>
-            <el-button type="primary" :loading="aiSaving" @click="saveAIPolicy">保存 AI 策略</el-button>
-          </div>
-        </el-form>
-      </section>
-      <div class="ai-provider-grid">
-        <article v-for="item in aiStatus.presets || []" :key="item.provider">
-          <span>{{ item.provider }}</span>
-          <strong>{{ item.name }}</strong>
-          <p>{{ item.description }}</p>
-          <code>{{ item.base_url }}</code>
-          <small>{{ item.model }}</small>
-        </article>
+      <div class="ai-scaffold-footer">
+        <strong>开放前置顺序</strong>
+        <p>合成数据单测 → 授权数据与字段映射 → provider 隔离适配 → 日志/成本/隐私检查 → 小范围真实商家验证 → 人工审核后逐步开放。</p>
       </div>
     </DataPanel>
 
@@ -477,9 +381,8 @@ const repairGuides = {
     commands: ['ALIPAY_SANDBOX=false', 'ALIPAY_NOTIFY_URL=https://your-domain.com/api/v1/payments/callback/alipay']
   },
   ai: {
-    summary: '接入国内兼容 OpenAI 协议的大模型。',
-    steps: ['优先选择 DeepSeek、通义千问或智谱。', '申请 API Key 并确认余额。', '填写 AI_BASE_URL、AI_API_KEY、AI_MODEL。', '重启后端，在商家端 AI 页面生成一次短视频脚本测试。'],
-    commands: ['AI_ENABLED=true', 'AI_PROVIDER=deepseek', 'AI_BASE_URL=https://api.deepseek.com/v1', 'AI_MODEL=deepseek-chat']
+    summary: 'AI provider 尚未接入，当前应保持禁用；不要仅通过环境变量开放。',
+    steps: ['先确认商家数据授权、字段来源和商家隔离。', '实现并测试 provider adapter 和禁用默认实现。', '补齐调用审计、成本/额度、隐私与人工审核边界。', '合成数据测试通过后，再安排获授权的真实样本小范围验证。']
   },
   backup: {
     summary: '配置数据库自动备份与恢复演练。',
@@ -752,7 +655,7 @@ const laneTitle = (section, fallback) => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadConfigs(), loadSecurityCheck(), loadAIStatus()])
+  await Promise.all([loadConfigs(), loadSecurityCheck()])
 })
 </script>
 
@@ -1120,6 +1023,53 @@ code {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
+}
+
+.ai-scaffold-alert {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+.ai-scaffold-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.ai-scaffold-grid article {
+  min-height: 150px;
+  padding: 17px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+.ai-scaffold-grid span,
+.ai-scaffold-grid strong {
+  display: block;
+}
+.ai-scaffold-grid span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+.ai-scaffold-grid strong {
+  margin-top: 8px;
+  color: #0f2747;
+  font-size: 17px;
+}
+.ai-scaffold-grid p,
+.ai-scaffold-footer p {
+  margin: 8px 0 0;
+  color: #64748b;
+  line-height: 1.65;
+}
+.ai-scaffold-footer {
+  margin-top: 14px;
+  padding: 15px 17px;
+  border-left: 4px solid #2563eb;
+  border-radius: 0 8px 8px 0;
+  background: #eff6ff;
+}
+.ai-scaffold-footer strong {
+  color: #1e3a8a;
 }
 
 .ai-status-card,

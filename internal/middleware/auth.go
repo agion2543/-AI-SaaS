@@ -13,6 +13,20 @@ import (
 	"go-web-gin-health/internal/utils"
 )
 
+var expiredMerchantReadOnlyRoutes = map[string]struct{}{
+	"/leads":                    {},
+	"/leads/stats":              {},
+	"/payment-config":           {},
+	"/stores":                   {},
+	"/stores/:storeId/products": {},
+	"/orders":                   {},
+	"/orders/:id":               {},
+	"/refunds":                  {},
+	"/settlements":              {},
+	"/promotions":               {},
+	"/group-buy-links":          {},
+}
+
 func Auth(cfg *config.Config, requiredRole string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
@@ -55,6 +69,10 @@ func Auth(cfg *config.Config, requiredRole string) gin.HandlerFunc {
 }
 
 func MerchantSubscriptionMiddleware(db *gorm.DB) gin.HandlerFunc {
+	return merchantSubscriptionMiddlewareAt(db, time.Now)
+}
+
+func merchantSubscriptionMiddlewareAt(db *gorm.DB, now func() time.Time) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, _ := c.Get("role")
 		if role != "merchant_admin" {
@@ -83,16 +101,54 @@ func MerchantSubscriptionMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		expireAt := merchant.SubscriptionExpireAt
-		if expireAt == nil {
-			expireAt = merchant.SubscriptionExpiredAt
+		if merchant.Status == "suspended" {
+			utils.Error(c, http.StatusForbidden, "商家已被禁用")
+			c.Abort()
+			return
 		}
-		if expireAt == nil || expireAt.Before(time.Now()) {
-			utils.Error(c, http.StatusForbidden, "订阅已过期，请续费")
+		if merchant.SubscriptionStatus == "paused" {
+			utils.Error(c, http.StatusForbidden, "订阅已被平台暂停")
+			c.Abort()
+			return
+		}
+		currentTime := now()
+		if merchant.HasActiveSubscriptionAt(currentTime) {
+			c.Next()
+			return
+		}
+		if !isExpiredMerchantSubscription(merchant, currentTime) || !isExpiredMerchantReadOnlyRoute(c) {
+			utils.Error(c, http.StatusForbidden, "订阅当前不可用")
 			c.Abort()
 			return
 		}
 
+		c.Set("merchant_read_only", true)
 		c.Next()
 	}
+}
+
+func isExpiredMerchantSubscription(merchant model.Merchant, currentTime time.Time) bool {
+	if merchant.SubscriptionStatus != "active" {
+		return false
+	}
+	expiresAt := merchant.SubscriptionExpireAt
+	if expiresAt == nil {
+		expiresAt = merchant.SubscriptionExpiredAt
+	}
+	return expiresAt != nil && !expiresAt.After(currentTime)
+}
+
+func isExpiredMerchantReadOnlyRoute(c *gin.Context) bool {
+	if c.Request.Method != http.MethodGet {
+		return false
+	}
+	route := c.FullPath()
+	for _, prefix := range []string{"/api/v1/merchant", "/api/merchant"} {
+		if strings.HasPrefix(route, prefix+"/") {
+			route = strings.TrimPrefix(route, prefix)
+			break
+		}
+	}
+	_, allowed := expiredMerchantReadOnlyRoutes[route]
+	return allowed
 }

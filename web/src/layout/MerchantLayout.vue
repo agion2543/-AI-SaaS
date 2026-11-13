@@ -20,6 +20,7 @@
         <el-menu-item index="/merchant/orders" :disabled="navigationLocked">{{ text.orders }}</el-menu-item>
         <el-menu-item index="/merchant/finance" :disabled="navigationLocked">{{ text.finance }}</el-menu-item>
         <el-menu-item index="/merchant/promotions" :disabled="navigationLocked">{{ text.promotions }}</el-menu-item>
+        <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
         <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionAI }}</div>
         <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
@@ -45,7 +46,19 @@
       </header>
 
       <section class="merchant-content">
-        <router-view :key="routeViewKey" />
+        <el-alert
+          v-if="subscriptionExpired && route.path !== '/merchant/subscription'"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="订阅已到期：现有经营数据可只读查看，新建、修改、删除和业务处理操作已锁定。续费后恢复。"
+        />
+        <div v-if="subscriptionPaused && route.path !== '/merchant/subscription'" class="pause-lock-screen">
+          <h2>商家业务已被平台安全暂停</h2>
+          <p>暂停期间不能查看或操作经营数据。请前往订阅页查看状态及恢复方式。</p>
+          <el-button type="primary" @click="router.push('/merchant/subscription')">查看订阅状态与恢复入口</el-button>
+        </div>
+        <router-view v-else :key="routeViewKey" />
       </section>
     </main>
   </div>
@@ -54,8 +67,9 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { checkMerchantSubscription } from '../api/modules'
+import { fetchMerchantInfo } from '../api/modules'
 import { useMerchantAuthStore } from '../stores/merchantAuth'
+import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
 
 const text = {
   subtitle: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
@@ -67,13 +81,14 @@ const text = {
   orders: '\u8ba2\u5355\u7ba1\u7406',
   finance: '\u8d22\u52a1\u5bf9\u8d26',
   promotions: '\u4f18\u60e0\u6d3b\u52a8',
+  groupBuy: '\u56e2\u8d2d\u6e20\u9053',
   coupons: '\u5238\u5305/\u6838\u9500',
   ai: 'AI \u7ecf\u8425\u5206\u6790',
   share: '\u88c2\u53d8\u770b\u677f',
   subscription: '\u8ba2\u9605\u4ed8\u8d39',
   paymentSettings: '\u6536\u6b3e\u8bbe\u7f6e',
   profile: '\u5546\u5bb6\u4fe1\u606f',
-  lockTip: '\u5b8c\u6210\u8ba2\u9605\u540e\u5373\u53ef\u89e3\u9501\u5de5\u4f5c\u53f0\u529f\u80fd',
+  lockTip: '\u5e73\u53f0\u5df2\u6682\u505c\u5546\u5bb6\u4e1a\u52a1\u6743\u9650\uff0c\u8bf7\u67e5\u770b\u8ba2\u9605\u72b6\u6001\u548c\u6062\u590d\u65b9\u5f0f',
   title: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
   description: '\u67e5\u770b\u5546\u5bb6\u4fe1\u606f\u4e0e\u540e\u7eed\u7ecf\u8425\u80fd\u529b\u7684\u7edf\u4e00\u5165\u53e3',
   logout: '\u9000\u51fa\u767b\u5f55'
@@ -82,20 +97,23 @@ const text = {
 const router = useRouter()
 const route = useRoute()
 const authStore = useMerchantAuthStore()
-const subscriptionValid = ref(false)
-const navigationLocked = computed(() => !subscriptionValid.value && route.path === '/merchant/subscription')
+const merchant = ref({})
+const subscriptionState = computed(() => merchantSubscriptionAccessState(merchant.value))
+const subscriptionExpired = computed(() => subscriptionState.value === 'expired')
+const subscriptionPaused = computed(() => subscriptionState.value === 'paused')
+const navigationLocked = computed(() => subscriptionPaused.value)
 const routeViewKey = computed(() => route.fullPath)
 
 const refreshSubscriptionState = async () => {
   if (!authStore.token) {
-    subscriptionValid.value = false
+    merchant.value = {}
     return
   }
   try {
-    const res = await checkMerchantSubscription()
-    subscriptionValid.value = Boolean(res.data?.valid)
+    const res = await fetchMerchantInfo()
+    merchant.value = res.data?.merchant || res.data || {}
   } catch {
-    subscriptionValid.value = false
+    merchant.value = {}
   }
 }
 
@@ -181,6 +199,27 @@ onMounted(refreshSubscriptionState)
   background: rgba(14, 165, 233, 0.1);
   color: #d7eef8;
   font-size: 13px;
+  line-height: 1.6;
+}
+
+.pause-lock-screen {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid #fecaca;
+  border-radius: 20px;
+  background: #fff7f7;
+  color: #7f1d1d;
+}
+
+.pause-lock-screen h2,
+.pause-lock-screen p {
+  margin: 0;
+}
+
+.pause-lock-screen p {
+  color: #7f1d1d;
   line-height: 1.6;
 }
 

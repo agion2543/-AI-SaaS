@@ -9,9 +9,14 @@
       @click-left="router.back()"
     >
       <template #right>
-        <van-button size="small" type="primary" @click="showAddStore">添加门店</van-button>
+        <van-button v-if="canWrite" size="small" type="primary" @click="showAddStore">添加门店</van-button>
       </template>
     </van-nav-bar>
+
+    <div v-if="!canWrite" class="readonly-banner" role="status">
+      订阅已到期：门店信息仅可查看，新增、编辑与营业状态修改已关闭。
+      <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+    </div>
 
     <!-- 门店列表 -->
     <van-list
@@ -22,7 +27,7 @@
     >
       <div v-if="stores.length === 0 && !loading" class="empty-stores">
         <van-empty description="暂无门店">
-          <van-button type="primary" size="small" @click="showAddStore">添加门店</van-button>
+          <van-button v-if="canWrite" type="primary" size="small" @click="showAddStore">添加门店</van-button>
         </van-empty>
       </div>
 
@@ -31,8 +36,8 @@
           <van-cell
             :title="store.name"
             :label="store.address || store.description || '暂无地址'"
-            is-link
-            @click="editStore(store)"
+            :is-link="canWrite"
+            @click="canWrite && editStore(store)"
           >
             <template #icon>
               <van-image
@@ -52,6 +57,7 @@
                   <van-switch
                     :model-value="store.is_active"
                     size="20"
+                    :disabled="!canWrite"
                     @change="toggleStoreStatus(store)"
                   />
                 </div>
@@ -71,7 +77,7 @@
               </div>
             </div>
             <div class="store-buttons">
-              <van-button size="mini" plain @click="editStore(store)">编辑</van-button>
+              <van-button v-if="canWrite" size="mini" plain @click="editStore(store)">编辑</van-button>
               <van-button size="mini" plain @click="viewProducts(store)">商品</van-button>
             </div>
           </div>
@@ -81,6 +87,7 @@
 
     <!-- 添加/编辑门店弹窗 -->
     <van-popup
+      v-if="canWrite"
       v-model:show="showStorePopup"
       position="bottom"
       round
@@ -160,8 +167,10 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
 import { fetchMerchantStores, createMerchantStore, updateMerchantStore } from '@/api/modules'
+import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const router = useRouter()
+const canWrite = mobileSubscriptionActions(cachedMobileMerchantSubscriptionState()).canWriteBusiness
 
 const loading = ref(false)
 const finished = ref(true)
@@ -187,7 +196,7 @@ async function loadStores() {
   loading.value = true
   try {
     const res = await fetchMerchantStores()
-    stores.value = res.data || []
+    stores.value = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data) ? res.data : [])
   } catch (e) {
     console.error('加载门店失败:', e)
     showToast('加载失败')
@@ -286,6 +295,7 @@ onMounted(() => {
   background: #f7f8fa;
   padding-bottom: 20px;
 }
+.readonly-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 12px; padding: 10px 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
 .empty-stores {
   padding: 60px 0;

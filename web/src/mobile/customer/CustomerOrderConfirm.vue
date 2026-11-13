@@ -49,9 +49,17 @@
         />
       </van-cell-group>
 
+      <van-cell-group inset title="顾客手机（选填）">
+        <van-field v-model="customerPhone" type="tel" maxlength="11" placeholder="填写手机号后可查询奖励券">
+          <template #button>
+            <van-button size="small" type="primary" @click="loadCoupons">查询奖励券</van-button>
+          </template>
+        </van-field>
+      </van-cell-group>
+
       <!-- 优惠信息 -->
       <van-cell-group inset title="优惠">
-        <van-cell title="优惠券" is-link :value="selectedCoupon ? `-¥${selectedCoupon.value}` : '暂无可用'" @click="showCouponPicker = true" />
+        <van-cell title="优惠券" is-link :value="selectedCoupon ? `-¥${formatPrice(selectedCoupon.value)}` : '暂无可用'" @click="showCouponPicker = true" />
       </van-cell-group>
 
       <!-- 价格明细 -->
@@ -62,21 +70,26 @@
         <van-cell title="优惠金额">
           <span class="discount-price">-¥{{ formatPrice(discountAmount) }}</span>
         </van-cell>
-        <van-cell title="实付金额">
+        <van-cell title="订单金额">
           <span class="final-price">¥{{ formatPrice(finalPrice) }}</span>
         </van-cell>
       </van-cell-group>
 
-      <!-- 模拟支付提示 -->
-      <van-notice-bar v-if="isDevMode" class="dev-notice" left-icon="info-o" scrollable>
-        开发环境：当前为模拟支付，无需真实付款
+      <p class="payment-boundary-note">提交订单不等于完成付款；本页不会直接扣款。是否需要预付及具体付款方式，以门店说明和后续页面提示为准。</p>
+
+      <van-notice-bar v-if="isSyntheticPreview" class="dev-notice" left-icon="info-o" :scrollable="false">
+        合成演示数据 · 非真实交易
+      </van-notice-bar>
+
+      <van-notice-bar v-if="isDevMockPaymentEnabled" class="dev-notice" left-icon="info-o" :scrollable="false">
+        开发标记 · 不模拟付款/不标记已付款
       </van-notice-bar>
 
       <!-- 底部提交栏 -->
       <van-submit-bar
-        :price="finalPrice * 100"
-        label="实付"
-        button-text="确认支付"
+        :price="finalPrice"
+        label="订单金额"
+        button-text="提交订单"
         :loading="submitting"
         :disabled="submitting"
         @submit="submitOrder"
@@ -101,10 +114,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast } from 'vant'
 import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder } from '@/api/modules'
+import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
+import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isDevMockPaymentFlagEnabled, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
 
 const route = useRoute()
 const router = useRouter()
@@ -117,11 +132,13 @@ const storeInfo = ref({})
 const products = ref([])
 const cart = ref({})
 const remark = ref('')
+const customerPhone = ref('')
 const coupons = ref([])
 const selectedCoupon = ref(null)
 const chosenCouponIndex = ref(-1)
 const showCouponPicker = ref(false)
-const isDevMode = ref(import.meta.env.DEV || true) // 开发环境默认模拟支付
+const isDevMockPaymentEnabled = isDevMockPaymentFlagEnabled(import.meta.env)
+const isSyntheticPreview = import.meta.env.DEV && route.query.synthetic === '1'
 
 const defaultProductImg = 'https://via.placeholder.com/100x100?text=商品'
 
@@ -158,21 +175,21 @@ const finalPrice = computed(() => {
 
 const availableCoupons = computed(() => {
   return coupons.value
-    .filter(c => c.status === 'available' && (c.min_amount || 0) <= originalPrice.value)
+    .filter(c => c.status === 'unused' && Number(c.threshold || 0) <= originalPrice.value)
     .map(c => ({
       ...c,
-      value: c.value || 0,
-      name: c.name || `满${c.min_amount || 0}减${c.value || 0}`,
-      startAt: new Date(c.start_time).getTime() / 1000,
-      endAt: new Date(c.end_time).getTime() / 1000,
-      originCondition: c.min_amount || 0,
-      reason: (c.min_amount || 0) > originalPrice.value ? `满${c.min_amount}可用` : ''
+      value: Number(c.amount || 0),
+      name: c.title || `满${formatPrice(c.threshold)}减${formatPrice(c.amount)}`,
+      startAt: c.valid_from ? new Date(c.valid_from).getTime() / 1000 : undefined,
+      endAt: c.valid_to ? new Date(c.valid_to).getTime() / 1000 : undefined,
+      originCondition: Number(c.threshold || 0),
+      reason: Number(c.threshold || 0) > originalPrice.value ? `满${formatPrice(c.threshold)}可用` : ''
     }))
 })
 
 // 方法
 function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
+  return (Number(price || 0) / 100).toFixed(2)
 }
 
 function loadCart() {
@@ -196,33 +213,84 @@ function onCouponChange(index) {
   showCouponPicker.value = false
 }
 
+async function loadCoupons() {
+  if (!isValidCustomerPhone(customerPhone.value)) {
+    showToast('请输入 11 位手机号后查询')
+    return
+  }
+  try {
+    coupons.value = await fetchCustomerCouponsForPhone(fetchCustomerStoreCoupons, storeId, customerPhone.value)
+    showToast(coupons.value.length ? `已找到 ${coupons.value.length} 张可用券` : '当前手机号暂无可用奖励券')
+  } catch (e) {
+    coupons.value = []
+    selectedCoupon.value = null
+    chosenCouponIndex.value = -1
+    showFailToast(e.response?.data?.message || '查询优惠券失败')
+  }
+}
+
 async function submitOrder() {
   if (cartItems.value.length === 0) {
     showToast('购物车是空的')
     return
   }
+  if (customerPhone.value.trim() && !isValidCustomerPhone(customerPhone.value)) {
+    showToast('手机号需要是 11 位数字')
+    return
+  }
 
   submitting.value = true
   try {
-    const orderItems = cartItems.value.map(item => ({
-      product_id: item.id,
-      quantity: item.count,
-      price: item.price
+    const res = await createCustomerStoreOrder(buildCustomerOrderPayload({
+      storeId,
+      customerPhone: customerPhone.value,
+      customerNote: remark.value,
+      couponNo: selectedCoupon.value?.coupon_no,
+      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: item.price }))
     }))
-
-    const res = await createCustomerStoreOrder({
-      store_id: storeId,
-      items: orderItems,
-      remark: remark.value,
-      coupon_id: selectedCoupon.value?.id
-    })
+    const order = res.data.order || res.data
+    const orderNo = order.order_no
+    const accessToken = res.data.access_token
+    if (!orderNo || !accessToken) throw new Error('订单安全凭证未返回，请勿使用订单号单独查询')
+    saveCustomerOrderAccessToken(orderNo, accessToken)
 
     // 清除购物车
     cart.value = {}
     localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
 
-    showSuccessToast('订单创建成功')
-    router.replace(`/m/order/${res.data.order_no}`)
+    if (res.data.payment_error) {
+      showFailToast('订单已创建，但支付宝付款入口暂不可用；订单仍未确认收款')
+      router.replace({
+        path: `/m/order/${encodeURIComponent(orderNo)}`,
+        query: {
+          access_token: accessToken,
+          payment_setup_unavailable: '1',
+          ...(isSyntheticPreview ? { synthetic: '1' } : {})
+        }
+      })
+      return
+    }
+
+    const payment = res.data.payment || {}
+    const paymentUrl = payment.payment_url || payment.payment_form
+    if (payment.mode === 'page' && paymentUrl) {
+      if (paymentUrl.trim().startsWith('<form')) {
+        document.open()
+        document.write(paymentUrl)
+        document.close()
+        document.querySelector('form')?.submit()
+      } else {
+        window.location.href = paymentUrl
+      }
+      return
+    }
+
+    if (res.data.payment_required === false || ['submitted', 'preparing'].includes(order.status)) {
+      showSuccessToast('订单已提交；如需预付请按状态页提示完成付款')
+    } else {
+      showToast('订单已创建，尚未确认收款；可在状态页继续付款')
+    }
+    router.replace(mobileCustomerOrderAccessPath(orderNo, accessToken))
   } catch (e) {
     console.error('创建订单失败:', e)
     showFailToast(e.response?.data?.message || '创建订单失败')
@@ -234,15 +302,14 @@ async function submitOrder() {
 async function loadData() {
   loading.value = true
   try {
-    const [storeRes, productsRes, couponsRes] = await Promise.all([
+    const [storeRes, productsRes] = await Promise.all([
       fetchCustomerStore(storeId),
-      fetchCustomerStoreProducts(storeId),
-      fetchCustomerStoreCoupons(storeId).catch(() => ({ data: [] }))
+      fetchCustomerStoreProducts(storeId)
     ])
 
-    storeInfo.value = storeRes.data || {}
-    products.value = productsRes.data || []
-    coupons.value = couponsRes.data || []
+    storeInfo.value = storeRes.data?.store || storeRes.data || {}
+    products.value = customerResponseList(productsRes)
+    coupons.value = []
     loadCart()
   } catch (e) {
     console.error('加载数据失败:', e)
@@ -251,6 +318,12 @@ async function loadData() {
     loading.value = false
   }
 }
+
+watch(customerPhone, () => {
+  coupons.value = []
+  selectedCoupon.value = null
+  chosenCouponIndex.value = -1
+})
 
 onMounted(() => {
   if (!storeId) {
@@ -288,6 +361,16 @@ onMounted(() => {
   color: #ee0a24;
   font-weight: bold;
   font-size: 16px;
+}
+
+.payment-boundary-note {
+  margin: 12px 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: #8a5a00;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .dev-notice {

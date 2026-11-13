@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -33,43 +34,95 @@ type AuditRecordInput struct {
 	Detail     map[string]interface{}
 }
 
+type AuditActor struct {
+	ID        uint
+	Type      string
+	IP        string
+	UserAgent string
+}
+
+type AuditEvent struct {
+	Actor AuditActor
+	Input AuditRecordInput
+}
+
 func NewAuditService(db *gorm.DB) *AuditService {
 	return &AuditService{db: db}
 }
 
-func (s *AuditService) Record(c *gin.Context, input AuditRecordInput) {
-	if s == nil || s.db == nil || c == nil || strings.TrimSpace(input.Action) == "" {
-		return
+func AuditActorFromContext(c *gin.Context) AuditActor {
+	if c == nil {
+		return AuditActor{}
 	}
+	role, _ := c.Get("role")
+	roleText, _ := role.(string)
+	return AuditActor{
+		ID:        c.GetUint("user_id"),
+		Type:      roleText,
+		IP:        c.ClientIP(),
+		UserAgent: c.GetHeader("User-Agent"),
+	}
+}
 
+// Record persists an audit row on its own DB handle and returns storage errors.
+// It cannot make a previously committed business mutation atomic with the audit.
+func (s *AuditService) Record(c *gin.Context, input AuditRecordInput) error {
+	if s == nil || s.db == nil {
+		return errors.New("audit database is unavailable")
+	}
+	if c == nil {
+		return errors.New("audit request context is unavailable")
+	}
+	return AppendAuditTx(s.db, AuditEvent{Actor: AuditActorFromContext(c), Input: input})
+}
+
+// AppendAuditTx appends one audit row using the caller's transaction. Sensitive
+// mutations must call it before commit and return its error to roll back state.
+func AppendAuditTx(tx *gorm.DB, event AuditEvent) error {
+	if tx == nil {
+		return errors.New("audit transaction is unavailable")
+	}
+	input := event.Input
+	action := strings.TrimSpace(input.Action)
+	if action == "" {
+		return errors.New("audit action is required")
+	}
 	detail := "{}"
 	if len(input.Detail) > 0 {
-		if raw, err := json.Marshal(input.Detail); err == nil {
-			detail = string(raw)
+		raw, err := json.Marshal(input.Detail)
+		if err != nil {
+			return err
 		}
+		detail = string(raw)
 	}
-
-	actorID := c.GetUint("user_id")
-	actorType, _ := c.Get("role")
-	actorTypeText, _ := actorType.(string)
-	if actorTypeText == "" {
-		actorTypeText = "unknown"
+	actorType := strings.TrimSpace(event.Actor.Type)
+	if actorType == "" {
+		actorType = "unknown"
 	}
-
 	log := &model.AuditLog{
-		ActorID:    actorID,
-		ActorType:  actorTypeText,
-		ActorName:  s.actorName(actorID, actorTypeText),
-		Action:     strings.TrimSpace(input.Action),
+		ActorID:    event.Actor.ID,
+		ActorType:  actorType,
+		ActorName:  auditActorName(tx, event.Actor.ID, actorType),
+		Action:     action,
 		TargetType: strings.TrimSpace(input.TargetType),
 		TargetID:   input.TargetID,
 		TargetName: strings.TrimSpace(input.TargetName),
 		MerchantID: input.MerchantID,
-		IP:         c.ClientIP(),
-		UserAgent:  trimTo(c.GetHeader("User-Agent"), 255),
+		IP:         trimTo(event.Actor.IP, 80),
+		UserAgent:  trimTo(event.Actor.UserAgent, 255),
 		Detail:     detail,
 	}
-	_ = s.db.Create(log).Error
+	return tx.Create(log).Error
+}
+
+func appendOptionalAuditTx(tx *gorm.DB, events []AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	if len(events) != 1 {
+		return errors.New("exactly one audit event is allowed")
+	}
+	return AppendAuditTx(tx, events[0])
 }
 
 func (s *AuditService) List(filter AuditListFilter, page, pageSize int) ([]model.AuditLog, int64, error) {
@@ -123,12 +176,16 @@ func (s *AuditService) MarkReviewed(id uint, reviewerID uint, remark string) (*m
 }
 
 func (s *AuditService) actorName(actorID uint, actorType string) string {
+	return auditActorName(s.db, actorID, actorType)
+}
+
+func auditActorName(db *gorm.DB, actorID uint, actorType string) string {
 	if actorID == 0 {
 		return "system"
 	}
 	if actorType == "super_admin" || actorType == "admin" {
 		var admin model.AdminUser
-		if err := s.db.First(&admin, actorID).Error; err == nil {
+		if err := db.First(&admin, actorID).Error; err == nil {
 			if admin.DisplayName != "" {
 				return admin.DisplayName
 			}
@@ -136,7 +193,7 @@ func (s *AuditService) actorName(actorID uint, actorType string) string {
 		}
 	}
 	var user model.User
-	if err := s.db.First(&user, actorID).Error; err == nil {
+	if err := db.First(&user, actorID).Error; err == nil {
 		if user.DisplayName != "" {
 			return user.DisplayName
 		}

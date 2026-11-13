@@ -164,7 +164,7 @@
               <template #default="{ row }">{{ row.store?.name || storeName(row.store_id) }}</template>
             </el-table-column>
             <el-table-column label="订单金额" width="120">
-              <template #default="{ row }">{{ formatMoney(orderPaidAmount(row) || row.total_amount || row.amount) }}</template>
+              <template #default="{ row }">{{ formatMoney(orderPaidAmount(row)) }}</template>
             </el-table-column>
             <el-table-column label="退款" width="110">
               <template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template>
@@ -293,15 +293,14 @@ const stores = ref([])
 const settlements = ref([])
 const settlementSummary = ref({})
 const filters = reactive({ dateRange: [], storeId: undefined, status: '', paymentChannel: '' })
-const paidStatuses = ['received', 'accepted', 'completed', 'closed']
 const periodMode = ref('today')
 
-const paidOrders = computed(() => orders.value.filter((item) => item.order_type === 'store_order' && paidStatuses.includes(item.status)))
+const paidOrders = computed(() => orders.value.filter((item) => item.order_type === 'store_order' && isConfirmedPaid(item)))
 const filteredPaidOrders = computed(() => paidOrders.value.filter((item) => matchFilters(item)))
 const filteredAllStoreOrders = computed(() => orders.value.filter((item) => item.order_type === 'store_order' && matchFilters(item)))
 const pendingCustomerPayOrders = computed(() => filteredAllStoreOrders.value.filter((item) => ['pending', 'failed'].includes(item.status)))
 const unconfirmedOrders = computed(() => filteredAllStoreOrders.value.filter((item) => item.status === 'payment_confirming'))
-const confirmedPaidOrders = computed(() => filteredPaidOrders.value.filter((item) => paidStatuses.includes(item.status)))
+const confirmedPaidOrders = computed(() => filteredPaidOrders.value.filter((item) => isConfirmedPaid(item)))
 const filteredRefunds = computed(() => refunds.value.filter((item) => {
   if (!matchDate(item.created_at)) return false
   if (filters.storeId && Number(item.store_id || item.order?.store_id) !== Number(filters.storeId)) return false
@@ -311,12 +310,13 @@ const pendingSettlementOrders = computed(() => filteredPaidOrders.value.filter((
 const exceptionOrders = computed(() => filteredAllStoreOrders.value.filter((item) => {
   if (['pending', 'failed', 'payment_confirming'].includes(item.status)) return true
   if (Number(item.refunded_amount || 0) > 0 || ['partial', 'full'].includes(item.refund_status)) return true
-  if (['accepted', 'completed'].includes(item.status) && !item.settlement_id) return true
+  if (['accepted', 'completed'].includes(item.status) && isConfirmedPaid(item) && !item.settlement_id) return true
+  if (['received', 'accepted', 'completed'].includes(item.status) && Number(item.total_amount ?? item.amount ?? 0) > 0 && !item.paid_at) return true
   return false
 }))
 const totalPaid = computed(() => filteredPaidOrders.value.reduce((sum, item) => sum + orderPaidAmount(item), 0))
-const totalReceivable = computed(() => filteredAllStoreOrders.value.reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
-const customerPendingAmount = computed(() => pendingCustomerPayOrders.value.reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
+const totalReceivable = computed(() => filteredAllStoreOrders.value.reduce((sum, item) => sum + Number(item.total_amount ?? item.amount ?? 0), 0))
+const customerPendingAmount = computed(() => pendingCustomerPayOrders.value.reduce((sum, item) => sum + Number(item.total_amount ?? item.amount ?? 0), 0))
 const unconfirmedAmount = computed(() => unconfirmedOrders.value.reduce((sum, item) => sum + orderPaidAmount(item), 0))
 const totalRefunded = computed(() => filteredRefunds.value.reduce((sum, item) => sum + Number(item.amount || 0), 0))
 const netIncome = computed(() => Math.max(totalPaid.value - totalRefunded.value, 0))
@@ -534,7 +534,8 @@ const matchDate = (value) => {
   return target >= start && target <= end
 }
 
-const orderPaidAmount = (row) => Number(row.paid_amount ?? row.total_amount ?? 0)
+const isConfirmedPaid = (row) => Boolean(row?.paid_at) && Number(row.total_amount ?? row.amount ?? 0) > 0
+const orderPaidAmount = (row) => Number(row.total_amount ?? row.amount ?? 0)
 const netReceived = (row) => Math.max(orderPaidAmount(row) - Number(row.refunded_amount || 0), 0)
 const centsToYuan = (value) => (Number(value || 0) / 100).toFixed(2)
 const formatMoney = (value) => `¥${centsToYuan(value)}`
@@ -576,8 +577,8 @@ const channelLabel = (channel) => {
 }
 
 const settlementLabel = (row) => {
-  if (row.settlement_id) return '已进结算'
-  if (['accepted', 'completed'].includes(row.status)) return '待结算'
+  if (row.settlement_id && isConfirmedPaid(row)) return '已进结算'
+  if (['accepted', 'completed'].includes(row.status) && isConfirmedPaid(row)) return '待结算'
   return '暂不可结算'
 }
 

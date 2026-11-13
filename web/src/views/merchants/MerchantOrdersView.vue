@@ -360,7 +360,6 @@ const noteDialogVisible = ref(false)
 const editingOrderId = ref(null)
 const noteForm = reactive({ merchant_note: '' })
 const filters = reactive({ keyword: '', status: route.query.status || '', store_id: undefined })
-const paidStatuses = ['received', 'accepted', 'completed', 'closed']
 const activeQuickMode = ref(route.query.quick || 'all')
 const autoRefreshEnabled = ref(true)
 const lastRefreshAt = ref('')
@@ -601,8 +600,8 @@ const cashierHandoff = computed(() => {
 })
 
 const receivableAmount = (row) => Number(row.total_amount ?? row.amount ?? 0)
-const orderAmount = (row) => Number(row.paid_amount ?? row.total_amount ?? row.amount ?? 0)
-const isPaidOrder = (row) => Boolean(row.paid_at) || paidStatuses.includes(row.status)
+const orderAmount = (row) => Number(row.total_amount ?? row.amount ?? 0)
+const isPaidOrder = (row) => Boolean(row.paid_at) && orderAmount(row) > 0
 const netReceived = (row) => {
   if (!isPaidOrder(row)) return 0
   return Math.max(orderAmount(row) - Number(row.refunded_amount || 0), 0)
@@ -650,7 +649,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
 const confirmPaymentHtml = (row) => `
   <div class="confirm-payment-card">
     <p>请先打开商家的支付宝/微信收款账户，确认该笔款项已经到账，再点击确认。</p>
-    <div><span>应收金额</span><strong>${escapeHtml(formatMoney(row.total_amount || row.amount))}</strong></div>
+	    <div><span>应收金额</span><strong>${escapeHtml(formatMoney(row.total_amount ?? row.amount ?? 0))}</strong></div>
     <div><span>订单号</span><strong>${escapeHtml(row.order_no || '-')}</strong></div>
     <div><span>核对码</span><strong>${escapeHtml(pickupCode(row))}</strong></div>
     <div><span>顾客手机号</span><strong>${escapeHtml(row.customer_phone || '未留手机号')}</strong></div>

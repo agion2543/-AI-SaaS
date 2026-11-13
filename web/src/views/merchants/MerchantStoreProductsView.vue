@@ -9,7 +9,7 @@
       <template #actions>
         <el-button plain @click="router.push('/merchant/stores')">返回门店管理</el-button>
         <el-button plain @click="openCustomerPreview">预览顾客端</el-button>
-        <el-button plain @click="openProductAI">AI 优化菜单</el-button>
+        <el-button plain @click="openProductAI">AI 功能状态</el-button>
         <el-button type="primary" @click="openCreate">新增商品</el-button>
       </template>
     </PageHero>

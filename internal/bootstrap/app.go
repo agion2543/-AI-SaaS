@@ -32,8 +32,10 @@ func NewApplication() (*Application, error) {
 		return nil, err
 	}
 
-	if err := autoMigrate(db); err != nil {
-		return nil, err
+	if cfg.DBAutoMigrate {
+		if err := autoMigrate(db); err != nil {
+			return nil, err
+		}
 	}
 	if err := seedInitialData(db, cfg); err != nil {
 		return nil, err
@@ -70,6 +72,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ShareCampaign{},
 		&model.ReferralCoupon{},
 		&model.Promotion{},
+		&model.MerchantGroupBuyLink{},
+		&model.MerchantGroupBuyLinkAudit{},
 		&model.User{},
 		&model.VerificationCode{},
 		&model.EmailVerificationCode{},
@@ -79,6 +83,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Order{},
 		&model.PaymentRecord{},
 		&model.RefundRecord{},
+		&model.RefundReconciliationAudit{},
 		&model.CardCode{},
 		&model.SystemConfig{},
 		&model.UsageRecord{},
@@ -127,6 +132,9 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 
 	if cfg.AppEnv != "production" {
 		if err := db.Model(&model.Merchant{}).Where("status = ?", "pending").Update("status", "active").Error; err != nil {
+			return err
+		}
+		if err := seedDemoGroupBuyLinks(db); err != nil {
 			return err
 		}
 	}

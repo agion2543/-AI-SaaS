@@ -363,6 +363,7 @@ import {
   fetchCustomerStoreProducts,
   trackShareScan
 } from '../../api/modules'
+import { customerOrderAccessPath, getCustomerOrderAccessToken, saveCustomerOrderAccessToken } from '../../utils/customerOrderAccess'
 
 const route = useRoute()
 const router = useRouter()
@@ -482,7 +483,7 @@ const activeOrderSummary = computed(() => {
   if (!activeOrderNo.value) return ''
   if (!activeOrder.value) return `订单 ${activeOrderNo.value}`
   const quantity = (activeOrder.value.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0)
-  return `${activeOrder.value.order_no || activeOrderNo.value} · 已有 ${quantity} 件 · ${yuan(activeOrder.value.total_amount || activeOrder.value.amount)}`
+  return `${activeOrder.value.order_no || activeOrderNo.value} · 已有 ${quantity} 件 · ${yuan(activeOrder.value.total_amount ?? activeOrder.value.amount ?? 0)}`
 })
 
 const estimatedDiscount = computed(() => {
@@ -775,7 +776,9 @@ const saveRecentOrder = (orderNo) => {
 }
 
 const openRecentOrder = () => {
-  if (recentOrderNo.value) router.push(`/customer/orders/${encodeURIComponent(recentOrderNo.value)}`)
+  if (recentOrderNo.value) {
+    router.push(customerOrderAccessPath(recentOrderNo.value, getCustomerOrderAccessToken(recentOrderNo.value)))
+  }
 }
 
 const clearRecentOrder = () => {
@@ -900,7 +903,7 @@ const startPolling = (orderNo) => {
         stopPolling()
         qrDialogVisible.value = false
         cartVisible.value = false
-        router.push(`/customer/orders/${encodeURIComponent(orderNo)}`)
+        router.push(customerOrderAccessPath(orderNo, getCustomerOrderAccessToken(orderNo)))
       }
     } catch {
       // 临时轮询失败不关闭二维码弹窗。
@@ -966,7 +969,7 @@ const checkout = async () => {
       saveRecentOrder(order?.order_no)
       clearCart()
       cartVisible.value = false
-      if (order?.order_no) router.push(`/customer/orders/${encodeURIComponent(order.order_no)}`)
+      if (order?.order_no) router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
       return
     }
 
@@ -987,17 +990,20 @@ const checkout = async () => {
 
     const order = res.data.order
     const payment = res.data.payment
+    if (order?.order_no && res.data.access_token) {
+      saveCustomerOrderAccessToken(order.order_no, res.data.access_token)
+    }
     saveRecentOrder(order?.order_no)
     if (res.data.payment_required === false && order?.order_no) {
       ElMessage.success('订单已提交')
       cartVisible.value = false
-      router.push(`/customer/orders/${encodeURIComponent(order.order_no)}`)
+      router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
       return
     }
     if (res.data.payment_error && order?.order_no) {
       ElMessage.warning('订单已创建，支付暂未拉起，可在状态页继续支付')
       cartVisible.value = false
-      router.push(`/customer/orders/${encodeURIComponent(order.order_no)}`)
+      router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
       return
     }
     if (payment?.mode === 'page' && submitAlipayPage(payment.payment_url || payment.form)) return
@@ -1008,7 +1014,7 @@ const checkout = async () => {
       return
     }
     ElMessage.success('订单已创建，等待支付结果')
-    if (order?.order_no) router.push(`/customer/orders/${encodeURIComponent(order.order_no)}`)
+    if (order?.order_no) router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
   } catch (err) {
     ElMessage.error(err.response?.data?.message || '下单失败')
   } finally {

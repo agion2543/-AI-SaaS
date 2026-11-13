@@ -73,22 +73,25 @@ export MYSQL_APP_PASSWORD='请替换为应用数据库密码'
 
 也可以把这两个变量放到服务器的安全环境变量管理里，不建议提交到 GitHub。
 
-## 4. 启动生产服务
+## 4. 新数据库首次安装
+
+仅将下面的独立 Compose 文件用于**有意创建全新数据库**的安装。它不挂载 `sql/init.sql`，使用专属卷 `saas_fresh_install_v1_mysql_data`，先等待 MySQL 健康，再运行版本化迁移；只有迁移成功后才启动 API。该路径将应用侧 `DB_AUTO_MIGRATE` 设为 `false`，避免 GORM AutoMigrate 成为第二个 schema 管理入口。不要把它指向任何已有数据库或旧数据卷；旧库升级仍不支持。
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build
 ```
 
-查看容器：
+检查迁移器成功退出后，API 才会启动：
 
 ```bash
-docker compose -f docker-compose.prod.yml ps
+docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml ps -a
+docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml logs schema-migrate
 ```
 
 查看后端日志：
 
 ```bash
-docker logs -f saas-backend-prod
+docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml logs -f backend
 ```
 
 健康检查：
@@ -120,14 +123,12 @@ ALIPAY_RETURN_URL=https://你的前端域名/payment/return
 
 ## 6. 数据库迁移
 
-首次启动会执行 `sql/init.sql`。已有数据库升级时，需要按时间顺序执行：
+**不要**把 `sql/migrations/*.sql` 或 `migrations/*.sql` 按文件名批量执行。当前没有可信的旧版数据库基线或版本记录，旧库升级流程尚未验证；生产环境若需升级旧库，应暂停该步骤，先按
+[数据库迁移现状与安全边界](database-migration-status.md)取得对应旧版本的 schema-only 基线并制定经隔离副本验证的升级方案。
 
-```bash
-sql/migrations/*.sql
-migrations/*.sql
-```
+新安装应使用 `docker-compose.new-install.yml`：它不会挂载 `sql/init.sql` 或历史 SQL 目录，迁移器从空数据库应用版本 `schema-v1-candidate-20261113`，API 随后只运行初始数据种子逻辑，不执行 GORM AutoMigrate。候选快照来自 HEAD `15274c8` 加 2026-11-13 生成时的本地未提交模型改动，批准范围仅限今后的全新安装；它不代表任何历史数据库结构。
 
-生产环境建议使用专门迁移工具，后续可接入 `golang-migrate`。
+`docker-compose.prod.yml` 保持原样，以免改变既有部署与数据卷的启动行为；它仍使用 `sql/init.sql` 和应用侧 GORM AutoMigrate，**不是**上面新 v1 首装流程的替代命令。任何已有或不确定的数据库都不能直接套用新安装流程。迁移器会拒绝未知非空结构、部分初始化、版本/校验和不符或结构漂移；不得删除账本来绕过拒绝。旧库升级仍未支持、未验证。具体限制见[数据库迁移现状与安全边界](database-migration-status.md)。
 
 更完整的首次部署、升级、回滚和每日巡检流程见：
 
@@ -164,12 +165,18 @@ docker exec saas-mysql-prod mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" saas_billi
 
 ## 9. 当前支付建议
 
+**重要：以下是目标建议，不代表当前代码已统一按此运行。** 代码库没有独立的预约模型、预约接口或预约页面；目前只有订单备注提示可填写“预约时间”，所以预约是否预付、何时付款还没有实现的产品规则。
+
+现有点单代码仍保留两种不同路径：订单处于 `pending` 时，创建/重试接口可以生成支付宝支付入口，并由支付回调记录渠道确认；而商户二维码路径会把顾客的“已转账”标记设为 `payment_confirming`，只有商户手动点确认后才写入本地收款记录。顾客的标记本身不是到账凭证，后一路径不做渠道自动验账。**当前决策：先保留现有支付宝预付路径，不限制、停用或改造底层支付流程；优先优化其他方向，之后再单独评估支付模式。**保留现状不代表已完成真实商户或支付验证；实际启用前仍需按门店场景验证。
+
 前期建议：
 
 - 平台订阅收入进入平台账户
 - 顾客扫码点单收入进入商家自己的支付宝/微信账户
 - 平台只做订单记录、流水记录和 SaaS 服务收费
 - 商家收款配置默认使用 `direct` 模式，`platform` 和 `service_provider` 暂作为后续规模化预留模式
+
+在上述规则和现有路径完成统一前，不要把本节的建议当作已经通过真实收款或预约流程验收；平台不应代收、归集、托管或清分顾客点单款。
 
 不建议早期使用“平台统一收款再手动分给商家”，这可能涉及资金清分、二清和对账合规风险。后期如需平台统一收款，应接入官方服务商/分账能力。
 

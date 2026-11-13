@@ -20,7 +20,7 @@ func NewShareController(shares *service.ShareService) *ShareController {
 }
 
 func (ctl *ShareController) CreateOrderShare(c *gin.Context) {
-	campaign, err := ctl.shares.EnsureCampaignForOrder(c.Param("orderNo"))
+	campaign, err := ctl.shares.EnsureCampaignForOrder(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return

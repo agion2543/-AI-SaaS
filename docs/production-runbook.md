@@ -15,7 +15,7 @@
 1. 准备服务器、域名、HTTPS 和 MySQL。
 2. 复制 `.env.production.example` 为生产环境变量文件。
 3. 修改 `APP_ENV=production`、`APP_URL`、`FRONTEND_URL`、`JWT_SECRET`、`AES_SECRET`、`INITIAL_ADMIN_PASSWORD`、`MYSQL_DSN`。
-4. 构建前端和后端，或使用 `docker compose -f docker-compose.prod.yml up -d --build`。
+4. 全新数据库安装使用 `docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build`；该入口专用新数据卷，禁止用于已有数据库。
 5. 访问 `/health` 确认后端健康。
 6. 登录平台后台，立即修改初始化管理员密码。
 7. 打开“运营健康中心”，优先处理危险项。
@@ -25,7 +25,7 @@
 
 1. 记录当前版本或提交号。
 2. 手动备份 MySQL，并确认备份文件大小正常。
-3. 检查新增 SQL，按文件名时间顺序准备执行。
+3. 明确本次是空库首次安装还是既有数据库升级；旧库升级前先满足本节的 schema 基线要求，不按文件名猜测 SQL 顺序。
 4. 本地执行 `go build -o saas-server.exe ./cmd/server`。
 5. 本地执行 `cd web && npm.cmd run build`。
 6. 确认 `.env.production`、私钥、数据库密码没有进入 GitHub。
@@ -33,18 +33,40 @@
 
 ## 4. 数据库迁移规则
 
-当前项目主要迁移目录是：
+原有 `docker-compose.prod.yml` 首装路径仍会处理 `sql/init.sql` 并由应用执行 GORM `AutoMigrate`；该文件保持不变，避免改变不确定的既有安装行为。今后的空库 v1 首装请改用 `docker-compose.new-install.yml`，不要同时运行两条路径：它不挂载 `sql/init.sql`，先运行版本化 `schema-v1-candidate-20261113`，并将应用 `DB_AUTO_MIGRATE=false`。候选来源为 HEAD `15274c8` 加 2026-11-13 生成时的本地未提交模型改动，仅批准用于全新安装，不适用于历史库。
 
-- `sql/migrations`
-- `migrations`
+历史 SQL 分散在 `sql/migrations/` 和 `migrations/`，当前没有可信旧版 schema 基线或迁移版本表，按文件名顺序并不可靠。**不要**把任一目录或两个目录当作可直接批量执行的升级清单，也不要对生产库/既有业务库手动重放 `sql/init.sql`。旧库升级目前未支持、未验证；先取得对应旧版本的 schema-only 基线，再在隔离副本上设计并验证变更。详细依赖、重跑与数据副作用风险见[数据库迁移现状与安全边界](database-migration-status.md)。
 
-执行原则：
+迁移容器成功退出才会启动 API；迁移器拒绝未知非空库、旧版结构、部分初始化和任何版本/校验和/结构指纹不匹配，不会静默把旧库标记为 v1。默认生产 Compose 与 GORM AutoMigrate 仍保持不变。具体账本行为、来源和安全限制见[数据库迁移现状与安全边界](database-migration-status.md)。旧库升级仍未支持、未验证，不要按历史 SQL 文件名猜测执行顺序。
 
-- 先备份，再迁移。
-- 按文件名前缀时间顺序执行。
-- 已执行过的 SQL 不重复执行。
-- 生产环境不要直接修改历史 SQL，新增变更应新建迁移文件。
-- 后续建议接入 `golang-migrate` 或同类工具，记录每条迁移的执行状态。
+### MySQL 专用集成测试
+
+默认 `go test ./...` 不运行这些测试。它们只可用于 MySQL 8.0.46、TCP 已关闭、位于
+`/tmp/cue-refund-mysql-*` 下的临时 Unix socket，以及名称以 `cue_refund_p1_`
+开头的空合成数据库上运行：
+
+```bash
+MYSQL_REFUND_IT_DSN='root@unix(/tmp/cue-refund-mysql-<id>/mysql.sock)/cue_refund_p1_<id>?parseTime=true&loc=UTC' \
+  go test ./internal/service -run '^TestMySQL' -count=1 -v
+```
+
+该测试会为迁移顺序用例新建并清理一个同前缀临时数据库；不得指向业务库或外部主机。
+
+### 退款预留逾期与人工核对
+
+平台后台“退款异常核对”同时显示 `processing` 与 `unknown` 预留。`processing`
+距持久化的 `updated_at` 已满 **15 分钟**时只作逾期提示（历史时间为空时回退至创建时间）；
+这不是渠道退款 SLA，也不代表成功、失败或可释放额度。当前仓库未定义退款渠道的更长处理 SLO；
+支付下单的 30 分钟有效期不是退款处理时限。正式接入渠道前须结合实际退款延迟复核此人工分流阈值。
+
+只有平台 `admin` / `super_admin` 可填写必填操作原因，将逾期 `processing` 转为 `unknown`。
+服务器在事务内重新检查时间与状态，按订单、退款的顺序加锁，并在同一事务追加操作员、时间、
+前后状态、金额及原因的不可修改审计。相同操作重试不会重复转态或追加审计；未满 15 分钟的请求不可强转。
+
+该操作不释放预留额度、不计入已退款金额、不重试或查询支付渠道，也不自动决定退款结果。
+`unknown` 仍须由平台管理员在独立渠道后台核验后，填写渠道侧退款/查询凭证号与核对说明，
+才能记录确定成功或确定失败。已有后台处理的迟到结果不得覆盖 `unknown`；没有外部证据时继续保留额度。
+商户与顾客不能执行上述转态或人工核对。请每日检查逾期项，不要以换幂等键或直接改库替代核对。
 
 ## 5. 回滚流程
 

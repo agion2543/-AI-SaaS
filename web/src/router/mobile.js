@@ -1,5 +1,7 @@
 // Mobile Router - 移动端路由配置
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { fetchMerchantSubscription } from '../api/modules'
+import { mobileMerchantSubscriptionState } from '../utils/mobileMerchantSubscription'
 
 // 商家端页面（需要认证）
 const MerchantLayout = () => import('../mobile/merchant/MerchantLayout.vue')
@@ -11,7 +13,9 @@ const MerchantStores = () => import('../mobile/merchant/MerchantStores.vue')
 const MerchantFinance = () => import('../mobile/merchant/MerchantFinance.vue')
 const MerchantCoupons = () => import('../mobile/merchant/MerchantCoupons.vue')
 const MerchantAI = () => import('../mobile/merchant/MerchantAI.vue')
+const MerchantGroupBuy = () => import('../mobile/merchant/MerchantGroupBuy.vue')
 const MerchantSettings = () => import('../mobile/merchant/MerchantSettings.vue')
+const MerchantSubscription = () => import('../mobile/merchant/MerchantSubscription.vue')
 
 // 顾客端页面（无需登录）
 const CustomerStore = () => import('../mobile/customer/CustomerStore.vue')
@@ -34,15 +38,17 @@ const routes = [
     meta: { requiresAuth: true },
     children: [
       { path: '', redirect: '/m/merchant/home' },
-      { path: 'home', component: MerchantHome, name: 'MerchantHome' },
-      { path: 'orders', component: MerchantOrders, name: 'MerchantOrders' },
-      { path: 'orders/:id', component: MerchantOrderDetail, name: 'MerchantOrderDetail' },
-      { path: 'products', component: MerchantProducts, name: 'MerchantProducts' },
-      { path: 'stores', component: MerchantStores, name: 'MerchantStores' },
-      { path: 'finance', component: MerchantFinance, name: 'MerchantFinance' },
+      { path: 'home', component: MerchantHome, name: 'MerchantHome', meta: { allowExpiredReadOnly: true } },
+      { path: 'orders', component: MerchantOrders, name: 'MerchantOrders', meta: { allowExpiredReadOnly: true } },
+      { path: 'orders/:id', component: MerchantOrderDetail, name: 'MerchantOrderDetail', meta: { allowExpiredReadOnly: true } },
+      { path: 'products', component: MerchantProducts, name: 'MerchantProducts', meta: { allowExpiredReadOnly: true } },
+      { path: 'stores', component: MerchantStores, name: 'MerchantStores', meta: { allowExpiredReadOnly: true } },
+      { path: 'finance', component: MerchantFinance, name: 'MerchantFinance', meta: { allowExpiredReadOnly: true } },
+      { path: 'group-buy', component: MerchantGroupBuy, name: 'MerchantGroupBuy', meta: { allowExpiredReadOnly: true } },
       { path: 'coupons', component: MerchantCoupons, name: 'MerchantCoupons' },
       { path: 'ai', component: MerchantAI, name: 'MerchantAI' },
       { path: 'settings', component: MerchantSettings, name: 'MerchantSettings' },
+      { path: 'subscription', component: MerchantSubscription, name: 'MerchantSubscription', meta: { allowSubscriptionLanding: true } },
     ]
   },
   { path: '/m/merchant/login', component: MerchantLogin, name: 'MerchantLogin' },
@@ -61,16 +67,34 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
-  // 商家端需要登录验证
+router.beforeEach(async (to) => {
+  // 商家端需要登录验证；状态页始终可达，以便在异常时重试或联系平台支持。
   if (to.meta.requiresAuth) {
     const token = localStorage.getItem('merchant_token')
     if (!token) {
-      next({ path: '/m/merchant/login', query: { redirect: to.fullPath } })
-      return
+      return { path: '/m/merchant/login', query: { redirect: to.fullPath } }
+    }
+    if (to.meta.allowSubscriptionLanding) return true
+
+    try {
+      const response = await fetchMerchantSubscription()
+      const payload = response?.data
+      const merchant = payload?.merchant
+      const state = mobileMerchantSubscriptionState(payload)
+      if (merchant && typeof merchant === 'object') {
+        localStorage.setItem('merchant_current', JSON.stringify(merchant))
+      } else {
+        localStorage.removeItem('merchant_current')
+      }
+      if (state === 'active') return true
+      if (state === 'expired' && to.meta.allowExpiredReadOnly) return true
+      return { path: '/m/merchant/subscription', query: { redirect: to.fullPath, state } }
+    } catch {
+      localStorage.removeItem('merchant_current')
+      return { path: '/m/merchant/subscription', query: { redirect: to.fullPath, state: 'error' } }
     }
   }
-  next()
+  return true
 })
 
 export default router

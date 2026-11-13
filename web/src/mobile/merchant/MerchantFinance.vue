@@ -15,6 +15,10 @@
       </template>
     </van-nav-bar>
 
+    <div v-if="!canWrite" class="readonly-banner" role="status">
+      订阅已到期：财务数据仅可只读查看。<van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+    </div>
+
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <van-loading type="spinner" size="40px">加载中...</van-loading>
@@ -133,8 +137,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { fetchMerchantOrders } from '@/api/modules'
+import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const router = useRouter()
+const canWrite = mobileSubscriptionActions(cachedMobileMerchantSubscriptionState()).canWriteBusiness
 
 const loading = ref(true)
 const orders = ref([])
@@ -153,20 +159,19 @@ const stats = computed(() => {
            (orderDate.getMonth() + 1) === parseInt(currentDate.value[1])
   })
 
-  const completedOrders = monthOrders.filter(o =>
-    ['paid', 'preparing', 'ready', 'completed'].includes(o.status)
-  )
-  const refundedOrders = monthOrders.filter(o =>
-    ['refunded', 'cancelled'].includes(o.status)
-  )
+  const completedOrders = orders.value.filter(o => {
+    const paidDate = o.paid_at ? new Date(o.paid_at) : null
+    return paidDate && paidDate.getFullYear() === parseInt(currentDate.value[0]) && (paidDate.getMonth() + 1) === parseInt(currentDate.value[1]) && Number(o.total_amount ?? o.amount ?? 0) > 0
+  })
+  const refundedOrders = monthOrders.filter(o => Number(o.refunded_amount || 0) > 0)
 
-  const monthRevenue = completedOrders.reduce((sum, o) => sum + parseFloat(o.amount || 0), 0)
-  const refundAmount = refundedOrders.reduce((sum, o) => sum + parseFloat(o.amount || 0), 0)
+  const monthRevenue = completedOrders.reduce((sum, o) => sum + Number(o.total_amount ?? o.amount ?? 0), 0)
+  const refundAmount = refundedOrders.reduce((sum, o) => sum + Number(o.refunded_amount || 0), 0)
 
   return {
     monthOrders: monthOrders.length,
     monthRevenue,
-    avgOrderValue: monthOrders.length > 0 ? monthRevenue / monthOrders.length : 0,
+    avgOrderValue: completedOrders.length > 0 ? monthRevenue / completedOrders.length : 0,
     productSales: monthRevenue,
     discountAmount: 0,
     refundAmount
@@ -180,12 +185,8 @@ const orderStats = computed(() => {
            (orderDate.getMonth() + 1) === parseInt(currentDate.value[1])
   })
 
-  const completed = monthOrders.filter(o =>
-    ['preparing', 'ready', 'completed'].includes(o.status)
-  ).length
-  const refunded = monthOrders.filter(o =>
-    ['refunded', 'cancelled'].includes(o.status)
-  ).length
+  const completed = monthOrders.filter(o => o.status === 'completed').length
+  const refunded = monthOrders.filter(o => Number(o.refunded_amount || 0) > 0).length
 
   return {
     completed,
@@ -201,16 +202,16 @@ const dailyStats = computed(() => {
   const result = []
   for (let day = 1; day <= daysInMonth; day++) {
     const dayOrders = orders.value.filter(o => {
-      const orderDate = new Date(o.created_at)
+      const orderDate = new Date(o.paid_at || o.created_at)
       return orderDate.getFullYear() === parseInt(year) &&
              orderDate.getMonth() + 1 === parseInt(month) &&
              orderDate.getDate() === day &&
-             ['paid', 'preparing', 'ready', 'completed'].includes(o.status)
+             Boolean(o.paid_at) && Number(o.total_amount ?? o.amount ?? 0) > 0
     })
     result.push({
       day: day.toString().padStart(2, '0'),
       orders: dayOrders.length,
-      revenue: dayOrders.reduce((sum, o) => sum + parseFloat(o.amount || 0), 0)
+      revenue: dayOrders.reduce((sum, o) => sum + Number(o.total_amount ?? o.amount ?? 0), 0)
     })
   }
   return result.slice(-14) // 只显示最近14天
@@ -239,7 +240,7 @@ async function loadOrders() {
   loading.value = true
   try {
     const res = await fetchMerchantOrders({ status: '', page: 1, page_size: 500 })
-    orders.value = res.data?.items || res.data || []
+    orders.value = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []))
   } catch (e) {
     console.error('加载订单失败:', e)
     showToast('加载失败')
@@ -265,6 +266,7 @@ onMounted(() => {
   background: #f7f8fa;
   padding-bottom: 20px;
 }
+.readonly-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 12px; padding: 10px 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
 .loading-container {
   display: flex;

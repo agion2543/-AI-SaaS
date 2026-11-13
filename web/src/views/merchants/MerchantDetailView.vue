@@ -29,17 +29,20 @@
               <div class="toolbar">
                 <div>
                   <h3>订阅权限</h3>
-                  <p>平台可在测试、售后或商务场景中手动开通、延长、减少或停用商家订阅。</p>
+                  <p>平台可手动开通、调整或停用；暂停会立即撤销付费权限但不改变到期日，未到期才可恢复，过期需续费。</p>
                 </div>
                 <div class="action-row">
                   <el-button type="primary" @click="openSubscriptionDialog">开通 / 调整</el-button>
+                  <el-button v-if="subscriptionValid" type="warning" plain @click="pauseSubscriptionNow">暂停订阅</el-button>
+                  <el-button v-if="isSubscriptionPaused" type="success" plain :disabled="!canResumeSubscription" @click="resumeSubscriptionNow">恢复订阅</el-button>
                   <el-button v-if="merchant.subscription_status === 'active'" type="danger" plain @click="stopSubscriptionNow">停用</el-button>
                 </div>
               </div>
               <div class="info-list">
                 <div><span>当前套餐</span><strong>{{ currentMerchantPlanName }}</strong></div>
-                <div><span>订阅状态</span><strong>{{ subscriptionValid ? '订阅有效' : '未订阅 / 已过期' }}</strong></div>
+                <div><span>订阅状态</span><strong>{{ subscriptionStatusLabel }}</strong></div>
                 <div><span>到期时间</span><strong>{{ formatTime(merchant.subscription_expire_at || merchant.subscription_expired_at) }}</strong></div>
+                <div v-if="isSubscriptionPaused"><span>暂停原因</span><strong>{{ merchant.subscription_pause_reason || '-' }}</strong></div>
                 <div><span>最近开通记录</span><strong>{{ latestSubscriptionSummary }}</strong></div>
                 <div><span>订阅备注</span><strong>{{ merchant.subscription_note || '-' }}</strong></div>
               </div>
@@ -207,7 +210,7 @@
             <el-table-column prop="order_no" label="订单号" min-width="180" />
             <el-table-column label="门店" min-width="130"><template #default="{ row }">{{ row.store?.name || '-' }}</template></el-table-column>
             <el-table-column prop="customer_phone" label="顾客手机号" min-width="130" />
-            <el-table-column label="实付金额" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+            <el-table-column label="实付金额" width="120"><template #default="{ row }">{{ formatMoney(orderGrossAmount(row)) }}</template></el-table-column>
             <el-table-column label="优惠" width="110"><template #default="{ row }">{{ formatMoney(row.discount_amount) }}</template></el-table-column>
             <el-table-column label="已退款" width="110"><template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template></el-table-column>
             <el-table-column label="退款后净额" width="130"><template #default="{ row }"><strong>{{ formatMoney(orderNetAmount(row)) }}</strong></template></el-table-column>
@@ -240,7 +243,7 @@
           <el-table :data="subscriptionOrders" empty-text="暂无订阅记录">
             <el-table-column prop="order_no" label="订单号" min-width="180" />
             <el-table-column label="套餐" min-width="120"><template #default="{ row }">{{ merchantPlanName(row.merchant_plan || row.merchantPlan || {}) }}</template></el-table-column>
-            <el-table-column label="金额" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+            <el-table-column label="金额" width="120"><template #default="{ row }">{{ formatMoney(row.total_amount ?? row.amount ?? 0) }}</template></el-table-column>
             <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="orderStatusType(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
             <el-table-column label="开通到期" min-width="170"><template #default="{ row }">{{ formatTime(row.subscription_end_at) }}</template></el-table-column>
             <el-table-column label="付款时间" min-width="170"><template #default="{ row }">{{ formatTime(row.paid_at) }}</template></el-table-column>
@@ -251,8 +254,18 @@
         <el-tab-pane label="操作审计" name="audit">
           <el-table :data="auditLogs" empty-text="暂无审计记录">
             <el-table-column prop="actor_name" label="操作人" width="130" />
-            <el-table-column prop="action" label="动作" min-width="180" />
+            <el-table-column label="动作" min-width="150"><template #default="{ row }">{{ auditActionLabel(row.action) }}</template></el-table-column>
             <el-table-column prop="target_name" label="对象" min-width="160" show-overflow-tooltip />
+            <el-table-column label="订阅变更详情" min-width="360">
+              <template #default="{ row }">
+                <div v-if="isSubscriptionAudit(row)" class="subscription-audit-detail">
+                  <span><strong>原因：</strong>{{ auditDetail(row).reason || '-' }}</span>
+                  <span><strong>状态：</strong>{{ subscriptionAuditStateLabel(auditDetail(row).before?.status) }} → {{ subscriptionAuditStateLabel(auditDetail(row).after?.status) }}</span>
+                  <span><strong>到期：</strong>{{ formatTime(auditDetail(row).before?.expire_at) }} → {{ formatTime(auditDetail(row).after?.expire_at) }}</span>
+                </div>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="ip" label="IP" width="130" />
             <el-table-column label="时间" min-width="170"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
           </el-table>
@@ -316,7 +329,7 @@
       <el-table :data="settlementPrepare.orders || []" max-height="320" empty-text="暂无可结算订单">
         <el-table-column prop="order_no" label="订单号" min-width="180" />
         <el-table-column label="门店" min-width="120"><template #default="{ row }">{{ row.store?.name || '-' }}</template></el-table-column>
-        <el-table-column label="实付" width="110"><template #default="{ row }">{{ formatMoney(row.total_amount || row.amount) }}</template></el-table-column>
+        <el-table-column label="实付" width="110"><template #default="{ row }">{{ formatMoney(orderGrossAmount(row)) }}</template></el-table-column>
         <el-table-column label="退款" width="110"><template #default="{ row }">{{ formatMoney(row.refunded_amount) }}</template></el-table-column>
         <el-table-column label="净额" width="110"><template #default="{ row }"><strong>{{ formatMoney(orderNetAmount(row)) }}</strong></template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }">{{ orderStatusLabel(row.status) }}</template></el-table-column>
@@ -410,7 +423,9 @@ import {
   fetchRefunds,
   markAdminMerchantSettlementPaid,
   openMerchantSubscription,
+  pauseMerchantSubscription,
   reviewAdminMerchantPaymentConfig,
+  resumeMerchantSubscription,
   stopMerchantSubscription,
   updateAdminMerchantFollowUpStatus,
   updateMerchantStatus
@@ -444,7 +459,16 @@ const subscriptionValid = computed(() => {
   const expire = merchant.value.subscription_expire_at || merchant.value.subscription_expired_at
   return merchant.value.subscription_status === 'active' && expire && new Date(expire).getTime() > Date.now()
 })
-const storeOrderAmount = computed(() => storeOrders.value.reduce((sum, item) => sum + Number(item.total_amount || item.amount || 0), 0))
+const isSubscriptionPaused = computed(() => merchant.value.subscription_status === 'paused')
+const canResumeSubscription = computed(() => {
+  const expire = merchant.value.subscription_expire_at || merchant.value.subscription_expired_at
+  return isSubscriptionPaused.value && expire && new Date(expire).getTime() > Date.now()
+})
+const subscriptionStatusLabel = computed(() => {
+  if (isSubscriptionPaused.value) return canResumeSubscription.value ? '暂停中' : '暂停中，已过期'
+  return subscriptionValid.value ? '订阅有效' : '未订阅 / 已过期'
+})
+const storeOrderAmount = computed(() => storeOrders.value.reduce((sum, item) => sum + orderGrossAmount(item), 0))
 const refundedAmount = computed(() => merchantRefunds.value.reduce((sum, item) => sum + Number(item.amount || 0), 0))
 const refundRate = computed(() => storeOrderAmount.value ? refundedAmount.value / storeOrderAmount.value : 0)
 const cancelRate = computed(() => {
@@ -577,7 +601,7 @@ const paymentReviewTip = computed(() => {
 
 const summaryCards = computed(() => [
   { label: '联系人手机号', value: merchant.value.contact_phone || '-', hint: '商家注册联系人', className: '' },
-  { label: '订阅状态', value: subscriptionValid.value ? '订阅中' : '未订阅 / 已过期', hint: formatTime(merchant.value.subscription_expire_at || merchant.value.subscription_expired_at), className: subscriptionValid.value ? 'success' : 'warning' },
+  { label: '订阅状态', value: subscriptionStatusLabel.value, hint: formatTime(merchant.value.subscription_expire_at || merchant.value.subscription_expired_at), className: subscriptionValid.value ? 'success' : 'warning' },
   { label: '门店数量', value: stores.value.length, hint: '当前商家门店', className: '' },
   { label: '近期订单', value: storeOrders.value.length, hint: '最近门店订单', className: '' },
   { label: '近期交易额', value: formatMoney(storeOrderAmount.value), hint: '顾客扫码订单实付', className: 'success' },
@@ -663,6 +687,38 @@ const submitSubscription = async () => {
   load()
 }
 
+const pauseSubscriptionNow = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt('暂停会立即撤销商家付费权限，但不会冻结或延长原到期日。请填写暂停原因。', '暂停订阅', {
+      confirmButtonText: '确认暂停',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputPlaceholder: '例如：商家申请暂停售后服务，待核实后恢复',
+      inputValidator: (value) => Boolean(value && value.trim()),
+      inputErrorMessage: '请填写暂停原因',
+      inputAttrs: { maxlength: 255 }
+    })
+    await pauseMerchantSubscription(merchantID(), { reason: value.trim() })
+    ElMessage.success('订阅已暂停；到期时间保持不变')
+    await load()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.message || '暂停订阅失败')
+  }
+}
+
+const resumeSubscriptionNow = async () => {
+  try {
+    await ElMessageBox.confirm('确认恢复该订阅？恢复将立即重新开放付费权限，但不会改变原到期时间。', '恢复订阅', { type: 'warning' })
+    await resumeMerchantSubscription(merchantID())
+    ElMessage.success('订阅已恢复；到期时间保持不变')
+    await load()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.message || '恢复订阅失败')
+  }
+}
+
 const stopSubscriptionNow = async () => {
   await ElMessageBox.confirm('确认停用该商家的订阅权限吗？', '停用订阅', { type: 'warning' })
   await stopMerchantSubscription(merchantID())
@@ -721,6 +777,21 @@ const reopenFollowUp = async (row) => {
   load()
 }
 
+const isSubscriptionAudit = (row) => ['merchant_subscription_pause', 'merchant_subscription_resume'].includes(row?.action)
+const auditDetail = (row) => {
+  const detail = row?.detail
+  if (detail && typeof detail === 'object') return detail
+  try {
+    return JSON.parse(detail || '{}')
+  } catch {
+    return {}
+  }
+}
+const auditActionLabel = (action) => ({
+  merchant_subscription_pause: '暂停订阅',
+  merchant_subscription_resume: '恢复订阅'
+}[action] || action || '-')
+const subscriptionAuditStateLabel = (status) => ({ active: '有效', paused: '已暂停', inactive: '未开通', pending: '待支付' }[status] || status || '-')
 const statusLabel = (status) => ({ pending: '待审核', active: '正常', suspended: '已冻结' }[status] || status || '-')
 const statusType = (status) => ({ pending: 'warning', active: 'success', suspended: 'danger' }[status] || 'info')
 const planLabel = (plan) => {
@@ -769,7 +840,10 @@ const copyText = async (text, message = '已复制') => {
     ElMessage.warning('当前浏览器不支持自动复制，请手动复制')
   }
 }
-const orderGrossAmount = (row = {}) => Number(row.total_amount || row.amount || row.total_amount_cents || 0)
+const orderGrossAmount = (row = {}) => {
+  const amount = Number(row.total_amount ?? row.amount ?? row.total_amount_cents ?? 0)
+  return Boolean(row.paid_at) && amount > 0 ? amount : 0
+}
 const orderNetAmount = (row = {}) => Math.max(orderGrossAmount(row) - Number(row.refunded_amount || 0), 0)
 const orderStatusLabel = (status) => ({
   pending: '待支付',
@@ -935,7 +1009,16 @@ onMounted(load)
 .payment-review-note {
   margin-top: 4px;
 }
-
+.subscription-audit-detail {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.subscription-audit-detail strong {
+  color: #0f172a;
+}
 .payment-qr-review {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

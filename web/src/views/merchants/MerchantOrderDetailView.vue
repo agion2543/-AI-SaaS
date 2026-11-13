@@ -56,7 +56,7 @@
       <div class="payment-check-grid">
         <div class="amount">
           <span>应收金额</span>
-          <strong>{{ formatMoney(order.total_amount || order.amount) }}</strong>
+          <strong>{{ formatMoney(order.total_amount ?? order.amount ?? 0) }}</strong>
           <small>请与收款账户到账金额一致</small>
         </div>
         <div>
@@ -372,7 +372,7 @@
         type="warning"
         show-icon
         :closable="false"
-        title="当前为财务退款记录。真实退款仍需在支付宝/微信等支付渠道执行，后续可继续接入正式退款接口。"
+        title="系统会先预占可退金额，再调用支付宝退款；若结果不确定，额度将继续预占，请先核对渠道，不要重复发起。"
       />
       <el-form label-width="100px">
         <el-form-item label="可退金额">
@@ -415,6 +415,7 @@ import {
 import DataPanel from '../../components/design/DataPanel.vue'
 import PageHero from '../../components/design/PageHero.vue'
 import { printStoreOrderReceipt } from '../../utils/orderReceipt'
+import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '../../utils/refundIdempotency'
 
 const route = useRoute()
 const router = useRouter()
@@ -422,13 +423,14 @@ const order = ref({})
 const noteDialogVisible = ref(false)
 const refundDialogVisible = ref(false)
 const refundSaving = ref(false)
+const refundIdempotencyKey = ref('')
+const refundIdempotencyPayload = ref('')
 const noteForm = reactive({ merchant_note: '' })
 const refundForm = reactive({ full: true, amount_yuan: 0, reason: '' })
 
-const paidStatuses = ['received', 'accepted', 'completed', 'closed']
-const isConfirmedPaid = computed(() => paidStatuses.includes(order.value.status) || Boolean(order.value.paid_at))
-const receivableAmount = computed(() => Number(order.value.total_amount || order.value.amount || 0))
+const receivableAmount = computed(() => Number(order.value.total_amount ?? order.value.amount ?? 0))
 const paidAmount = computed(() => Number(order.value.paid_amount ?? order.value.total_amount ?? order.value.amount ?? 0))
+const isConfirmedPaid = computed(() => Boolean(order.value.paid_at) && paidAmount.value > 0)
 const refundableAmount = computed(() => {
   if (!isConfirmedPaid.value) return 0
   return Math.max(paidAmount.value - Number(order.value.refunded_amount || 0), 0)
@@ -474,6 +476,9 @@ const stockAlertText = computed(() => {
   return '支付成功后已按订单商品扣减库存，不限库存商品不会扣减。'
 })
 const paymentState = computed(() => {
+  if (receivableAmount.value <= 0) {
+    return { title: '无需付款', hint: '本单应付金额为 0 元，不计入实收或结算。' }
+  }
   if (order.value.status === 'pending') {
     return { title: '等待顾客支付', hint: '未付款订单不计入实收，也不建议提前处理。' }
   }
@@ -486,7 +491,7 @@ const paymentState = computed(() => {
   if (['submitted', 'preparing'].includes(order.value.status)) {
     return { title: '稍后结算', hint: '该订单已提交给商家，当前不按已付款处理。' }
   }
-  if (paidStatuses.includes(order.value.status)) {
+  if (isConfirmedPaid.value) {
     return { title: '付款已确认', hint: '付款成功后订单直接进入商家处理，不需要商家审核付款。' }
   }
   return { title: '待核对', hint: '请核对订单状态和支付记录。' }
@@ -498,8 +503,8 @@ const refundRiskTitle = computed(() => {
   return '暂无退款'
 })
 const settlementState = computed(() => {
-  if (order.value.settlement_id) return { title: '已进结算单', hint: '该订单已被纳入结算记录，退款后需同步核对结算。' }
-  if (paidStatuses.includes(order.value.status)) return { title: '待结算核对', hint: '可在财务对账中按周期汇总，退款后以净实收为准。' }
+  if (order.value.settlement_id && isConfirmedPaid.value) return { title: '已进结算单', hint: '该订单已被纳入结算记录，退款后需同步核对结算。' }
+  if (isConfirmedPaid.value && ['accepted', 'completed'].includes(order.value.status)) return { title: '待结算核对', hint: '可在财务对账中按周期汇总，退款后以净实收为准。' }
   return { title: '未进入结算', hint: '未付款或异常订单不会进入实收结算。' }
 })
 const briefTone = computed(() => {
@@ -577,12 +582,20 @@ const nextStep = computed(() => {
 })
 const refundStatusDescription = computed(() => {
   if (!isConfirmedPaid.value) return '订单尚未确认收款，暂不产生可退金额。'
+  if (order.value.refund_status === 'processing') return '支付渠道结果尚未确认，退款额度仍被预占；请先核对渠道，不要再次发起退款。'
   if (order.value.refund_status === 'full') return '该订单已记录全额退款，确认后净额为 0。'
   if (order.value.refund_status === 'partial') return '该订单已记录部分退款，仍有剩余确认后净额。'
   if (Number(order.value.refunded_amount || 0) > 0) return '已有退款金额记录，请核对退款状态是否同步。'
   return '该订单暂未记录退款。'
 })
 const refundAdvice = computed(() => {
+  if (order.value.refund_status === 'processing') {
+    return {
+      title: '退款结果待核查',
+      text: '渠道尚未给出可确认结果，系统已保留退款额度；请先对账，不要再次发起退款。',
+      button: '待核查'
+    }
+  }
   if (order.value.refund_status === 'full') {
     return {
       title: '售后已完成',
@@ -634,12 +647,13 @@ const fulfillmentChecklist = computed(() => [
 ])
 
 const paymentChecklistText = computed(() => {
+  if (receivableAmount.value <= 0) return '无需付款，可按门店流程处理订单'
   if (order.value.status === 'payment_confirming') return '顾客已标记付款：等待商家确认到账'
-  if (paidStatuses.includes(order.value.status)) return '付款已确认，无需商家二次审核付款'
+  if (isConfirmedPaid.value) return '付款已确认，无需商家二次审核付款'
   if (['submitted', 'preparing'].includes(order.value.status)) return '先提交后结算订单：可先处理，后续再完成结算'
   return '等待顾客完成支付后再履约'
 })
-const paymentChecklistDone = computed(() => paidStatuses.includes(order.value.status) || ['submitted', 'preparing'].includes(order.value.status))
+const paymentChecklistDone = computed(() => receivableAmount.value <= 0 || isConfirmedPaid.value || ['submitted', 'preparing'].includes(order.value.status))
 const primaryActionFallback = computed(() => {
   if (['pending', 'failed'].includes(order.value.status)) return '等待顾客完成支付，商家暂不处理履约'
   if (order.value.status === 'completed') return '订单已完成，可继续核对售后或打印小票'
@@ -677,12 +691,16 @@ const accept = async () => {
 }
 
 const confirmPayment = async () => {
-  await ElMessageBox.confirm(confirmPaymentHtml(), '确认收款核对', {
-    type: 'warning',
-    dangerouslyUseHTMLString: true,
-    confirmButtonText: '已核对到账，确认收款',
-    cancelButtonText: '先不确认'
-  })
+  try {
+    await ElMessageBox.confirm(confirmPaymentHtml(), '确认收款核对', {
+      type: 'warning',
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '已核对到账，确认收款',
+      cancelButtonText: '先不确认'
+    })
+  } catch {
+    return
+  }
   await confirmMerchantOrderPayment(order.value.id)
   ElMessage.success('已确认收款')
   load()
@@ -725,22 +743,43 @@ const openRefund = () => {
   refundForm.full = true
   refundForm.amount_yuan = refundableAmount.value / 100
   refundForm.reason = ''
+  refundIdempotencyKey.value = ''
+  refundIdempotencyPayload.value = ''
   refundDialogVisible.value = true
 }
 
 const submitRefund = async () => {
   const amount = refundForm.full ? 0 : Math.round(Number(refundForm.amount_yuan || 0) * 100)
-  await ElMessageBox.confirm('确认记录这笔退款吗？请确保真实支付渠道已同步处理。', '确认退款', { type: 'warning' })
+  await ElMessageBox.confirm('请确认退款金额和原因。系统将调用支付宝；若结果不确定，需先核对渠道后再处理。', '确认退款', { type: 'warning' })
+  const requestPayload = { full: refundForm.full, amount, reason: refundForm.reason }
+  const orderID = order.value.id
+  const idempotency = getOrCreateRefundIdempotency(orderID, requestPayload, refundIdempotencyKey.value, refundIdempotencyPayload.value)
+  if (idempotency.conflict) {
+    ElMessage.warning('上一笔退款请求仍待核查或请求内容已改变，请保持原请求内容重试或先完成渠道对账。')
+    return
+  }
+  refundIdempotencyKey.value = idempotency.key
+  refundIdempotencyPayload.value = idempotency.fingerprint
   refundSaving.value = true
   try {
-    await refundMerchantOrder(order.value.id, {
-      full: refundForm.full,
-      amount,
-      reason: refundForm.reason
+    await refundMerchantOrder(orderID, {
+      ...requestPayload,
+      idempotency_key: refundIdempotencyKey.value
     })
-    ElMessage.success('退款记录已创建')
+    ElMessage.success('支付宝退款已确认成功')
+    clearRefundIdempotency(orderID)
+    refundIdempotencyKey.value = ''
+    refundIdempotencyPayload.value = ''
     refundDialogVisible.value = false
     await load()
+  } catch (error) {
+    const message = String(error?.response?.data?.message || error?.message || '')
+    if (message.toLowerCase().includes('definitively rejected')) {
+      clearRefundIdempotency(orderID)
+      refundIdempotencyKey.value = ''
+      refundIdempotencyPayload.value = ''
+    }
+    throw error
   } finally {
     refundSaving.value = false
   }
@@ -766,7 +805,7 @@ const callCustomer = () => {
   window.location.href = `tel:${order.value.customer_phone}`
 }
 const canClose = (row) => ['submitted', 'payment_confirming', 'received', 'preparing', 'accepted'].includes(row.status)
-const canRefund = (row) => row?.order_type === 'store_order' && refundableAmount.value > 0 && ['received', 'accepted', 'completed', 'closed'].includes(row.status)
+const canRefund = (row) => row?.order_type === 'store_order' && row.refund_status !== 'processing' && Boolean(row.paid_at) && Number(row.total_amount ?? row.amount ?? 0) > 0 && refundableAmount.value > 0 && row.payment_channel === 'alipay' && Boolean(row.transaction_no) && ['received', 'accepted', 'completed', 'closed'].includes(row.status)
 const itemLineAmount = (row) => Number(row.line_amount ?? row.amount ?? (Number(row.price || 0) * Number(row.quantity || 0)))
 const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
@@ -780,7 +819,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
 const confirmPaymentHtml = () => `
   <div class="confirm-payment-card">
     <p>请先打开商家的支付宝/微信收款账户，确认该笔款项已经到账，再点击确认。</p>
-    <div><span>应收金额</span><strong>${escapeHtml(formatMoney(order.value.total_amount || order.value.amount))}</strong></div>
+    <div><span>应收金额</span><strong>${escapeHtml(formatMoney(order.value.total_amount ?? order.value.amount ?? 0))}</strong></div>
     <div><span>订单号</span><strong>${escapeHtml(order.value.order_no || '-')}</strong></div>
     <div><span>核对码</span><strong>${escapeHtml(pickupCode.value)}</strong></div>
     <div><span>顾客手机号</span><strong>${escapeHtml(order.value.customer_phone || '未留手机号')}</strong></div>
@@ -814,11 +853,13 @@ const statusType = (status) => ({
 const refundLabel = (status) => ({
   none: '未退款',
   partial: '部分退款',
-  full: '全额退款'
+  full: '全额退款',
+  processing: '退款待核查'
 }[status] || '未退款')
 const refundType = (status) => ({
   partial: 'warning',
-  full: 'success'
+  full: 'success',
+  processing: 'danger'
 }[status] || 'info')
 const actionLabel = (action) => ({
   paid: '支付成功',

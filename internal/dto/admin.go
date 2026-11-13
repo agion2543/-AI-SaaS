@@ -37,6 +37,10 @@ type OpenMerchantSubscriptionRequest struct {
 	Note         string `json:"note"`
 }
 
+type PauseMerchantSubscriptionRequest struct {
+	Reason string `json:"reason" binding:"required"`
+}
+
 type SaveMerchantPlanRequest struct {
 	Name         string `json:"name" binding:"required"`
 	PriceCents   int64  `json:"price_cents" binding:"required"`

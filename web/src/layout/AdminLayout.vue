@@ -33,6 +33,12 @@
             <span>入驻、订阅、冻结、经营状态</span>
           </div>
         </el-menu-item>
+        <el-menu-item index="/admin/group-buy-links">
+          <div class="menu-item">
+            <strong>团购入口审核</strong>
+            <span>审核入口、暂停与恢复</span>
+          </div>
+        </el-menu-item>
         <el-menu-item index="/admin/users">
           <div class="menu-item">
             <strong>顾客数据</strong>
@@ -57,6 +63,12 @@
           <div class="menu-item">
             <strong>订单财务</strong>
             <span>订阅收入与顾客交易流水</span>
+          </div>
+        </el-menu-item>
+        <el-menu-item index="/admin/refund-reconciliations">
+          <div class="menu-item">
+            <strong>退款异常核对</strong>
+            <span>逾期预留、外部凭证与审计</span>
           </div>
         </el-menu-item>
         <el-menu-item index="/admin/cards">
