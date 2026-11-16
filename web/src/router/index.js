@@ -22,6 +22,8 @@ import CardsView from '../views/cards/CardsView.vue'
 import SystemView from '../views/system/SystemView.vue'
 import AuditLogsView from '../views/system/AuditLogsView.vue'
 import FollowUpTodosView from '../views/system/FollowUpTodosView.vue'
+import AdminAccessView from '../views/system/AdminAccessView.vue'
+import AdminAccessRestrictedView from '../views/system/AdminAccessRestrictedView.vue'
 import MerchantsView from '../views/merchants/MerchantsView.vue'
 import GroupBuyLinksView from '../views/platform/GroupBuyLinksView.vue'
 import RefundReconciliationView from '../views/platform/RefundReconciliationView.vue'
@@ -46,6 +48,7 @@ import CustomerStoreView from '../views/customer/CustomerStoreView.vue'
 import CustomerOrderSuccessView from '../views/customer/CustomerOrderSuccessView.vue'
 import { fetchMerchantInfo } from '../api/modules'
 import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
+import { fetchAdminSession } from '../api/modules'
 
 const routes = [
   { path: '/', redirect: '/admin/dashboard' },
@@ -73,7 +76,9 @@ const routes = [
       { path: 'refund-reconciliations', component: RefundReconciliationView },
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
-      { path: 'system', component: SystemView }
+      { path: 'system', component: SystemView },
+      { path: 'access', component: AdminAccessView },
+      { path: 'limited-access', component: AdminAccessRestrictedView }
     ]
   },
   {
@@ -179,8 +184,43 @@ router.beforeEach(async (to) => {
   if (to.path !== '/login' && !adminStore.token) {
     return '/login'
   }
+
+  if (to.path.startsWith('/admin') && adminStore.token) {
+    try {
+      const { data } = await fetchAdminSession()
+      adminStore.setAdmin(data.admin)
+    } catch (error) {
+      if ([401, 403].includes(error?.response?.status)) {
+        adminStore.logout()
+        return '/login'
+      }
+    }
+    const isSuperAdmin = adminStore.isSuperAdmin
+    const hasAny = (...codes) => isSuperAdmin || codes.some(code => adminStore.hasPermission(code))
+    const firstAllowedPath = () => {
+      if (isSuperAdmin || adminStore.hasPermission('read_only')) return '/admin/dashboard'
+      if (adminStore.hasPermission('operations')) return '/admin/todos'
+      if (adminStore.hasPermission('finance')) return '/admin/packages'
+      if (adminStore.hasPermission('system_admin')) return '/admin/audit-logs'
+      return '/admin/limited-access'
+    }
+    let allowed = false
+    if (to.path === '/admin/limited-access') allowed = true
+    else if (to.path === '/admin/access') allowed = isSuperAdmin
+    else if (to.path === '/admin/dashboard') allowed = hasAny('read_only')
+    else if (to.path === '/admin/todos') allowed = hasAny('operations')
+    else if (/^\/admin\/(merchants|group-buy-links|users)(\/|$)/.test(to.path)) allowed = hasAny('read_only', 'operations')
+    else if (/^\/admin\/(packages|subscriptions|orders|refund-reconciliations|cards)(\/|$)/.test(to.path)) allowed = hasAny('finance')
+    else if (/^\/admin\/(audit-logs|system)(\/|$)/.test(to.path)) allowed = hasAny('system_admin')
+    if (!allowed) return firstAllowedPath()
+  }
+
   if (to.path === '/login' && adminStore.token) {
-    return '/admin/dashboard'
+    if (adminStore.isSuperAdmin || adminStore.hasPermission('read_only')) return '/admin/dashboard'
+    if (adminStore.hasPermission('operations')) return '/admin/todos'
+    if (adminStore.hasPermission('finance')) return '/admin/packages'
+    if (adminStore.hasPermission('system_admin')) return '/admin/audit-logs'
+    return '/admin/limited-access'
   }
 })
 

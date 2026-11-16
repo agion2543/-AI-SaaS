@@ -10,7 +10,3 @@ CREATE TABLE IF NOT EXISTS verification_codes (
   consumed_at DATETIME NULL,
   KEY idx_phone_scene (phone, scene)
 );
-
-UPDATE admin_users
-SET password_hash = '$2a$10$cE8LFVvs5/26l6.4l8hE8.mn1sXSzBHRVnaItSN.g14.tmtjcl/5a'
-WHERE username = 'admin';

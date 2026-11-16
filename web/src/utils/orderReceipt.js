@@ -38,7 +38,7 @@ const refundLabel = (status) => ({
   full: '全额退款'
 }[status] || '未退款')
 
-export const printStoreOrderReceipt = (order) => {
+export const printStoreOrderReceipt = (order, existingPrintWindow) => {
   const current = order || {}
   const items = Array.isArray(current.items) ? current.items : []
   const logs = Array.isArray(current.operation_logs) ? current.operation_logs : []
@@ -46,7 +46,7 @@ export const printStoreOrderReceipt = (order) => {
   const receiptNo = current.order_no || `ORDER-${current.id || ''}`
   const netPaidAmount = Math.max(orderAmount(current) - Number(current.refunded_amount || 0), 0)
   const paidAt = current.paid_at || current.updated_at || current.created_at
-  const printWindow = window.open('', '_blank', 'width=420,height=720')
+  const printWindow = existingPrintWindow || window.open('', '_blank', 'width=420,height=720')
 
   if (!printWindow) return false
 

@@ -29,7 +29,7 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if second != ResultAlready {
 			t.Fatalf("repeat latest result=%q, want %q", second, ResultAlready)
 		}
-		assertV2Inventory(t, db)
+		assertLatestInventory(t, db)
 	})
 
 	t.Run("exact managed v1 upgrade preserves data and creates append-only records", func(t *testing.T) {
@@ -51,7 +51,7 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if got := countWhere(t, db, "orders", "id = ? AND order_no = ?", orderID, orderNo); got != 1 {
 			t.Fatalf("v1 order row count after upgrade=%d", got)
 		}
-		assertV2Inventory(t, db)
+		assertLatestInventory(t, db)
 
 		reviewID := insertSyntheticManualReview(t, db, merchantID, orderID, orderNo)
 		auditID := insertSyntheticManualReviewAudit(t, db, reviewID, merchantID, orderID)
@@ -74,6 +74,163 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest rerun after upgrade: result=%q err=%v", result, err)
+		}
+	})
+
+	t.Run("exact managed v2 upgrades to admin auth version v3", func(t *testing.T) {
+		db := createTestDatabase(t, control, baseConfig)
+		if result, err := ApplyCandidate(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("create exact managed v1: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyManualReviewV2(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("create exact managed v2: result=%q err=%v", result, err)
+		}
+		result, err := ApplyLatest(ctx, db)
+		if err != nil {
+			t.Fatalf("upgrade exact managed v2 to v3: %v", err)
+		}
+		if result != ResultApplied {
+			t.Fatalf("upgrade result=%q, want %q", result, ResultApplied)
+		}
+		assertLatestInventory(t, db)
+	})
+
+	t.Run("exact managed v3 upgrades SMS and email OTP storage and invalidates legacy codes", func(t *testing.T) {
+		db := createTestDatabase(t, control, baseConfig)
+		if result, err := ApplyCandidate(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("create exact managed v1: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyManualReviewV2(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("create exact managed v2: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyAdminAuthVersionV3(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("create exact managed v3: result=%q err=%v", result, err)
+		}
+		if _, err := db.Exec(`INSERT INTO verification_codes(phone, scene, code, expires_at, created_at, updated_at) VALUES('13800000001','login','123456',DATE_ADD(NOW(3), INTERVAL 10 MINUTE),NOW(3),NOW(3))`); err != nil {
+			t.Fatalf("insert synthetic legacy plaintext OTP: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO email_verification_codes(email, scene, code, expires_at, created_at, updated_at) VALUES('otp-safety@example.test','bind_email','654321',DATE_ADD(NOW(3), INTERVAL 10 MINUTE),NOW(3),NOW(3))`); err != nil {
+			t.Fatalf("insert synthetic legacy plaintext email OTP: %v", err)
+		}
+
+		result, err := ApplyLatest(ctx, db)
+		if err != nil {
+			t.Fatalf("upgrade exact managed v3 through v5: %v", err)
+		}
+		if result != ResultApplied {
+			t.Fatalf("upgrade result=%q, want %q", result, ResultApplied)
+		}
+		var storedCode, storedHash string
+		var failedAttempts uint
+		var consumedAt sql.NullTime
+		if err := db.QueryRow(`SELECT code, code_hash, failed_attempts, consumed_at FROM verification_codes WHERE phone='13800000001' AND scene='login'`).Scan(&storedCode, &storedHash, &failedAttempts, &consumedAt); err != nil {
+			t.Fatalf("read scrubbed synthetic OTP: %v", err)
+		}
+		if storedCode != "REDACTED" || storedHash != strings.Repeat("0", 64) || failedAttempts != 0 || !consumedAt.Valid {
+			t.Fatalf("legacy OTP was not safely scrubbed and invalidated: code=%q hash=%q attempts=%d consumed=%v", storedCode, storedHash, failedAttempts, consumedAt)
+		}
+		if err := db.QueryRow(`SELECT code, code_hash, failed_attempts, consumed_at FROM email_verification_codes WHERE email='otp-safety@example.test' AND scene='bind_email'`).Scan(&storedCode, &storedHash, &failedAttempts, &consumedAt); err != nil {
+			t.Fatalf("read scrubbed synthetic email OTP: %v", err)
+		}
+		if storedCode != "REDACTED" || storedHash != strings.Repeat("0", 64) || failedAttempts != 0 || !consumedAt.Valid {
+			t.Fatalf("legacy email OTP was not safely scrubbed and invalidated: code=%q hash=%q attempts=%d consumed=%v", storedCode, storedHash, failedAttempts, consumedAt)
+		}
+		assertLatestInventory(t, db)
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
+			t.Fatalf("repeat latest migration: result=%q err=%v", result, err)
+		}
+	})
+
+	t.Run("exact managed v4 upgrades email OTP storage to v5", func(t *testing.T) {
+		db := createTestDatabase(t, control, baseConfig)
+		for _, apply := range []struct {
+			name string
+			fn   func(context.Context, *sql.DB) (Result, error)
+		}{
+			{"v1", ApplyCandidate},
+			{"v2", ApplyManualReviewV2},
+			{"v3", ApplyAdminAuthVersionV3},
+			{"v4", ApplyOTPSafetyV4},
+		} {
+			if result, err := apply.fn(ctx, db); err != nil || result != ResultApplied {
+				t.Fatalf("create exact managed %s: result=%q err=%v", apply.name, result, err)
+			}
+		}
+		if _, err := db.Exec(`INSERT INTO email_verification_codes(email, scene, code, expires_at, created_at, updated_at) VALUES('otp-v5@example.test','bind_email','123456',DATE_ADD(NOW(3), INTERVAL 10 MINUTE),NOW(3),NOW(3))`); err != nil {
+			t.Fatalf("insert synthetic v4 plaintext email OTP: %v", err)
+		}
+
+		result, err := ApplyEmailOTPSafetyV5(ctx, db)
+		if err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v4 to v5: result=%q err=%v", result, err)
+		}
+		var code, digest string
+		var attempts uint
+		var consumedAt sql.NullTime
+		if err := db.QueryRow(`SELECT code, code_hash, failed_attempts, consumed_at FROM email_verification_codes WHERE email='otp-v5@example.test' AND scene='bind_email'`).Scan(&code, &digest, &attempts, &consumedAt); err != nil {
+			t.Fatalf("read scrubbed synthetic email OTP: %v", err)
+		}
+			if code != "REDACTED" || digest != strings.Repeat("0", 64) || attempts != 0 || !consumedAt.Valid {
+				t.Fatalf("v5 must scrub and invalidate prior email OTPs: code=%q hash=%q attempts=%d consumed=%v", code, digest, attempts, consumedAt)
+			}
+			if result, err := ApplyEmailOTPSafetyV5(ctx, db); err != nil || result != ResultAlready {
+				t.Fatalf("repeat v5 migration: result=%q err=%v", result, err)
+			}
+			if result, err := ApplyWholesaleRetailV6(ctx, db); err != nil || result != ResultApplied {
+				t.Fatalf("upgrade exact managed v5 to v6: result=%q err=%v", result, err)
+			}
+			assertLatestInventory(t, db)
+		})
+
+	t.Run("exact managed v5 upgrades wholesale and retail product pricing to v6", func(t *testing.T) {
+		db := createTestDatabase(t, control, baseConfig)
+		for _, apply := range []struct {
+			name string
+			fn   func(context.Context, *sql.DB) (Result, error)
+		}{
+			{"v1", ApplyCandidate},
+			{"v2", ApplyManualReviewV2},
+			{"v3", ApplyAdminAuthVersionV3},
+			{"v4", ApplyOTPSafetyV4},
+			{"v5", ApplyEmailOTPSafetyV5},
+		} {
+			if result, err := apply.fn(ctx, db); err != nil || result != ResultApplied {
+				t.Fatalf("create exact managed %s: result=%q err=%v", apply.name, result, err)
+			}
+		}
+		result, err := ApplyWholesaleRetailV6(ctx, db)
+		if err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v5 to v6: result=%q err=%v", result, err)
+		}
+		assertLatestInventory(t, db)
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
+			t.Fatalf("repeat latest v6 migration: result=%q err=%v", result, err)
+		}
+	})
+
+	t.Run("v3 schema drift is refused without applying v4", func(t *testing.T) {
+		db := createTestDatabase(t, control, baseConfig)
+		if _, err := ApplyCandidate(ctx, db); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ApplyManualReviewV2(ctx, db); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ApplyAdminAuthVersionV3(ctx, db); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`ALTER TABLE verification_codes ADD COLUMN unexpected_v3_marker INT NULL`); err != nil {
+			t.Fatal(err)
+		}
+		before := snapshotDatabaseTables(t, db)
+		if _, err := ApplyOTPSafetyV4(ctx, db); err == nil {
+			t.Fatal("v4 migration unexpectedly accepted a drifted v3 schema")
+		}
+		if after := snapshotDatabaseTables(t, db); after != before {
+			t.Fatalf("v3 drift refusal mutated database:\nBEFORE:\n%s\nAFTER:\n%s", before, after)
+		}
+		if countWhere(t, db, "app_schema_migrations", "version = ?", OTPSafetyV4Version) != 0 {
+			t.Fatal("v4 ledger row was written after refusing v3 drift")
 		}
 	})
 
@@ -126,7 +283,7 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := snapshotDatabaseTables(t, db)
-		if _, err := ApplyLatest(ctx, db); err == nil || !strings.Contains(err.Error(), "v2 ledger entry") {
+		if _, err := ApplyLatest(ctx, db); err == nil || !strings.Contains(err.Error(), "ledger entry") {
 			t.Fatalf("ApplyLatest error=%v, want v2 checksum refusal", err)
 		}
 		if after := snapshotDatabaseTables(t, db); after != before {
@@ -169,9 +326,9 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 	})
 }
 
-func assertV2Inventory(t *testing.T, db *sql.DB) {
+func assertLatestInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +341,32 @@ func assertV2Inventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, ManualReviewV2Version, ManualReviewV2Checksum).Scan(&v2Rows); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 32 || triggers != 6 || v1Rows != 1 || v2Rows != 1 {
-		t.Fatalf("v2 inventory tables=%d triggers=%d v1/v2 ledger=%d/%d, want 32,6,1,1", tables, triggers, v1Rows, v2Rows)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, AdminAuthV3Version, AdminAuthV3Checksum).Scan(&v3Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, OTPSafetyV4Version, OTPSafetyV4Checksum).Scan(&v4Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, EmailOTPSafetyV5Version, EmailOTPSafetyV5Checksum).Scan(&v5Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, WholesaleRetailV6Version, WholesaleRetailV6Checksum).Scan(&v6Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='admin_users' AND COLUMN_NAME='auth_version' AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='1'`).Scan(&authVersionColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='verification_codes' AND ((COLUMN_NAME='code_hash' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='YES') OR (COLUMN_NAME='failed_attempts' AND COLUMN_TYPE='int unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='0'))`).Scan(&otpColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='email_verification_codes' AND ((COLUMN_NAME='code_hash' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='YES') OR (COLUMN_NAME='failed_attempts' AND COLUMN_TYPE='int unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='0'))`).Scan(&emailOTPColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND ((COLUMN_NAME='sales_unit' AND COLUMN_TYPE='varchar(30)' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='') OR (COLUMN_NAME='specification' AND COLUMN_TYPE='varchar(80)' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='') OR (COLUMN_NAME='minimum_order_quantity' AND COLUMN_TYPE='int unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='1') OR (COLUMN_NAME='price_tiers' AND COLUMN_TYPE='json' AND IS_NULLABLE='YES' AND COLUMN_DEFAULT IS NULL))`).Scan(&productPricingColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 32 || triggers != 6 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || authVersionColumns != 1 || otpColumns != 2 || emailOTPColumns != 2 || productPricingColumns != 4 {
+		t.Fatalf("latest inventory tables=%d triggers=%d v1-v6 ledger=%d/%d/%d/%d/%d/%d auth_version=%d sms_otp_columns=%d email_otp_columns=%d product_pricing_columns=%d, want 32,6,1,1,1,1,1,1,1,2,2,4", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns)
 	}
 }
 

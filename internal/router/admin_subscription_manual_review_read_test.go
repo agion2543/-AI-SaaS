@@ -36,6 +36,7 @@ func TestManualSubscriptionReviewReadRouteIsAdminOnlyReadOnlyAndSeparate(t *test
 	if err := db.AutoMigrate(&model.Merchant{}, &model.MerchantPlan{}, &model.Order{}, &model.PaymentRecord{}, &model.MerchantSubscriptionManualReview{}, &model.MerchantSubscriptionManualReviewAudit{}); err != nil {
 		t.Fatalf("migrate synthetic read schema: %v", err)
 	}
+	seedSyntheticSuperAdmin(t, db, 7, "synthetic-manual-read-super")
 
 	merchant := &model.Merchant{Name: "合成审计商家", Status: "active", SubscriptionStatus: "active"}
 	if err := db.Create(merchant).Error; err != nil {
@@ -112,10 +113,7 @@ func TestManualSubscriptionReviewReadRouteIsAdminOnlyReadOnlyAndSeparate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, 7)
 	path := "/api/v1/admin/subscription-manual-reviews"
 	request := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

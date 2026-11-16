@@ -54,13 +54,23 @@ docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build
 
 该 Compose 使用专属数据库卷，不挂载 `sql/init.sql`，等待 MySQL healthy 后执行容器内 `/app/schema-migrate`；后端依赖迁移服务成功完成，并设置 `DB_AUTO_MIGRATE=false`。应用启动后仍会写入其初始角色、管理员和套餐种子数据。
 
-v1 基线版本仍为 `schema-v1-candidate-20261113`，SHA-256 仍为 `daba2b6532800c0b8203965358c197823c196eccedcba9d24c5a656700d470d6`。最新安装入口 `/app/schema-migrate` 先在完全空库安装此 v1，再应用仅增量 v2；重复调用只有在最新账本与结构指纹全部精确匹配时才返回已管理。旧的 `ApplyCandidate` 仍只校验 v1，不会把 v2 或其他结构当作 v1。
+v1 基线版本仍为 `schema-v1-candidate-20261113`，SHA-256 为 `d4277d6999a8c5fade3edda12e6d7d9bfbf7874c34a0b0406d03573b68609006`。最新安装入口 `/app/schema-migrate` 先在完全空库安装此 v1，再应用 v2、v3、v4、v5 与 v6 五个严格校验的增量；重复调用只有在最新账本与结构指纹全部精确匹配时才返回已管理。旧的 `ApplyCandidate` 仍只校验 v1，不会把 v2、v3、v4、v5、v6 或其他结构当作 v1。
 
 增量版本 `schema-v2-subscription-manual-review-20261113` 的 SHA-256 为 `48ef3ec703a314a213107af20ad415e80dc4aa27cdccaf3349cdc9ab53ea5e26`。它只可从准确的托管 v1 账本、校验和与结构指纹升级；升级后再分别验证原 v1 子结构指纹和完整 v2 指纹。v2 增加 `merchant_subscription_manual_reviews` 与 `merchant_subscription_manual_review_audits` 两张专用表、唯一订单键及四条阻止 UPDATE/DELETE 的数据库触发器，不修改 v1 快照或其他表。只有空库的新安装或完全匹配的 v1 可以推进；未知旧库、部分安装、额外对象、checksum/结构漂移或 `applying` 状态继续拒绝且不自动修复。一次中断留下的 v2 `applying` 状态需要从干净隔离库重新开始或恢复备份，不能删除账本后硬重试。
+
+增量版本 `schema-v3-admin-auth-version-20261114` 的 SHA-256 为 `1398762fd14d351eeb61e2b26f98513a18401bbc77e6da677b91e2f5481f23d4`。它只从准确托管的 v2 增加 `admin_users.auth_version BIGINT UNSIGNED NOT NULL DEFAULT 1`，不更改已批准的 v1 基线或 v2 表/触发器；升级后逐一验证 v1、v2 原始子结构指纹（排除新增列）及完整 v3 指纹。管理员密码恢复、状态/角色分配变化和角色权限变化会原子递增此计数器，使旧 token 不会在状态恢复后复活。
+
+增量版本 `schema-v4-otp-safety-20261114` 的 SHA-256 为 `90aba9d894e7e6af5ecc9904745501472ceb1c20f74248fe360649eca371dde0`。它只从精确托管的 v3 增加 nullable `verification_codes.code_hash CHAR(64)`（保存绑定手机号和用途的 HMAC-SHA-256 摘要）及 `failed_attempts INT UNSIGNED NOT NULL DEFAULT 0`。迁移会把旧 `code` 列内容覆盖为 `REDACTED`、将新摘要列设为不可匹配标记并作废所有旧码；升级期间已有验证码必须重新申请。新增列不改变原 `code` 列结构；迁移后核验 v1、v2、v3 的原始结构指纹（排除 v4 新列）及完整 v4 指纹，v1-v3 快照和校验和保持不变。手机号流程限为每手机号 60 秒冷却、滚动 1 小时最多 5 次发送、每个验证码 10 分钟有效且最多 5 次错误尝试；正确验证码一次性消费。短信日志不再输出验证码。
+
+增量版本 `schema-v5-email-otp-safety-20261115` 的 SHA-256 为 `59a48027c17bc375c3c1d15e22c0db966b3454de8980e9416c3c65d1eff69dbc`。它只从精确托管的 v4 增加 nullable `email_verification_codes.code_hash CHAR(64)`（保存绑定邮箱和用途的 HMAC-SHA-256 摘要）及 `failed_attempts INT UNSIGNED NOT NULL DEFAULT 0`。迁移会把旧 `code` 覆盖为 `REDACTED`、写入不可匹配摘要并作废所有旧邮件验证码；升级后必须重新申请。迁移保留原列结构并验证 v1-v4 历史指纹与完整 v5 指纹。邮箱流程按每邮箱限制为 60 秒冷却、滚动 1 小时最多 5 次；验证码有效 10 分钟、最多 5 次错误尝试，成功后一次性消费。当前未接入邮件服务：开发环境用固定测试码 `123456` 模拟且不记录验证码或邮箱日志；生产、staging 等非开发环境在未配置真实邮件服务时拒绝模拟发送。v5 不连接邮件服务，也不会发出真实邮件。
+
+增量版本 `schema-v6-wholesale-retail-20261116` 的 SHA-256 为 `a925b154315d9d34475e08911fcc0abb25b7986a14c3da11d3bc251f9adc65f0`。它只从精确托管的 v5 增加商品可选销售单位、规格、最低购买量和商家自定义数量档位价 JSON 列，不改写既有订单或支付状态；升级时继续验证 v1-v5 历史结构指纹，完整 v6 账本和商品列指纹通过后才认定已管理。档位阈值与价格由商家自行配置，订单金额由服务端根据商品当前配置重算，订单行保留下单时的单位、规格、基础/实际单价及档位快照。
+
+新安装入口 `ApplyLatest` 依序安装 v1→v2→v3→v4→v5→v6；它仅接受准确托管的 v1/v2/v3/v4/v5/v6，未知旧库、部分安装或漂移结构仍 fail-closed。
 
 历史订阅人工核验是与普通 provider 支付确认分离的流程：后台必须记录管理员对原始凭证及“外部付款确已发生”的明确断言；它把订单标成 `manually_verified`，在专用不可变复核/审计中保存原始条款、证据引用、理由和前后状态，并据所填期限授予订阅权益。它不调用支付渠道、不生成 provider `PaymentRecord`、`PaidAt` 或渠道交易号；普通 provider-confirmed 收入统计只统计原有 `paid` 状态，不把 `manually_verified` 混入。该状态依赖管理员确实核对外部原始证据，系统不会替其验证。
 
 默认 `docker-compose.prod.yml` 保持原样且仍保留 GORM AutoMigrate，避免改变既有安装行为；不要因其存在就认为旧库升级已支持。v1 新安装流程本身、真实部署和旧数据库升级均须各自验证；本地合成测试不能替代真实发布演练。MySQL 集成测试只允许使用 `/tmp/cue-schema-migrate-*` 下的临时 Unix socket，且测试数据库须以 `cue_schema_migration_it` 开头；集成用例拒绝 TCP DSN。
 
 ### 可重复的本地全流程检查
-需要在本地验证批准的 v1 → v2 新安装、合成订阅人工复核、备份恢复及只读后台读数时，运行 `bash scripts/validate-schema-lifecycle.sh`。该脚本使用本次新建的临时 MySQL 8 datadir 和 socket-only 实例，不使用 Docker、`MYSQL_DSN`、`.env` 或生产备份脚本的默认 TCP 目标。完整覆盖与限制见[本地数据库生命周期验证](local-schema-lifecycle-validation.md)；它仍不验证旧库升级或生产备份配置。
+需要在本地验证批准的 v1 → v2 → v3 → v4 → v5 → v6 新安装、合成订阅人工复核、备份恢复及只读后台读数时，运行 `bash scripts/validate-schema-lifecycle.sh`。该脚本使用本次新建的临时 MySQL 8 datadir 和 socket-only 实例，不使用 Docker、`MYSQL_DSN`、`.env` 或生产备份脚本的默认 TCP 目标。完整覆盖与限制见[本地数据库生命周期验证](local-schema-lifecycle-validation.md)；它仍不验证旧库升级或生产备份配置。

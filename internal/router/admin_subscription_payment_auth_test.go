@@ -59,6 +59,7 @@ func TestSubscriptionPaymentConfirmationRouteRequiresPlatformAdmin(t *testing.T)
 	if err := db.Create(admin).Error; err != nil {
 		t.Fatalf("create synthetic platform admin: %v", err)
 	}
+	seedSyntheticSuperAdmin(t, db, admin.ID, admin.Username)
 
 	cfg := &config.Config{JWTSecret: "test-only-subscription-payment-secret", FrontendURL: "http://localhost:5173", RateLimitPerMinute: 1000}
 	engine := gin.New()
@@ -68,10 +69,7 @@ func TestSubscriptionPaymentConfirmationRouteRequiresPlatformAdmin(t *testing.T)
 	if err != nil {
 		t.Fatalf("create merchant token: %v", err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, admin.ID, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatalf("create platform admin token: %v", err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, admin.ID)
 	path := "/api/v1/admin/orders/" + fmt.Sprint(order.ID) + "/confirm-subscription-payment"
 	request := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remark":"synthetic authorization test"}`))

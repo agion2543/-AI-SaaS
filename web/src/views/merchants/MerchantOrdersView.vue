@@ -86,7 +86,7 @@
           <div class="queue-main">
             <span>{{ queueLabel(row) }}</span>
             <strong>{{ pickupCode(row) }} · {{ formatMoney(receivableAmount(row)) }}</strong>
-            <p>{{ row.store?.name || '-' }} · {{ itemQuantity(row) }} 件 · {{ row.customer_note || '无备注' }}</p>
+            <p>{{ row.store?.name || '-' }} · {{ itemQuantity(row) }} 件 · {{ row.has_customer_note ? '顾客有备注，详情查看' : '无顾客备注' }}</p>
           </div>
           <div class="queue-actions">
             <el-button v-if="row.status === 'payment_confirming'" size="small" type="warning" @click="confirmPayment(row)">确认收款</el-button>
@@ -218,14 +218,14 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="门店 / 顾客" min-width="170">
+        <el-table-column label="门店 / 顾客（手机号脱敏）" min-width="190">
           <template #default="{ row }">
             <div class="store-cell">
               <strong>{{ row.store?.name || '-' }}</strong>
               <div class="phone-line">
                 <span>{{ row.customer_phone || '未留手机号' }}</span>
-                <el-button v-if="row.customer_phone" size="small" text type="primary" @click="callCustomer(row)">
-                  联系
+                <el-button v-if="row.customer_phone" size="small" text type="primary" @click="goDetail(row)">
+                  查看详情联系
                 </el-button>
               </div>
             </div>
@@ -243,11 +243,10 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="顾客备注" min-width="160" show-overflow-tooltip>
+        <el-table-column label="顾客备注" min-width="160">
           <template #default="{ row }">
-            <span :class="['customer-note', { active: row.customer_note }]">
-              {{ row.customer_note || '无备注' }}
-            </span>
+            <el-button v-if="row.has_customer_note" size="small" text type="primary" @click="goDetail(row)">有备注 · 查看详情</el-button>
+            <span v-else class="customer-note">无备注</span>
           </template>
         </el-table-column>
         <el-table-column label="收银口径" width="190">
@@ -279,8 +278,11 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="备注" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.merchant_note || '-' }}</template>
+        <el-table-column label="内部备注" min-width="150">
+          <template #default="{ row }">
+            <el-button v-if="row.has_merchant_note" size="small" text type="primary" @click="goDetail(row)">有备注 · 查看详情</el-button>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
@@ -338,6 +340,7 @@ import {
   confirmMerchantOrderPayment,
   completeMerchantOrder,
   fetchMerchantOrders,
+  fetchMerchantOrderDetail,
   fetchMerchantStores,
   updateMerchantOrderNote
 } from '../../api/modules'
@@ -381,7 +384,7 @@ const pageStatusCount = computed(() => orders.value.reduce((acc, item) => {
   return acc
 }, { pending: 0, failed: 0, submitted: 0, payment_confirming: 0, preparing: 0, received: 0, accepted: 0, completed: 0, closed: 0 }))
 const pageRefundCount = computed(() => orders.value.filter((item) => hasRefundRisk(item)).length)
-const pageNoteCount = computed(() => orders.value.filter((item) => Boolean(item.customer_note)).length)
+const pageNoteCount = computed(() => orders.value.filter((item) => Boolean(item.has_customer_note)).length)
 const pagePaymentIssueCount = computed(() => orders.value.filter((item) => ['pending', 'failed'].includes(item.status)).length)
 const overdueActionRows = computed(() => orders.value.filter((item) => isActionableOrder(item) && orderWaitMinutes(item) >= 10))
 const urgentQueue = computed(() => priorityOrders.value
@@ -471,7 +474,7 @@ const visibleOrders = computed(() => {
   if (activeQuickMode.value === 'received') return priorityOrders.value.filter((item) => ['submitted', 'received'].includes(item.status))
   if (activeQuickMode.value === 'accepted') return priorityOrders.value.filter((item) => ['preparing', 'accepted'].includes(item.status))
   if (activeQuickMode.value === 'refund') return priorityOrders.value.filter((item) => hasRefundRisk(item))
-  if (activeQuickMode.value === 'note') return priorityOrders.value.filter((item) => Boolean(item.customer_note))
+  if (activeQuickMode.value === 'note') return priorityOrders.value.filter((item) => Boolean(item.has_customer_note))
   return priorityOrders.value
 })
 const selectedReceivedRows = computed(() => selectedRows.value.filter((item) => ['submitted', 'received'].includes(item.status)))
@@ -825,7 +828,7 @@ const confirmPayment = async (row) => {
 }
 
 const acceptAndPrint = async (row) => {
-  if (printReceipt(row)) {
+  if (await printReceipt(row)) {
     await accept(row)
   }
 }
@@ -867,10 +870,15 @@ const close = async (row) => {
   await loadOrders()
 }
 
-const openNote = (row) => {
-  editingOrderId.value = row.id
-  noteForm.merchant_note = row.merchant_note || ''
-  noteDialogVisible.value = true
+const openNote = async (row) => {
+  try {
+    const response = await fetchMerchantOrderDetail(row.id)
+    editingOrderId.value = row.id
+    noteForm.merchant_note = response.data?.order?.merchant_note || ''
+    noteDialogVisible.value = true
+  } catch {
+    ElMessage.error('读取订单详情失败，请重试')
+  }
 }
 
 const saveNote = async () => {
@@ -880,25 +888,39 @@ const saveNote = async () => {
   await loadOrders()
 }
 
-const printReceipt = (row) => {
-  if (!printStoreOrderReceipt(row)) {
+const printReceipt = async (row, targetWindow) => {
+  const printWindow = targetWindow === undefined
+    ? window.open('', '_blank', 'width=420,height=720')
+    : targetWindow
+  if (!printWindow) {
     ElMessage.warning('浏览器阻止了打印窗口，请允许弹窗后重试')
     return false
   }
-  return true
+  try {
+    const response = await fetchMerchantOrderDetail(row.id)
+    const detail = response.data?.order
+    if (!detail || !printStoreOrderReceipt(detail, printWindow)) {
+      printWindow.close()
+      ElMessage.error('读取订单详情失败，未能生成小票')
+      return false
+    }
+    return true
+  } catch {
+    printWindow.close()
+    ElMessage.error('读取订单详情失败，未能生成小票')
+    return false
+  }
 }
 
-const batchPrint = () => {
+const batchPrint = async () => {
+  const rows = [...selectedRows.value]
+  if (!rows.length) return
+  const windows = rows.map(() => window.open('', '_blank', 'width=420,height=720'))
   let printedCount = 0
-  selectedRows.value.forEach((row) => {
-    if (printReceipt(row)) printedCount += 1
-  })
+  for (const [index, row] of rows.entries()) {
+    if (await printReceipt(row, windows[index])) printedCount += 1
+  }
   if (printedCount) ElMessage.success(`已打开 ${printedCount} 张小票打印窗口`)
-}
-
-const callCustomer = (row) => {
-  if (!row.customer_phone) return
-  window.location.href = `tel:${row.customer_phone}`
 }
 
 const canClose = (row) => ['submitted', 'payment_confirming', 'received', 'preparing', 'accepted'].includes(row.status)

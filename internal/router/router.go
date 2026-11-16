@@ -10,7 +10,6 @@ import (
 	"go-web-gin-health/internal/controller"
 	"go-web-gin-health/internal/middleware"
 	"go-web-gin-health/internal/service"
-	"go-web-gin-health/internal/utils"
 )
 
 func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
@@ -24,6 +23,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	alipayService, _ := service.NewAlipayService(cfg)
 	orderService := service.NewOrderService(db, alipayService)
 	adminService := service.NewAdminService(cfg, db)
+	adminAccessService := service.NewAdminAccessService(db)
 	merchantService := service.NewMerchantService(cfg, db)
 	dashboardService := service.NewDashboardService(db)
 	auditService := service.NewAuditService(db)
@@ -32,18 +32,17 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	platformGroupBuyService := service.NewPlatformGroupBuyService(db)
 
 	authCtl := controller.NewAuthController(authService)
-	merchantCtl := controller.NewMerchantController(merchantService, adminService, alipayService, auditService)
+	merchantCtl := controller.NewMerchantController(merchantService, adminService, alipayService, auditService, cfg.AppURL)
 	userCtl := controller.NewUserController(db, authService)
 	packageCtl := controller.NewPackageController(packageService)
 	orderCtl := controller.NewOrderController(orderService, alipayService, auditService)
-	adminCtl := controller.NewAdminController(adminService, dashboardService, auditService)
+	adminCtl := controller.NewAdminController(adminService, dashboardService, auditService, cfg.AppURL)
+	adminAccessCtl := controller.NewAdminAccessController(adminAccessService)
 	shareCtl := controller.NewShareController(shareService)
 	groupBuyCtl := controller.NewGroupBuyController(groupBuyService)
 	platformGroupBuyCtl := controller.NewPlatformGroupBuyController(platformGroupBuyService)
 
-	engine.GET("/health", func(c *gin.Context) {
-		utils.Success(c, gin.H{"status": "ok"})
-	})
+	registerHealthRoutes(engine, db)
 	engine.Static("/uploads", "./uploads")
 	engine.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusFound, cfg.FrontendURL+"/login")
@@ -71,7 +70,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		apiLegacy.POST("/admin/auth/login", authCtl.AdminLogin)
 		apiLegacy.GET("/customer/stores/:id", merchantCtl.PublicStore)
 		apiLegacy.GET("/customer/store/:storeId/products", orderCtl.PublicStoreProducts)
-		apiLegacy.GET("/customer/store/:storeId/coupons", orderCtl.PublicStoreCoupons)
+		apiLegacy.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		apiLegacy.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		apiLegacy.POST("/customer/orders", orderCtl.CreateCustomerOrder)
 		apiLegacy.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
@@ -83,7 +82,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		apiLegacy.POST("/share/:code/scan", shareCtl.TrackShareScan)
 
 		merchantLegacy := apiLegacy.Group("/merchant")
-		merchantLegacy.Use(middleware.Auth(cfg, "merchant"))
+		merchantLegacy.Use(middleware.Auth(cfg, "merchant", db))
 		{
 			merchantLegacy.GET("/info", merchantCtl.Info)
 			merchantLegacy.GET("/check-subscription", merchantCtl.CheckSubscription)
@@ -115,6 +114,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				merchantProtected.PUT("/info", merchantCtl.UpdateInfo)
 				merchantProtected.GET("/payment-config", merchantCtl.PaymentConfig)
 				merchantProtected.PUT("/payment-config", merchantCtl.SavePaymentConfig)
+				merchantProtected.POST("/payment-qrcode/upload", merchantCtl.UploadPaymentQRCode)
 				merchantProtected.GET("/stores", merchantCtl.Stores)
 				merchantProtected.POST("/stores", merchantCtl.CreateStore)
 				merchantProtected.PUT("/stores/:id", merchantCtl.UpdateStore)
@@ -143,8 +143,19 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 
 		adminLegacy := apiLegacy.Group("/admin")
-		adminLegacy.Use(middleware.Auth(cfg, "admin"))
+		adminLegacy.Use(middleware.Auth(cfg, "admin", db), middleware.AdminAuthorization())
 		{
+			adminLegacy.GET("/auth/me", authCtl.AdminSession)
+			legacyAccess := adminLegacy.Group("/access")
+			{
+				legacyAccess.GET("/permissions", adminAccessCtl.Permissions)
+				legacyAccess.GET("/roles", adminAccessCtl.Roles)
+				legacyAccess.POST("/roles", adminAccessCtl.CreateRole)
+				legacyAccess.PUT("/roles/:id", adminAccessCtl.UpdateRole)
+				legacyAccess.GET("/admins", adminAccessCtl.Admins)
+				legacyAccess.POST("/admins", adminAccessCtl.CreateAdmin)
+				legacyAccess.PUT("/admins/:id", adminAccessCtl.UpdateAdmin)
+			}
 			adminLegacy.GET("/merchants", adminCtl.Merchants)
 			adminLegacy.GET("/merchants/:id", adminCtl.MerchantDetail)
 			adminLegacy.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
@@ -173,6 +184,12 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.GET("/merchants/:id/leads/stats", adminCtl.MerchantLeadStats)
 			adminLegacy.PUT("/merchants/:id/leads/:lead_id", adminCtl.UpdateMerchantLead)
 			adminLegacy.GET("/merchants/:id/ai/insights", adminCtl.MerchantAIInsights)
+			adminLegacy.GET("/customers", adminCtl.Customers)
+			adminLegacy.GET("/users", adminCtl.Users)
+			adminLegacy.GET("/orders", orderCtl.ListAll)
+			adminLegacy.GET("/payments", orderCtl.Payments)
+			adminLegacy.GET("/customers/export", adminCtl.ExportCustomerProfiles)
+			adminLegacy.GET("/orders/export", orderCtl.ExportAdminOrders)
 			adminLegacy.POST("/orders/:id/refund", orderCtl.RefundAdminOrder)
 			adminLegacy.POST("/orders/:id/confirm-subscription-payment", orderCtl.ConfirmMerchantSubscriptionPayment)
 			adminLegacy.POST("/orders/:id/review-historical-subscription", orderCtl.ManualReviewLegacyMerchantSubscription)
@@ -188,6 +205,8 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.GET("/ai-config/status", adminCtl.AIConfigStatus)
 			adminLegacy.POST("/ai-config/policy", adminCtl.SaveAIConfigPolicy)
 			adminLegacy.GET("/ai-usage/overview", adminCtl.AIUsageOverview)
+			adminLegacy.GET("/configs", adminCtl.Configs)
+			adminLegacy.POST("/configs", adminCtl.SaveConfigs)
 			adminLegacy.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 		}
 	}
@@ -212,7 +231,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		v1.POST("/payments/callback/alipay", orderCtl.PaymentCallback)
 		v1.GET("/customer/stores/:id", merchantCtl.PublicStore)
 		v1.GET("/customer/store/:storeId/products", orderCtl.PublicStoreProducts)
-		v1.GET("/customer/store/:storeId/coupons", orderCtl.PublicStoreCoupons)
+		v1.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		v1.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		v1.POST("/customer/orders", orderCtl.CreateCustomerOrder)
 		v1.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
@@ -228,7 +247,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 
 		userGroup := v1.Group("/user")
-		userGroup.Use(middleware.Auth(cfg, "user"))
+		userGroup.Use(middleware.Auth(cfg, "user", db))
 		{
 			userGroup.GET("/profile", userCtl.Profile)
 			userGroup.POST("/devices/bind", userCtl.BindDevice)
@@ -244,7 +263,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 
 		merchantGroup := v1.Group("/merchant")
-		merchantGroup.Use(middleware.Auth(cfg, "merchant"))
+		merchantGroup.Use(middleware.Auth(cfg, "merchant", db))
 		{
 			merchantGroup.GET("/info", merchantCtl.Info)
 			merchantGroup.GET("/check-subscription", merchantCtl.CheckSubscription)
@@ -276,6 +295,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				merchantProtected.PUT("/info", merchantCtl.UpdateInfo)
 				merchantProtected.GET("/payment-config", merchantCtl.PaymentConfig)
 				merchantProtected.PUT("/payment-config", merchantCtl.SavePaymentConfig)
+				merchantProtected.POST("/payment-qrcode/upload", merchantCtl.UploadPaymentQRCode)
 				merchantProtected.GET("/stores", merchantCtl.Stores)
 				merchantProtected.POST("/stores", merchantCtl.CreateStore)
 				merchantProtected.PUT("/stores/:id", merchantCtl.UpdateStore)
@@ -306,8 +326,19 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 
 		adminGroup := v1.Group("/admin")
-		adminGroup.Use(middleware.Auth(cfg, "admin"))
+		adminGroup.Use(middleware.Auth(cfg, "admin", db), middleware.AdminAuthorization())
 		{
+			adminGroup.GET("/auth/me", authCtl.AdminSession)
+			adminAccess := adminGroup.Group("/access")
+			{
+				adminAccess.GET("/permissions", adminAccessCtl.Permissions)
+				adminAccess.GET("/roles", adminAccessCtl.Roles)
+				adminAccess.POST("/roles", adminAccessCtl.CreateRole)
+				adminAccess.PUT("/roles/:id", adminAccessCtl.UpdateRole)
+				adminAccess.GET("/admins", adminAccessCtl.Admins)
+				adminAccess.POST("/admins", adminAccessCtl.CreateAdmin)
+				adminAccess.PUT("/admins/:id", adminAccessCtl.UpdateAdmin)
+			}
 			adminGroup.GET("/dashboard", adminCtl.Dashboard)
 			adminGroup.GET("/group-buy-links", platformGroupBuyCtl.List)
 			adminGroup.GET("/group-buy-links/:id", platformGroupBuyCtl.Detail)
@@ -351,6 +382,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.PUT("/merchants/:id/leads/:lead_id", adminCtl.UpdateMerchantLead)
 			adminGroup.GET("/merchants/:id/ai/insights", adminCtl.MerchantAIInsights)
 			adminGroup.GET("/customers", adminCtl.Customers)
+			adminGroup.GET("/customers/export", adminCtl.ExportCustomerProfiles)
 			adminGroup.GET("/users", adminCtl.Users)
 			adminGroup.PUT("/users/:id/status", adminCtl.UpdateUserStatus)
 			adminGroup.PUT("/users/:id/phone", adminCtl.UpdateUserPhone)
@@ -359,6 +391,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.POST("/packages", packageCtl.Save)
 			adminGroup.PUT("/packages/:id", packageCtl.Save)
 			adminGroup.GET("/orders", orderCtl.ListAll)
+			adminGroup.GET("/orders/export", orderCtl.ExportAdminOrders)
 			adminGroup.GET("/payments", orderCtl.Payments)
 			adminGroup.POST("/orders/:id/refund", orderCtl.RefundAdminOrder)
 			adminGroup.POST("/orders/:id/confirm-subscription-payment", orderCtl.ConfirmMerchantSubscriptionPayment)

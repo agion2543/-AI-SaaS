@@ -30,6 +30,28 @@ func TestGroupBuyRedirectSkipsIPAccessLog(t *testing.T) {
 	}
 }
 
+func TestLoggerDoesNotLogRawQueryString(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousWriter := gin.DefaultWriter
+	var output bytes.Buffer
+	gin.DefaultWriter = &output
+	t.Cleanup(func() { gin.DefaultWriter = previousWriter })
+
+	engine := gin.New()
+	engine.Use(Logger())
+	engine.GET("/api/v1/customer/store/:storeId/coupons", func(c *gin.Context) { c.Status(http.StatusNotFound) })
+	phone := "13800138000"
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/customer/store/"+phone+"/coupons?phone="+phone, nil)
+	engine.ServeHTTP(httptest.NewRecorder(), request)
+
+	if strings.Contains(output.String(), phone) || strings.Contains(output.String(), "?phone=") {
+		t.Fatalf("access log must not include query parameters: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "/api/v1/customer/store/:storeId/coupons") {
+		t.Fatalf("access log should retain only the route template: %q", output.String())
+	}
+}
+
 func TestGroupBuyRedirectRateLimitIsPerEntryNotIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()

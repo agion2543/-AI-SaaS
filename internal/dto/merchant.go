@@ -64,15 +64,24 @@ type UpdateStoreRequest struct {
 }
 
 type SaveStoreProductRequest struct {
-	StoreID     uint   `json:"store_id" binding:"required"`
-	Name        string `json:"name" binding:"required"`
-	Price       int64  `json:"price" binding:"gte=0"`
-	Description string `json:"description"`
-	ImageURL    string `json:"image_url"`
-	Category    string `json:"category"`
-	Status      string `json:"status" binding:"omitempty,oneof=active inactive"`
-	Stock       *int   `json:"stock" binding:"omitempty,gte=0"`
-	Sort        int    `json:"sort"`
+	StoreID              uint                            `json:"store_id" binding:"required"`
+	Name                 string                          `json:"name" binding:"required"`
+	Price                int64                           `json:"price" binding:"gte=0"`
+	Description          string                          `json:"description"`
+	ImageURL             string                          `json:"image_url"`
+	Category             string                          `json:"category"`
+	Status               string                          `json:"status" binding:"omitempty,oneof=active inactive"`
+	Stock                *int                            `json:"stock" binding:"omitempty,gte=0"`
+	Sort                 int                             `json:"sort"`
+	SalesUnit            *string                         `json:"sales_unit"`
+	Specification        *string                         `json:"specification"`
+	MinimumOrderQuantity *int                            `json:"minimum_order_quantity"`
+	PriceTiers           *[]StoreProductPriceTierRequest `json:"price_tiers"`
+}
+
+type StoreProductPriceTierRequest struct {
+	MinQuantity int   `json:"min_quantity"`
+	Price       int64 `json:"price"`
 }
 
 type CreateCustomerLeadRequest struct {

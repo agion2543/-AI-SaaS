@@ -47,9 +47,9 @@
       <van-cell-group inset title="商品明细">
         <van-cell
           v-for="item in order.items"
-          :key="item.id"
+          :key="item.product_id"
           :title="item.product_name"
-          :label="`¥${formatPrice(item.price)} x ${item.quantity}`"
+          :label="orderItemLabel(item)"
         >
           <template #value>
             <span class="item-price">¥{{ formatPrice(item.price * item.quantity) }}</span>
@@ -249,6 +249,17 @@ const statusDesc = computed(() => {
 // 方法
 function formatPrice(price) {
   return (Number(price ?? 0) / 100).toFixed(2)
+}
+
+function orderItemLabel(item) {
+  const unit = item.sales_unit ? `/${item.sales_unit}` : ''
+  const quantityUnit = item.sales_unit ? ` ${item.sales_unit}` : ''
+  const details = []
+  if (item.specification) details.push(item.specification)
+  if (Number(item.minimum_order_quantity || 1) > 1) details.push(`下单时最低 ${item.minimum_order_quantity}${item.sales_unit || '件'}`)
+  if (Number(item.applied_tier_min_quantity || 0) > 0) details.push(`应用 ${item.applied_tier_min_quantity}${item.sales_unit || '件'}档`)
+  details.push(`¥${formatPrice(item.price)}${unit} × ${item.quantity}${quantityUnit}`)
+  return details.join(' · ')
 }
 
 function formatTime(time) {

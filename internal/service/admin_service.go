@@ -323,6 +323,7 @@ func (s *AdminService) ListMerchantCustomerProfiles(merchantID uint, limit int) 
 	}
 	for i := range rows {
 		rows[i].AITag, rows[i].AISuggestion = buildCustomerInsight(rows[i])
+		rows[i].CustomerPhone = utils.MaskPhone(rows[i].CustomerPhone)
 	}
 	return rows, nil
 }
@@ -464,7 +465,7 @@ func (s *AdminService) ListMerchantPlans() ([]model.MerchantPlan, error) {
 	return s.plans.List()
 }
 
-func (s *AdminService) SaveMerchantPlan(id uint, req dto.SaveMerchantPlanRequest) (*model.MerchantPlan, error) {
+func (s *AdminService) SaveMerchantPlan(id uint, req dto.SaveMerchantPlanRequest, actor AuditActor) (*model.MerchantPlan, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return nil, errors.New("套餐名称不能为空")
@@ -476,22 +477,38 @@ func (s *AdminService) SaveMerchantPlan(id uint, req dto.SaveMerchantPlanRequest
 		return nil, errors.New("套餐周期必须大于 0 天")
 	}
 
-	plan := &model.MerchantPlan{}
-	var err error
-	if id > 0 {
-		plan, err = s.plans.FindByID(id)
-		if err != nil {
-			return nil, err
+	var saved model.MerchantPlan
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		plan := &model.MerchantPlan{}
+		var before *merchantPlanAuditSnapshot
+		if id > 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(plan, id).Error; err != nil {
+				return err
+			}
+			previous := merchantPlanSnapshot(*plan)
+			before = &previous
 		}
-	}
-	plan.Name = name
-	plan.PriceCents = req.PriceCents
-	plan.DurationDays = req.DurationDays
-	plan.Sort = req.Sort
-	if err := s.plans.Save(plan); err != nil {
+		plan.Name = name
+		plan.PriceCents = req.PriceCents
+		plan.DurationDays = req.DurationDays
+		plan.Sort = req.Sort
+		if err := tx.Save(plan).Error; err != nil {
+			return err
+		}
+		action := "merchant_plan_create"
+		if id > 0 {
+			action = "merchant_plan_update"
+		}
+		if err := appendPlanPackageAuditTx(tx, actor, action, "merchant_plan", plan.ID, before, merchantPlanSnapshot(*plan)); err != nil {
+			return err
+		}
+		saved = *plan
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return plan, nil
+	return &saved, nil
 }
 
 func (s *AdminService) UpdateMerchantStatus(id uint, status string, audit ...AuditEvent) error {
@@ -543,7 +560,7 @@ func (s *AdminService) ListAllMerchantFollowUps(status, priority string) ([]mode
 	return rows, nil
 }
 
-func (s *AdminService) CreateMerchantFollowUp(merchantID, operatorID uint, operatorRole string, req dto.CreateMerchantFollowUpRequest) (*model.MerchantFollowUp, error) {
+func (s *AdminService) CreateMerchantFollowUp(merchantID, operatorID uint, operatorRole string, req dto.CreateMerchantFollowUpRequest, audit AuditEvent) (*model.MerchantFollowUp, error) {
 	if _, err := s.merchants.FindByID(merchantID); err != nil {
 		return nil, err
 	}
@@ -588,19 +605,39 @@ func (s *AdminService) CreateMerchantFollowUp(merchantID, operatorID uint, opera
 		OperatorID:   operatorID,
 		OperatorRole: strings.TrimSpace(operatorRole),
 	}
-	if err := s.db.Create(row).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		event := audit
+		event.Input.TargetType = "merchant_follow_up"
+		event.Input.TargetID = row.ID
+		event.Input.MerchantID = &row.MerchantID
+		return AppendAuditTx(tx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return row, nil
 }
 
-func (s *AdminService) UpdateMerchantFollowUpStatus(id uint, status string) (*model.MerchantFollowUp, error) {
+func (s *AdminService) UpdateMerchantFollowUpStatus(id uint, status string, audit AuditEvent) (*model.MerchantFollowUp, error) {
 	var row model.MerchantFollowUp
-	if err := s.db.First(&row, id).Error; err != nil {
-		return nil, err
-	}
-	row.Status = status
-	if err := s.db.Save(&row).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&row, id).Error; err != nil {
+			return err
+		}
+		row.Status = status
+		if err := tx.Save(&row).Error; err != nil {
+			return err
+		}
+		event := audit
+		event.Input.TargetType = "merchant_follow_up"
+		event.Input.TargetID = row.ID
+		event.Input.MerchantID = &row.MerchantID
+		return AppendAuditTx(tx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &row, nil
@@ -1356,7 +1393,7 @@ func (s *AdminService) hotProducts(merchantID uint, desc bool) []map[string]inte
 	return rows
 }
 
-func (s *AdminService) UpdateMerchantLead(merchantID, leadID uint, req dto.UpdateCustomerLeadRequest) (*model.CustomerLead, error) {
+func (s *AdminService) UpdateMerchantLead(merchantID, leadID uint, req dto.UpdateCustomerLeadRequest, audit AuditEvent) (*model.CustomerLead, error) {
 	status := strings.TrimSpace(req.Status)
 	note := strings.TrimSpace(req.FollowUpNote)
 	if status != "new" && status != "contacted" && status != "converted" && status != "invalid" {
@@ -1366,19 +1403,37 @@ func (s *AdminService) UpdateMerchantLead(merchantID, leadID uint, req dto.Updat
 		return nil, errors.New("\u8ddf\u8fdb\u5907\u6ce8\u4e0d\u80fd\u8d85\u8fc7 500 \u5b57")
 	}
 
-	lead, err := s.leads.FindByMerchantAndID(merchantID, leadID)
+	var updated model.CustomerLead
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		lead, err := repository.NewCustomerLeadRepository(tx).FindByMerchantAndID(merchantID, leadID)
+		if err != nil {
+			return errors.New("线索不存在")
+		}
+		lead.Status = status
+		lead.FollowUpNote = note
+		if err := tx.Save(lead).Error; err != nil {
+			return err
+		}
+
+		audit.Input.Action = "admin_customer_lead_update"
+		audit.Input.TargetType = "merchant_customer_lead"
+		audit.Input.TargetID = lead.ID
+		audit.Input.TargetName = ""
+		audit.Input.MerchantID = &lead.MerchantID
+		audit.Input.Detail = nil
+		if err := AppendAuditTx(tx, audit); err != nil {
+			return fmt.Errorf("persist customer lead update audit: %w", err)
+		}
+		updated = *lead
+		return nil
+	})
 	if err != nil {
-		return nil, errors.New("\u7ebf\u7d22\u4e0d\u5b58\u5728")
-	}
-	lead.Status = status
-	lead.FollowUpNote = note
-	if err := s.leads.Save(lead); err != nil {
 		return nil, err
 	}
-	return lead, nil
+	return &updated, nil
 }
 
-func (s *AdminService) SaveMerchantStore(merchantID, storeID uint, req dto.AdminSaveStoreRequest) (*model.Store, error) {
+func (s *AdminService) SaveMerchantStore(merchantID, storeID uint, req dto.AdminSaveStoreRequest, audit AuditEvent) (*model.Store, error) {
 	name := strings.TrimSpace(req.Name)
 	address := strings.TrimSpace(req.Address)
 	phone := strings.TrimSpace(req.ContactPhone)
@@ -1402,67 +1457,96 @@ func (s *AdminService) SaveMerchantStore(merchantID, storeID uint, req dto.Admin
 	if status != "active" && status != "inactive" {
 		return nil, errors.New("门店状态无效")
 	}
-	if _, err := s.merchants.FindByID(merchantID); err != nil {
-		return nil, errors.New("商家不存在")
-	}
-
-	if storeID == 0 {
-		if _, err := s.stores.FindByMerchantAndName(merchantID, name); err == nil {
-			return nil, errors.New("同一商家下门店名称不能重复")
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
+	var saved *model.Store
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if _, err := repository.NewMerchantRepository(tx).FindByID(merchantID); err != nil {
+			return errors.New("商家不存在")
 		}
-
-		store := &model.Store{
-			MerchantID:    merchantID,
-			Name:          name,
-			Address:       address,
-			ContactPhone:  phone,
-			Status:        status,
-			IsOpen:        isOpen,
-			BusinessHours: businessHours,
-			PauseReason:   pauseReason,
+		stores := repository.NewStoreRepository(tx)
+		if storeID == 0 {
+			if _, err := stores.FindByMerchantAndName(merchantID, name); err == nil {
+				return errors.New("同一商家下门店名称不能重复")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			saved = &model.Store{
+				MerchantID:    merchantID,
+				Name:          name,
+				Address:       address,
+				ContactPhone:  phone,
+				Status:        status,
+				IsOpen:        isOpen,
+				BusinessHours: businessHours,
+				PauseReason:   pauseReason,
+			}
+			if err := stores.Create(saved); err != nil {
+				return err
+			}
+			audit.Input.Action = "admin_merchant_store_create"
+		} else {
+			store, err := stores.FindByMerchantAndID(merchantID, storeID)
+			if err != nil {
+				return errors.New("门店不存在")
+			}
+			if store.Name != name {
+				if existing, err := stores.FindByMerchantAndName(merchantID, name); err == nil && existing.ID != storeID {
+					return errors.New("同一商家下门店名称不能重复")
+				} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+			}
+			store.Name = name
+			store.Address = address
+			store.ContactPhone = phone
+			store.Status = status
+			store.BusinessHours = businessHours
+			store.PauseReason = pauseReason
+			if req.IsOpen != nil {
+				store.IsOpen = *req.IsOpen
+			}
+			if err := stores.Save(store); err != nil {
+				return err
+			}
+			saved = store
+			audit.Input.Action = "admin_merchant_store_update"
 		}
-		if err := s.stores.Create(store); err != nil {
-			return nil, err
+		audit.Input.TargetType = "merchant_store"
+		audit.Input.TargetID = saved.ID
+		audit.Input.TargetName = ""
+		audit.Input.MerchantID = &merchantID
+		audit.Input.Detail = nil
+		if err := AppendAuditTx(tx, audit); err != nil {
+			return fmt.Errorf("persist merchant store audit: %w", err)
 		}
-		return store, nil
-	}
-
-	store, err := s.stores.FindByMerchantAndID(merchantID, storeID)
+		return nil
+	})
 	if err != nil {
-		return nil, errors.New("门店不存在")
-	}
-	if store.Name != name {
-		if existing, err := s.stores.FindByMerchantAndName(merchantID, name); err == nil && existing.ID != storeID {
-			return nil, errors.New("同一商家下门店名称不能重复")
-		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
-	}
-
-	store.Name = name
-	store.Address = address
-	store.ContactPhone = phone
-	store.Status = status
-	store.BusinessHours = businessHours
-	store.PauseReason = pauseReason
-	if req.IsOpen != nil {
-		store.IsOpen = *req.IsOpen
-	}
-	if err := s.stores.Save(store); err != nil {
 		return nil, err
 	}
-	return store, nil
+	return saved, nil
 }
 
-func (s *AdminService) DisableMerchantStore(merchantID, storeID uint) error {
-	store, err := s.stores.FindByMerchantAndID(merchantID, storeID)
-	if err != nil {
-		return errors.New("门店不存在")
-	}
-	store.Status = "inactive"
-	return s.stores.Save(store)
+func (s *AdminService) DisableMerchantStore(merchantID, storeID uint, audit AuditEvent) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		store, err := repository.NewStoreRepository(tx).FindByMerchantAndID(merchantID, storeID)
+		if err != nil {
+			return errors.New("门店不存在")
+		}
+		store.Status = "inactive"
+		if err := tx.Save(store).Error; err != nil {
+			return err
+		}
+		audit.Input.Action = "admin_merchant_store_disable"
+		audit.Input.TargetType = "merchant_store"
+		audit.Input.TargetID = store.ID
+		audit.Input.TargetName = ""
+		audit.Input.MerchantID = &merchantID
+		audit.Input.Detail = nil
+		if err := AppendAuditTx(tx, audit); err != nil {
+			return fmt.Errorf("persist merchant store audit: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *AdminService) UpdateUserStatus(id uint, status string, audit ...AuditEvent) error {
@@ -1568,80 +1652,114 @@ func (s *AdminService) AdjustUserMember(id uint, req dto.ManualOpenMemberRequest
 	return &user, nil
 }
 
-func (s *AdminService) UpdateUserPhone(id uint, phone string) error {
+func (s *AdminService) UpdateUserPhone(id uint, phone string, audit AuditEvent) error {
 	phone = strings.TrimSpace(phone)
 	if !isValidAdminManagedPhone(phone) {
 		return errors.New("phone must be 11 digits")
 	}
 
-	user, err := s.users.FindByID(id)
-	if err != nil {
-		return err
-	}
-
-	if user.Phone != phone {
-		existing, err := s.users.FindByPhone(phone)
-		if err == nil && existing.ID != id {
-			return errors.New("phone already in use")
-		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.First(&user, id).Error; err != nil {
 			return err
 		}
-	}
 
-	user.Phone = phone
-	return s.users.Save(user)
+		if user.Phone != phone {
+			var existing model.User
+			err := tx.Where("phone = ?", phone).First(&existing).Error
+			if err == nil && existing.ID != id {
+				return errors.New("phone already in use")
+			}
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		user.Phone = phone
+		if err := tx.Save(&user).Error; err != nil {
+			return err
+		}
+
+		audit.Input.Action = "user_phone_update"
+		audit.Input.TargetType = "user"
+		audit.Input.TargetID = user.ID
+		audit.Input.TargetName = ""
+		audit.Input.MerchantID = nil
+		audit.Input.Detail = nil
+		return AppendAuditTx(tx, audit)
+	})
 }
 
-func (s *AdminService) GenerateCards(req dto.BatchCardRequest) ([]model.CardCode, error) {
-	pkg, err := s.packages.FindByID(req.PackageID)
+func (s *AdminService) GenerateCards(req dto.BatchCardRequest, actor AuditActor) ([]model.CardCode, error) {
+	var cards []model.CardCode
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		pkg, err := repository.NewPackageRepository(tx).FindByID(req.PackageID)
+		if err != nil {
+			return err
+		}
+
+		cards = make([]model.CardCode, 0, req.Count)
+		batchNo := time.Now().Format("20060102150405")
+		for i := 0; i < req.Count; i++ {
+			random := make([]byte, 8)
+			_, _ = rand.Read(random)
+			cards = append(cards, model.CardCode{
+				BatchNo:   "BATCH" + batchNo,
+				Code:      "CARD-" + hex.EncodeToString(random),
+				PackageID: pkg.ID,
+				Quota:     req.Quota,
+				Status:    "unused",
+			})
+		}
+
+		if err := repository.NewCardRepository(tx).CreateBatch(cards); err != nil {
+			return err
+		}
+		return appendCardBatchAuditTx(tx, actor, *pkg, req.Count, req.Quota)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	cards := make([]model.CardCode, 0, req.Count)
-	batchNo := time.Now().Format("20060102150405")
-	for i := 0; i < req.Count; i++ {
-		random := make([]byte, 8)
-		_, _ = rand.Read(random)
-		cards = append(cards, model.CardCode{
-			BatchNo:   "BATCH" + batchNo,
-			Code:      "CARD-" + hex.EncodeToString(random),
-			PackageID: pkg.ID,
-			Quota:     req.Quota,
-			Status:    "unused",
-		})
-	}
-
-	return cards, s.cards.CreateBatch(cards)
+	return cards, nil
 }
 
-func (s *AdminService) SaveSystemConfig(req dto.SaveSystemConfigRequest) error {
-	if err := s.systems.Upsert("site_name", req.SiteName, false); err != nil {
-		return err
+func (s *AdminService) SaveSystemConfig(req dto.SaveSystemConfigRequest, actor AuditActor) error {
+	if s == nil || s.db == nil {
+		return errors.New("system config database is unavailable")
 	}
-
+	if s.cfg == nil {
+		return errors.New("system config encryption is unavailable")
+	}
 	encrypted, err := utils.EncryptString(s.cfg.AESSecret, req.PaymentGateway)
 	if err != nil {
 		return err
 	}
-
-	if err := s.systems.Upsert("payment_gateway", encrypted, true); err != nil {
-		return err
+	values := []struct {
+		key       string
+		value     string
+		encrypted bool
+	}{
+		{key: "site_name", value: req.SiteName},
+		{key: "payment_gateway", value: encrypted, encrypted: true},
+		{key: "platform_alipay_qr_code", value: strings.TrimSpace(req.PlatformAlipayQRCode)},
+		{key: "platform_wechat_qr_code", value: strings.TrimSpace(req.PlatformWechatQRCode)},
+		{key: "platform_subscription_note", value: strings.TrimSpace(req.PlatformSubscriptionNote)},
+		{key: "filing_info", value: req.FilingInfo},
+		{key: "notice", value: req.Notice},
 	}
-	if err := s.systems.Upsert("platform_alipay_qr_code", strings.TrimSpace(req.PlatformAlipayQRCode), false); err != nil {
-		return err
+	keys := make([]string, 0, len(values))
+	for _, item := range values {
+		keys = append(keys, item.key)
 	}
-	if err := s.systems.Upsert("platform_wechat_qr_code", strings.TrimSpace(req.PlatformWechatQRCode), false); err != nil {
-		return err
-	}
-	if err := s.systems.Upsert("platform_subscription_note", strings.TrimSpace(req.PlatformSubscriptionNote), false); err != nil {
-		return err
-	}
-	if err := s.systems.Upsert("filing_info", req.FilingInfo, false); err != nil {
-		return err
-	}
-	return s.systems.Upsert("notice", req.Notice, false)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		systems := repository.NewSystemRepository(tx)
+		for _, item := range values {
+			if err := systems.Upsert(item.key, item.value, item.encrypted); err != nil {
+				return err
+			}
+		}
+		return appendSystemConfigAuditTx(tx, actor, "platform_system_config_update", "平台系统配置更新", keys)
+	})
 }
 
 func (s *AdminService) ListCards() ([]model.CardCode, error) {
@@ -1666,7 +1784,7 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 	return list, nil
 }
 
-func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest) (AIConfigPolicy, error) {
+func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest, actor AuditActor) (AIConfigPolicy, error) {
 	if req.Enabled {
 		return AIConfigPolicy{}, errors.New("AI provider 尚未接入，当前不能启用 AI 经营功能")
 	}
@@ -1706,21 +1824,37 @@ func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest) (AI
 	}
 	remark := trimRunes(strings.TrimSpace(req.Remark), 300)
 
-	values := map[string]string{
-		"ai_policy_provider":                   provider,
-		"ai_policy_base_url":                   baseURL,
-		"ai_policy_model":                      modelName,
-		"ai_policy_enabled":                    strconv.FormatBool(req.Enabled),
-		"ai_policy_daily_quota_per_merchant":   strconv.Itoa(quota),
-		"ai_policy_daily_cost_limit_cents":     strconv.FormatInt(costLimit, 10),
-		"ai_policy_failure_rate_alert_percent": strconv.Itoa(alertRate),
-		"ai_policy_timeout_seconds":            strconv.Itoa(timeoutSeconds),
-		"ai_policy_remark":                     remark,
+	values := []struct {
+		key   string
+		value string
+	}{
+		{key: "ai_policy_provider", value: provider},
+		{key: "ai_policy_base_url", value: baseURL},
+		{key: "ai_policy_model", value: modelName},
+		{key: "ai_policy_enabled", value: strconv.FormatBool(req.Enabled)},
+		{key: "ai_policy_daily_quota_per_merchant", value: strconv.Itoa(quota)},
+		{key: "ai_policy_daily_cost_limit_cents", value: strconv.FormatInt(costLimit, 10)},
+		{key: "ai_policy_failure_rate_alert_percent", value: strconv.Itoa(alertRate)},
+		{key: "ai_policy_timeout_seconds", value: strconv.Itoa(timeoutSeconds)},
+		{key: "ai_policy_remark", value: remark},
 	}
-	for key, value := range values {
-		if err := s.systems.Upsert(key, value, false); err != nil {
-			return AIConfigPolicy{}, err
+	keys := make([]string, 0, len(values))
+	for _, item := range values {
+		keys = append(keys, item.key)
+	}
+	if s == nil || s.db == nil {
+		return AIConfigPolicy{}, errors.New("AI policy database is unavailable")
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		systems := repository.NewSystemRepository(tx)
+		for _, item := range values {
+			if err := systems.Upsert(item.key, item.value, false); err != nil {
+				return err
+			}
 		}
+		return appendSystemConfigAuditTx(tx, actor, "ai_config_policy_update", "AI 策略配置更新", keys)
+	}); err != nil {
+		return AIConfigPolicy{}, err
 	}
 	return AIConfigPolicy{
 		Provider:                provider,
@@ -1733,6 +1867,31 @@ func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest) (AI
 		TimeoutSeconds:          timeoutSeconds,
 		Remark:                  remark,
 	}, nil
+}
+
+func appendSystemConfigAuditTx(tx *gorm.DB, actor AuditActor, action, purpose string, keys []string) error {
+	if tx == nil {
+		return errors.New("system config audit transaction is unavailable")
+	}
+	actorType := strings.TrimSpace(actor.Type)
+	if actorType == "" {
+		actorType = "unknown"
+	}
+	detail, err := json.Marshal(struct {
+		Purpose      string   `json:"purpose"`
+		UpdatedKeys  []string `json:"updated_keys"`
+		UpdatedCount int      `json:"updated_count"`
+	}{Purpose: purpose, UpdatedKeys: keys, UpdatedCount: len(keys)})
+	if err != nil {
+		return err
+	}
+	return tx.Create(&model.AuditLog{
+		ActorID:    actor.ID,
+		ActorType:  actorType,
+		Action:     action,
+		TargetType: "platform_system_config",
+		Detail:     string(detail),
+	}).Error
 }
 
 func (s *AdminService) SecurityCheck() SecurityCheckReport {
@@ -2130,20 +2289,22 @@ func (s *AdminService) deploymentReadinessHealthBlock() OperationHealthBlock {
 		configWarnings++
 	}
 	migrationFiles := countMigrationFiles()
-	backupScripts := boolToCount(fileExists("scripts/backup-mysql.ps1") && fileExists("scripts/backup-mysql.sh"))
-	status := healthStatus(configWarnings, boolToCount(backupScripts == 0))
+	backupScriptFiles := boolToCount(fileExists("scripts/backup-mysql.ps1")) + boolToCount(fileExists("scripts/backup-mysql.sh"))
+	status := healthStatus(configWarnings, 1)
 	return OperationHealthBlock{
 		Key:        "deployment",
 		Title:      "部署与迁移准备",
 		Status:     status,
-		Summary:    fmt.Sprintf("生产配置风险 %d 项，迁移 SQL %d 个，备份脚本状态 %d。", configWarnings, migrationFiles, backupScripts),
-		Suggestion: "上线前按 docs/production-runbook.md 确认环境变量、迁移顺序、备份任务和回滚流程；后续建议接入专门迁移工具。",
+		Summary:    fmt.Sprintf("生产配置风险 %d 项，迁移 SQL %d 个；系统未记录备份执行与恢复演练证据。", configWarnings, migrationFiles),
+		Suggestion: "上线前在部署环境独立确认备份任务、最近成功备份、校验和隔离恢复；当前系统不采集这些记录，仓库脚本文件不构成成功证据。",
 		ActionText: "查看配置检查",
 		ActionPath: "/admin/system",
 		Metrics: []OperationHealthMetric{
 			healthMetric("配置风险", configWarnings, "APP_ENV、域名或密钥仍偏开发态", dangerIfPositive(configWarnings)),
 			healthMetric("迁移文件", migrationFiles, "sql/migrations 与 migrations 下的升级脚本", "pass"),
-			healthMetric("备份脚本", backupScripts, "1 表示 Windows/Linux 脚本齐全", dangerIfZero(backupScripts)),
+			healthMetric("仓库脚本文件", backupScriptFiles, "Windows/Linux 脚本文件数；仅表示代码文件存在，不表示任务已配置或运行", "warning"),
+			healthMetric("备份执行证据", 0, "系统未采集成功时间、文件校验或备份位置；不能据此判断部署环境是否已有备份", "warning"),
+			healthMetric("恢复演练证据", 0, "系统未采集恢复验证记录；当前无法确认备份可恢复", "warning"),
 		},
 	}
 }
@@ -2158,12 +2319,9 @@ func (s *AdminService) checkAdminPassword() SecurityCheckItem {
 	if err != nil {
 		return securityItem("admin_password", "管理员密码", "warning", fmt.Sprintf("未找到初始化管理员账号 %s。", username), "确认生产环境至少存在一个独立管理员账号，并妥善保管密码。")
 	}
-	if utils.CheckPassword(admin.PasswordHash, "Admin@123456") {
-		return securityItem("admin_password", "默认管理员密码", "danger", "默认管理员密码仍为 Admin@123456。", "上线前必须修改 admin 密码，避免被扫描登录。")
-	}
 	initialPassword := strings.TrimSpace(s.cfg.InitialAdminPass)
 	if initialPassword == "" {
-		initialPassword = "SaasAdmin@2026!"
+		return securityItem("admin_password", "管理员密码", "warning", "未配置初始管理员密码，无法与现有账号密码进行对照。", "确认已有管理员使用独立强密码；新数据库首次创建管理员时须显式配置 INITIAL_ADMIN_PASSWORD。")
 	}
 	if utils.CheckPassword(admin.PasswordHash, initialPassword) {
 		status := "warning"
@@ -2228,12 +2386,7 @@ func (s *AdminService) checkAIConfig() SecurityCheckItem {
 }
 
 func (s *AdminService) checkBackupScripts() SecurityCheckItem {
-	windowsOK := fileExists("scripts/backup-mysql.ps1")
-	linuxOK := fileExists("scripts/backup-mysql.sh")
-	if windowsOK && linuxOK {
-		return securityItem("backup", "数据库备份脚本", "pass", "已提供 Windows 和 Linux 数据库备份脚本。", "上线后配置 Windows 计划任务或 Linux cron 定时执行。")
-	}
-	return securityItem("backup", "数据库备份脚本", "warning", "数据库备份脚本不完整。", "补齐备份脚本，并定期演练恢复。")
+	return securityItem("backup", "数据库备份证据", "warning", "系统未记录计划任务配置、备份成功时间、文件校验或恢复演练；脚本文件存在不代表已配置、已执行或可恢复。", "在实际部署环境独立核实备份任务、备份产物与隔离恢复；当前系统不读取外部计划任务，也不执行或记录备份/恢复。")
 }
 
 func (s *AdminService) checkRateLimit() SecurityCheckItem {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-web-gin-health/internal/adminaccess"
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
 	"go-web-gin-health/internal/service"
@@ -171,7 +172,37 @@ func (ctl *AuthController) AdminLogin(c *gin.Context) {
 		return
 	}
 
-	utils.Success(c, gin.H{"admin": admin, "token": token})
+	utils.Success(c, gin.H{"admin": sanitizeAdmin(admin), "token": token})
+}
+
+func (ctl *AuthController) AdminSession(c *gin.Context) {
+	admin, ok := c.Get("admin_user")
+	if !ok {
+		utils.Error(c, http.StatusUnauthorized, "invalid token")
+		return
+	}
+	current, ok := admin.(*model.AdminUser)
+	if !ok || current == nil {
+		utils.Error(c, http.StatusUnauthorized, "invalid token")
+		return
+	}
+	utils.Success(c, gin.H{"admin": sanitizeAdmin(current)})
+}
+
+func sanitizeAdmin(admin *model.AdminUser) gin.H {
+	return gin.H{
+		"id":           admin.ID,
+		"username":     admin.Username,
+		"display_name": admin.DisplayName,
+		"status":       admin.Status,
+		"role_id":      admin.RoleID,
+		"role": gin.H{
+			"id":          admin.Role.ID,
+			"name":        admin.Role.Name,
+			"code":        admin.Role.Code,
+			"permissions": adminaccess.ParsePermissions(admin.Role.Permissions),
+		},
+	}
 }
 
 func sanitizeAuthUser(user *model.User) gin.H {

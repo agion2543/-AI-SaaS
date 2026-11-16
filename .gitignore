@@ -12,6 +12,7 @@ dist/
 mysql-data/
 mysql-run/
 uploads/
+var/platform-payment-staging/
 outputs/
 .github-upload-tmp/
 github-upload-source-*.zip

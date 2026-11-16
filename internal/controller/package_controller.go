@@ -45,7 +45,7 @@ func (ctl *PackageController) Save(c *gin.Context) {
 	}
 
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	pkg, err := ctl.service.Save(uint(id), req)
+	pkg, err := ctl.service.Save(uint(id), req, service.AuditActorFromContext(c))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return

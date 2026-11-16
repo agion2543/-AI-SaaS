@@ -35,7 +35,13 @@
       <van-cell-group inset title="订单信息">
         <van-cell title="订单编号" :value="order.order_no" />
         <van-cell title="下单时间" :value="formatTime(order.created_at)" />
-        <van-cell title="门店" :value="order.store_name || '-'" />
+        <van-cell title="门店" :value="order.store?.name || '-'" />
+        <van-cell
+          title="顾客电话"
+          :value="order.customer_phone || '未留手机号'"
+          :is-link="Boolean(order.customer_phone)"
+          @click="callCustomer"
+        />
         <van-cell v-if="order.payment_channel || order.pay_type" title="支付方式" :value="getPayTypeText(order.payment_channel || order.pay_type)" />
         <van-cell v-if="order.paid_at" title="支付时间" :value="formatTime(order.paid_at)" />
       </van-cell-group>
@@ -49,11 +55,14 @@
           <template #title>
             <div class="product-info">
               <span class="product-name">{{ item.product_name || item.name }}</span>
-              <span class="product-price">¥{{ formatPrice(item.price) }}</span>
+              <span class="product-price">¥{{ formatPrice(item.price) }}<span v-if="item.sales_unit"> / {{ item.sales_unit }}</span></span>
             </div>
           </template>
           <template #label>
-            <span class="product-quantity">x{{ item.quantity }}</span>
+            <span class="product-quantity">x{{ item.quantity }}{{ item.sales_unit ? ` ${item.sales_unit}` : '' }}</span>
+            <span v-if="item.specification" class="product-snapshot">规格: {{ item.specification }}</span>
+            <span v-if="item.minimum_order_quantity > 1" class="product-snapshot">下单时最低 {{ item.minimum_order_quantity }}{{ item.sales_unit || '件' }}</span>
+            <span v-if="item.applied_tier_min_quantity > 0" class="product-snapshot">实际按 {{ item.applied_tier_min_quantity }}{{ item.sales_unit || '件' }}档计价</span>
             <span class="product-subtotal">小计: ¥{{ formatPrice(item.price * item.quantity) }}</span>
           </template>
         </van-cell>
@@ -76,17 +85,11 @@
       </van-cell-group>
 
       <!-- 备注信息 -->
-      <van-cell-group v-if="order.remark" inset title="备注">
+      <van-cell-group v-if="order.customer_note" inset title="顾客备注">
         <van-cell>
           <van-icon name="comment-o" />
-          {{ order.remark }}
+          {{ order.customer_note }}
         </van-cell>
-      </van-cell-group>
-
-      <!-- 用户信息 -->
-      <van-cell-group v-if="order.customer" inset title="用户信息">
-        <van-cell title="用户ID" :value="order.customer.id || '-'" />
-        <van-cell v-if="order.customer.nickname" title="昵称" :value="order.customer.nickname" />
       </van-cell-group>
 
       <!-- 操作按钮 -->
@@ -218,7 +221,7 @@ const refundReason = ref('')
 const refundIdempotencyKey = ref('')
 const refundIdempotencyPayload = ref('')
 const isConfirmedPaid = computed(() => Boolean(order.value?.paid_at) && Number(order.value?.total_amount ?? order.value?.amount ?? 0) > 0)
-const canRefund = computed(() => order.value?.refund_status !== 'processing' && isConfirmedPaid.value && order.value?.payment_channel === 'alipay' && Boolean(order.value?.transaction_no) && Number(order.value?.refunded_amount || 0) < Number(order.value?.total_amount ?? order.value?.amount ?? 0))
+const canRefund = computed(() => Boolean(order.value?.can_refund))
 
 const statusClass = computed(() => {
   const map = {
@@ -295,6 +298,11 @@ async function loadOrder() {
   } finally {
     loading.value = false
   }
+}
+
+function callCustomer() {
+  if (!order.value?.customer_phone) return
+  window.location.href = `tel:${order.value.customer_phone}`
 }
 
 async function acceptOrder() {
@@ -468,6 +476,12 @@ onMounted(() => {
 .product-quantity {
   margin-right: 12px;
   color: #666;
+}
+
+.product-snapshot {
+  display: block;
+  margin-top: 4px;
+  color: #806217;
 }
 
 .product-subtotal {

@@ -76,6 +76,43 @@ func (s *AuditService) Record(c *gin.Context, input AuditRecordInput) error {
 	return AppendAuditTx(s.db, AuditEvent{Actor: AuditActorFromContext(c), Input: input})
 }
 
+// RecordSensitiveRead intentionally stores only the actor, object, action,
+// timestamp, and purpose; it does not copy phone numbers, names, notes, IPs, or
+// user-agent strings into the access audit.
+func (s *AuditService) RecordSensitiveRead(c *gin.Context, action, targetType string, targetID, merchantID uint, purpose string) error {
+	if s == nil || s.db == nil {
+		return errors.New("audit database is unavailable")
+	}
+	if c == nil {
+		return errors.New("audit request context is unavailable")
+	}
+	action = strings.TrimSpace(action)
+	targetType = strings.TrimSpace(targetType)
+	purpose = strings.TrimSpace(purpose)
+	if action == "" || targetType == "" || purpose == "" {
+		return errors.New("sensitive access audit requires action, target, and purpose")
+	}
+	detail, err := json.Marshal(map[string]string{"purpose": purpose})
+	if err != nil {
+		return err
+	}
+	actorType, _ := c.Get("role")
+	role, _ := actorType.(string)
+	if strings.TrimSpace(role) == "" {
+		role = "unknown"
+	}
+	merchantRef := merchantID
+	return s.db.Create(&model.AuditLog{
+		ActorID:    c.GetUint("user_id"),
+		ActorType:  role,
+		Action:     action,
+		TargetType: targetType,
+		TargetID:   targetID,
+		MerchantID: &merchantRef,
+		Detail:     string(detail),
+	}).Error
+}
+
 // AppendAuditTx appends one audit row using the caller's transaction. Sensitive
 // mutations must call it before commit and return its error to roll back state.
 func AppendAuditTx(tx *gorm.DB, event AuditEvent) error {
@@ -87,13 +124,9 @@ func AppendAuditTx(tx *gorm.DB, event AuditEvent) error {
 	if action == "" {
 		return errors.New("audit action is required")
 	}
-	detail := "{}"
-	if len(input.Detail) > 0 {
-		raw, err := json.Marshal(input.Detail)
-		if err != nil {
-			return err
-		}
-		detail = string(raw)
+	detail, err := json.Marshal(map[string]string{"purpose": auditPurposeForAction(action)})
+	if err != nil {
+		return err
 	}
 	actorType := strings.TrimSpace(event.Actor.Type)
 	if actorType == "" {
@@ -102,17 +135,70 @@ func AppendAuditTx(tx *gorm.DB, event AuditEvent) error {
 	log := &model.AuditLog{
 		ActorID:    event.Actor.ID,
 		ActorType:  actorType,
-		ActorName:  auditActorName(tx, event.Actor.ID, actorType),
 		Action:     action,
 		TargetType: strings.TrimSpace(input.TargetType),
 		TargetID:   input.TargetID,
-		TargetName: strings.TrimSpace(input.TargetName),
 		MerchantID: input.MerchantID,
-		IP:         trimTo(event.Actor.IP, 80),
-		UserAgent:  trimTo(event.Actor.UserAgent, 255),
-		Detail:     detail,
+		Detail:     string(detail),
 	}
 	return tx.Create(log).Error
+}
+
+func auditPurposeForAction(action string) string {
+	switch action {
+	case "admin_role_create":
+		return "创建管理员角色"
+	case "admin_role_update":
+		return "调整管理员角色与权限"
+	case "admin_account_create":
+		return "创建普通管理员账号"
+	case "admin_account_update":
+		return "调整普通管理员账号状态或角色"
+	case "merchant_order_refund":
+		return "商家退款处理"
+	case "admin_order_refund":
+		return "平台退款处理"
+	case "merchant_order_detail_view":
+		return "履约与售后查询"
+	case "merchant_customer_lead_list_view":
+		return "客户跟进"
+	case "admin_customer_lead_update":
+		return "更新商家顾客线索状态或跟进备注"
+	case "admin_merchant_store_create":
+		return "平台创建商家门店"
+	case "admin_merchant_store_update":
+		return "平台更新商家门店信息"
+	case "admin_merchant_store_disable":
+		return "平台停用商家门店"
+	case "merchant_follow_up_create":
+		return "创建商家跟进记录"
+	case "merchant_follow_up_status_update":
+		return "更新商家跟进状态"
+	case "merchant_subscription_payment_confirm":
+		return "确认订阅收款"
+	case "merchant_payment_config_review":
+		return "收款配置审核"
+	case "merchant_payment_config_save":
+		return "保存商家收款配置"
+	case "merchant_settlement_create":
+		return "生成商家结算"
+	case "merchant_settlement_paid":
+		return "标记商家结算已付款"
+	case "merchant_status_update":
+		return "调整商家状态"
+	case "merchant_subscription_open":
+		return "开通商家订阅"
+	case "merchant_subscription_stop":
+		return "停止商家订阅"
+	case "user_status_update":
+		return "调整用户状态"
+	case "user_phone_update":
+		return "修改用户手机号"
+	case "user_member_adjust":
+		return "调整用户会员权益"
+	default:
+		return action
+	}
 }
 
 func appendOptionalAuditTx(tx *gorm.DB, events []AuditEvent) error {
@@ -159,17 +245,22 @@ func (s *AuditService) List(filter AuditListFilter, page, pageSize int) ([]model
 	return logs, total, nil
 }
 
-func (s *AuditService) MarkReviewed(id uint, reviewerID uint, remark string) (*model.AuditLog, error) {
+func (s *AuditService) MarkReviewed(id uint, reviewerID uint, _ string) (*model.AuditLog, error) {
 	var log model.AuditLog
 	if err := s.db.First(&log, id).Error; err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	log.ReviewStatus = "reviewed"
-	log.ReviewRemark = trimTo(strings.TrimSpace(remark), 255)
-	log.ReviewedBy = &reviewerID
-	log.ReviewedAt = &now
-	if err := s.db.Save(&log).Error; err != nil {
+	if err := s.db.Model(&model.AuditLog{}).
+		Where("id = ? AND review_status = ?", id, "pending").
+		UpdateColumns(map[string]interface{}{
+			"review_status": "reviewed",
+			"reviewed_by":   reviewerID,
+			"reviewed_at":   now,
+		}).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.First(&log, id).Error; err != nil {
 		return nil, err
 	}
 	return &log, nil

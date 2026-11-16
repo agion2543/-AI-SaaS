@@ -123,7 +123,7 @@
             <el-table-column label="门店" min-width="130">
               <template #default="{ row }">{{ row.store?.name || storeName(row.store_id) }}</template>
             </el-table-column>
-            <el-table-column prop="customer_phone" label="顾客手机号" min-width="130" />
+            <el-table-column prop="customer_phone" label="顾客手机号（脱敏）" min-width="150" />
             <el-table-column label="支付渠道" width="110">
               <template #default="{ row }">{{ channelLabel(row.payment_channel) }}</template>
             </el-table-column>
@@ -684,17 +684,7 @@ const incomeExportRow = (row) => ({
   ...row
 })
 
-const refundRawPayload = (row) => {
-  const raw = row.raw_payload
-  if (!raw) return {}
-  if (typeof raw === 'object') return raw
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return {}
-  }
-}
-const refundIsManualRecord = (row) => refundRawPayload(row).mode === 'manual_record'
+const refundIsManualRecord = (row) => Boolean(row.manual_record)
 const refundSyncLabel = (row) => (refundIsManualRecord(row) ? '需人工核对' : '渠道已处理')
 const refundSyncType = (row) => (refundIsManualRecord(row) ? 'warning' : 'success')
 const refundSyncHint = (row) => {

@@ -31,6 +31,7 @@ func TestHistoricalSubscriptionManualReviewRouteRequiresPlatformAdmin(t *testing
 	if err := db.AutoMigrate(&model.Merchant{}, &model.MerchantPlan{}, &model.Order{}, &model.PaymentRecord{}, &model.MerchantSubscriptionManualReview{}, &model.MerchantSubscriptionManualReviewAudit{}); err != nil {
 		t.Fatalf("migrate synthetic manual-review schema: %v", err)
 	}
+	seedSyntheticSuperAdmin(t, db, 7, "synthetic-manual-review-super")
 	merchant := &model.Merchant{Name: "合成路由鉴权商家", Status: "active", SubscriptionStatus: "inactive"}
 	if err := db.Create(merchant).Error; err != nil {
 		t.Fatal(err)
@@ -51,10 +52,7 @@ func TestHistoricalSubscriptionManualReviewRouteRequiresPlatformAdmin(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, 7)
 	path := "/api/v1/admin/orders/" + fmt.Sprint(order.ID) + "/review-historical-subscription"
 	body := `{"plan_name":"历史原计划","amount_cents":25000,"duration_days":30,"payment_occurred_attested":true,"evidence_reference":"synthetic-source-001","reason":"合成路由测试：原始历史凭证已核对"}`
 	request := func(token, payload string) *httptest.ResponseRecorder {

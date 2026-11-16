@@ -172,8 +172,12 @@
             <el-tag effect="plain">{{ row.category || defaultCategory }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="价格" width="120" sortable>
-          <template #default="{ row }"><strong>{{ formatMoney(row.price) }}</strong></template>
+        <el-table-column label="价格 / 批量档位" min-width="190" sortable>
+          <template #default="{ row }">
+            <strong>{{ formatMoney(row.price) }}<span v-if="row.sales_unit"> / {{ row.sales_unit }}</span></strong>
+            <small v-if="row.minimum_order_quantity > 1" class="tier-summary">最低 {{ row.minimum_order_quantity }} 起订</small>
+            <small v-if="row.price_tiers?.length" class="tier-summary">{{ displayTierSummary(row.price_tiers, row.sales_unit) }}</small>
+          </template>
         </el-table-column>
         <el-table-column prop="sort" label="排序" width="90" sortable />
         <el-table-column label="库存" width="190">
@@ -244,6 +248,34 @@
           </el-form-item>
           <el-form-item label="排序（越小越靠前）">
             <el-input-number v-model="form.sort" :min="1" :step="1" class="wide-input" />
+          </el-form-item>
+        </div>
+        <div class="form-grid">
+          <el-form-item label="销售单位（可选）">
+            <el-input v-model="form.sales_unit" placeholder="件、袋、斤、箱" maxlength="30" />
+          </el-form-item>
+          <el-form-item label="规格说明（可选）">
+            <el-input v-model="form.specification" placeholder="例如：500g/袋、12 瓶/箱" maxlength="80" />
+          </el-form-item>
+        </div>
+        <div class="form-grid">
+          <el-form-item label="最低购买量">
+            <el-input-number v-model="form.minimum_order_quantity" :min="1" :max="1000000000" :step="1" class="wide-input" />
+            <small class="field-tip">普通零售保持 1；批量商品可设置更高起订量。</small>
+          </el-form-item>
+          <el-form-item label="数量档位价（可选）">
+            <div class="tier-editor">
+              <div v-for="(tier, index) in form.price_tiers" :key="index" class="tier-row">
+                <span>满</span>
+                <el-input-number v-model="tier.min_quantity" :min="2" :max="1000000000" :step="1" />
+                <span>{{ form.sales_unit || '件' }}，单价</span>
+                <el-input-number v-model="tier.price_yuan" :min="0" :precision="2" :step="0.1" />
+                <span>元</span>
+                <el-button text type="danger" @click="removePriceTier(index)">移除</el-button>
+              </div>
+              <el-button plain size="small" @click="addPriceTier">添加一档</el-button>
+              <small class="field-tip">由商家自行设置起购数量与单价；数量越大，单价不能高于上一档或基础价。</small>
+            </div>
           </el-form-item>
         </div>
         <div class="form-grid">
@@ -401,6 +433,10 @@ const form = reactive({
   name: '',
   category: defaultCategory,
   price_yuan: 0,
+  sales_unit: '',
+  specification: '',
+  minimum_order_quantity: 1,
+  price_tiers: [],
   description: '',
   image_url: '',
   stock_enabled: false,
@@ -683,6 +719,10 @@ const resetForm = () => {
     name: '',
     category: defaultCategory,
     price_yuan: 0,
+    sales_unit: '',
+    specification: '',
+    minimum_order_quantity: 1,
+    price_tiers: [],
     description: '',
     image_url: '',
     stock_enabled: false,
@@ -741,6 +781,10 @@ const openEdit = (row) => {
     name: row.name || '',
     category: normalizeCategory(row.category),
     price_yuan: Number(row.price || 0) / 100,
+    sales_unit: row.sales_unit || '',
+    specification: row.specification || '',
+    minimum_order_quantity: Number(row.minimum_order_quantity || 1),
+    price_tiers: Array.isArray(row.price_tiers) ? row.price_tiers.map((tier) => ({ min_quantity: Number(tier.min_quantity), price_yuan: Number(tier.price || 0) / 100 })) : [],
     description: row.description || '',
     image_url: row.image_url || '',
     stock_enabled: row.stock !== null && row.stock !== undefined,
@@ -756,6 +800,10 @@ const buildPayload = () => ({
   name: form.name.trim(),
   category: form.category.trim() || defaultCategory,
   price: yuanToCents(form.price_yuan),
+  sales_unit: form.sales_unit.trim(),
+  specification: form.specification.trim(),
+  minimum_order_quantity: Number(form.minimum_order_quantity || 1),
+  price_tiers: form.price_tiers.map((tier) => ({ min_quantity: Number(tier.min_quantity), price: yuanToCents(tier.price_yuan) })),
   description: form.description.trim(),
   image_url: form.image_url.trim(),
   stock: form.stock_enabled ? Number(form.stock || 0) : null,
@@ -763,11 +811,25 @@ const buildPayload = () => ({
   status: form.status || 'active'
 })
 
+const displayTierSummary = (tiers, unit = '') => (Array.isArray(tiers) ? tiers : [])
+  .map((tier) => `${tier.min_quantity}+ ${formatMoney(tier.price)}${unit ? `/${unit}` : ''}`)
+  .join(' · ')
+
+const addPriceTier = () => {
+  const last = form.price_tiers[form.price_tiers.length - 1]
+  form.price_tiers.push({ min_quantity: last ? Number(last.min_quantity) + 1 : 2, price_yuan: Number(form.price_yuan || 0) })
+}
+const removePriceTier = (index) => form.price_tiers.splice(index, 1)
+
 const buildRowPayload = (row, extra = {}) => ({
   store_id: storeId,
   name: row.name,
   category: normalizeCategory(row.category),
   price: row.price,
+  sales_unit: row.sales_unit || '',
+  specification: row.specification || '',
+  minimum_order_quantity: Number(row.minimum_order_quantity || 1),
+  price_tiers: Array.isArray(row.price_tiers) ? row.price_tiers : [],
   description: row.description || '',
   image_url: row.image_url || '',
   stock: row.stock === undefined ? null : row.stock,
@@ -783,6 +845,27 @@ const validateForm = () => {
   }
   if (Number(form.price_yuan) < 0) {
     ElMessage.warning('价格不能为负数')
+    return false
+  }
+  const tiers = [...form.price_tiers].sort((a, b) => Number(a.min_quantity) - Number(b.min_quantity))
+  const seen = new Set()
+  let previousPrice = Number(form.price_yuan)
+  for (const tier of tiers) {
+    const minimum = Number(tier.min_quantity)
+    const price = Number(tier.price_yuan)
+    if (!Number.isInteger(minimum) || minimum < 2 || seen.has(minimum)) {
+      ElMessage.warning('档位数量必须是互不重复的 2 件以上整数')
+      return false
+    }
+    if (!Number.isFinite(price) || price < 0 || price > Number(form.price_yuan) || price > previousPrice) {
+      ElMessage.warning('档位单价不能高于基础单价或前一档')
+      return false
+    }
+    seen.add(minimum)
+    previousPrice = price
+  }
+  if (!Number.isInteger(Number(form.minimum_order_quantity)) || Number(form.minimum_order_quantity) < 1) {
+    ElMessage.warning('最低购买量必须是正整数')
     return false
   }
   if (!isValidImageUrl(form.image_url)) {
@@ -1331,6 +1414,26 @@ onMounted(load)
 
 .wide-input {
   width: 100%;
+}
+
+.tier-summary {
+  display: block;
+  margin-top: 3px;
+  color: #8a6b32;
+  font-size: 12px;
+}
+
+.tier-editor {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.tier-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .ai-draft-note {

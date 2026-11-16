@@ -162,7 +162,7 @@
       </el-collapse>
     </DataPanel>
 
-    <DataPanel title="数据库备份脚本入口" description="上线后建议加入 Windows 计划任务或 Linux cron，并定期做恢复演练。" eyebrow="BACKUP">
+    <DataPanel title="数据库备份脚本入口" description="当前系统没有采集计划任务、备份成功、文件校验或恢复演练记录；这里展示脚本文件不代表已配置、已执行或可恢复。请在实际部署环境独立核实。" eyebrow="BACKUP">
       <div class="script-grid">
         <ActionCard
           label="Runbook"
@@ -175,7 +175,7 @@
         <ActionCard
           label="Windows"
           title="PowerShell 备份"
-          description="适合本机或 Windows Server 部署，配合计划任务每日执行。"
+          description="仓库中的 PowerShell 脚本文件。系统不会检查计划任务是否已配置，也不会记录脚本是否成功执行。"
           tone="blue"
         >
           <template #actions><code>scripts/backup-mysql.ps1</code></template>
@@ -183,7 +183,7 @@
         <ActionCard
           label="Linux"
           title="Shell 备份"
-          description="适合云服务器部署，配合 cron 定时备份并保留最近多天数据。"
+          description="仓库中的 Shell 脚本文件。系统不会检查 cron 是否已配置，也不会记录备份产物、保留策略或恢复结果。"
           tone="green"
         >
           <template #actions><code>scripts/backup-mysql.sh</code></template>
@@ -264,6 +264,7 @@
               <el-button :loading="uploadingQr === 'alipay'">上传收款码</el-button>
             </el-upload>
           </div>
+          <el-text v-if="pendingPlatformQrUploads.alipay" type="warning" size="small">新二维码已安全暂存，点击“保存配置”后生效（30 分钟内有效）。</el-text>
         </el-form-item>
         <el-form-item label="平台微信收款码">
           <div class="config-qr-line">
@@ -272,6 +273,7 @@
               <el-button :loading="uploadingQr === 'wechat'">上传收款码</el-button>
             </el-upload>
           </div>
+          <el-text v-if="pendingPlatformQrUploads.wechat" type="warning" size="small">新二维码已安全暂存，点击“保存配置”后生效（30 分钟内有效）。</el-text>
         </el-form-item>
         <el-form-item label="订阅收款状态">
           <div class="platform-qr-status" :class="{ ready: platformQrReady }">
@@ -317,6 +319,7 @@ import PageHero from '../../components/design/PageHero.vue'
 const checking = ref(false)
 const aiChecking = ref(false)
 const uploadingQr = ref('')
+const pendingPlatformQrUploads = reactive({ alipay: '', wechat: '' })
 const router = useRouter()
 const guideDialogVisible = ref(false)
 const activeGuide = ref(null)
@@ -354,9 +357,9 @@ const form = reactive({
 
 const repairGuides = {
   admin_password: {
-    summary: '修改初始化管理员密码，避免后台被扫描登录。',
-    steps: ['使用初始化账号登录平台后台。', '把管理员密码改成 12 位以上强密码。', '退出后重新登录，确认旧密码和初始化密码不可用。', '生产环境不要长期保留 INITIAL_ADMIN_PASSWORD 的默认值。'],
-    commands: ['INITIAL_ADMIN_USERNAME=admin', 'INITIAL_ADMIN_PASSWORD=请替换为独立强密码']
+    summary: '检查管理员密码配置与账号安全。',
+    steps: ['确认已有管理员使用独立强密码。', '新数据库首次创建管理员前，在部署环境显式设置至少 12 位的 INITIAL_ADMIN_PASSWORD。', '已有管理员账号不需要为启动而重置密码。'],
+    commands: ['INITIAL_ADMIN_USERNAME=admin', 'INITIAL_ADMIN_PASSWORD=在部署环境设置的强密码']
   },
   app_env: {
     summary: '切换 APP_ENV，关闭开发测试能力。',
@@ -385,8 +388,8 @@ const repairGuides = {
     steps: ['先确认商家数据授权、字段来源和商家隔离。', '实现并测试 provider adapter 和禁用默认实现。', '补齐调用审计、成本/额度、隐私与人工审核边界。', '合成数据测试通过后，再安排获授权的真实样本小范围验证。']
   },
   backup: {
-    summary: '配置数据库自动备份与恢复演练。',
-    steps: ['先阅读 docs/production-runbook.md，确认首次部署、升级、回滚和巡检步骤。', 'Windows 使用 scripts/backup-mysql.ps1。', 'Linux 使用 scripts/backup-mysql.sh。', '加入计划任务或 cron。', '每月做一次恢复演练。'],
+    summary: '系统没有备份执行或恢复演练记录，不能判断实际部署环境是否已配置或可恢复。',
+    steps: ['当前系统不检查 Windows 计划任务或 Linux cron，也不记录备份成功时间、文件校验、保留情况或恢复结果。', '在实际部署环境确认备份任务和备份产物；脚本文件存在不等于已配置或已成功执行。', '通过隔离环境的恢复演练验证备份可用，并由部署方保留结果。'],
     commands: ['powershell.exe -ExecutionPolicy Bypass -File scripts/backup-mysql.ps1']
   },
   rate_limit: {
@@ -567,7 +570,23 @@ const saveAIPolicy = async () => {
 }
 
 const save = async () => {
-  await saveConfigs(form)
+  const payload = {
+    ...form,
+    platform_alipay_qr_upload_id: pendingPlatformQrUploads.alipay,
+    platform_wechat_qr_upload_id: pendingPlatformQrUploads.wechat
+  }
+  try {
+    await saveConfigs(payload)
+  } catch (error) {
+    const hadStagedQRCode = Boolean(payload.platform_alipay_qr_upload_id || payload.platform_wechat_qr_upload_id)
+    pendingPlatformQrUploads.alipay = ''
+    pendingPlatformQrUploads.wechat = ''
+    ElMessage.error(hadStagedQRCode ? '保存请求失败；请重新加载配置核对状态，如新二维码未生效请重新上传后再保存' : (error?.response?.data?.message || '配置保存失败'))
+    return
+  }
+  pendingPlatformQrUploads.alipay = ''
+  pendingPlatformQrUploads.wechat = ''
+  await loadConfigs()
   ElMessage.success('配置已保存')
 }
 
@@ -596,10 +615,10 @@ const uploadPlatformQr = async (options, key) => {
   try {
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('channel', key)
     const res = await uploadPlatformPaymentQRCode(formData)
-    if (key === 'alipay') form.platform_alipay_qr_code = res.data.url || ''
-    if (key === 'wechat') form.platform_wechat_qr_code = res.data.url || ''
-    ElMessage.success('收款码已上传，记得保存配置')
+    pendingPlatformQrUploads[key] = res.data.upload_id || ''
+    ElMessage.success('收款码已安全暂存，点击保存配置后生效')
     options.onSuccess?.(res.data)
   } catch (error) {
     options.onError?.(error)

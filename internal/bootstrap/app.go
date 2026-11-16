@@ -94,7 +94,7 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 	role := model.AdminRole{
 		Name:        "Super Admin",
 		Code:        "super_admin",
-		Permissions: "dashboard,users,packages,orders,payments,cards,configs",
+		Permissions: "read_only,operations,finance,system_admin",
 	}
 	if err := db.Where(model.AdminRole{Code: role.Code}).Assign(role).FirstOrCreate(&role).Error; err != nil {
 		return err
@@ -114,7 +114,7 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 
 	for _, pkg := range packages {
 		item := pkg
-		if err := db.Where(model.MembershipPackage{Code: item.Code}).Assign(item).FirstOrCreate(&item).Error; err != nil {
+		if err := db.Where(model.MembershipPackage{Code: item.Code}).FirstOrCreate(&item).Error; err != nil {
 			return err
 		}
 	}
@@ -123,10 +123,16 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 		{Name: "月付", PriceCents: 19900, DurationDays: 30, Sort: 1},
 		{Name: "年付", PriceCents: 199900, DurationDays: 365, Sort: 2},
 	}
-	for _, plan := range merchantPlans {
-		item := plan
-		if err := db.Where(model.MerchantPlan{Name: item.Name}).Assign(item).FirstOrCreate(&item).Error; err != nil {
-			return err
+	var merchantPlanCount int64
+	if err := db.Model(&model.MerchantPlan{}).Count(&merchantPlanCount).Error; err != nil {
+		return err
+	}
+	if merchantPlanCount == 0 {
+		for _, plan := range merchantPlans {
+			item := plan
+			if err := db.Where(model.MerchantPlan{Name: item.Name}).FirstOrCreate(&item).Error; err != nil {
+				return err
+			}
 		}
 	}
 
@@ -148,45 +154,36 @@ func seedAdminUser(db *gorm.DB, cfg *config.Config, roleID uint) error {
 		username = "admin"
 	}
 	password := strings.TrimSpace(cfg.InitialAdminPass)
-	if password == "" {
-		password = "SaasAdmin@2026!"
-	}
 
 	var admin model.AdminUser
 	err := db.Where("username = ?", username).First(&admin).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		passwordHash, hashErr := utils.HashPassword(password)
-		if hashErr != nil {
-			return hashErr
-		}
-		admin = model.AdminUser{
-			Username:     username,
-			PasswordHash: passwordHash,
-			DisplayName:  "System Admin",
-			Status:       "active",
-			RoleID:       roleID,
-		}
-		return db.Create(&admin).Error
+	if err == nil {
+		return nil
 	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if password == "" {
+		var adminCount int64
+		if err := db.Model(&model.AdminUser{}).Count(&adminCount).Error; err != nil {
+			return err
+		}
+		if adminCount > 0 {
+			return nil
+		}
+		return errors.New("INITIAL_ADMIN_PASSWORD must be explicitly configured to create the initial admin account")
+	}
+
+	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		return err
 	}
-
-	if utils.CheckPassword(admin.PasswordHash, "Admin@123456") {
-		passwordHash, hashErr := utils.HashPassword(password)
-		if hashErr != nil {
-			return hashErr
-		}
-		admin.PasswordHash = passwordHash
-		admin.RoleID = roleID
-		if admin.DisplayName == "" {
-			admin.DisplayName = "System Admin"
-		}
-		if admin.Status == "" {
-			admin.Status = "active"
-		}
-		return db.Save(&admin).Error
+	admin = model.AdminUser{
+		Username:     username,
+		PasswordHash: passwordHash,
+		DisplayName:  "System Admin",
+		Status:       "active",
+		RoleID:       roleID,
 	}
-
-	return nil
+	return db.Create(&admin).Error
 }

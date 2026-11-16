@@ -21,6 +21,8 @@
       <el-input v-model="filters.keyword" clearable placeholder="搜索操作人 / 对象 / 动作" />
       <el-select v-model="filters.action" clearable placeholder="操作类型">
         <el-option label="收款审核" value="merchant_payment_config_review" />
+        <el-option label="平台系统配置更新" value="platform_system_config_update" />
+        <el-option label="AI 策略配置更新" value="ai_config_policy_update" />
         <el-option label="商家状态调整" value="merchant_status_update" />
         <el-option label="确认订阅收款" value="merchant_subscription_payment_confirm" />
         <el-option label="开通商家订阅" value="merchant_subscription_open" />
@@ -28,10 +30,12 @@
         <el-option label="平台退款" value="admin_order_refund" />
         <el-option label="商家退款" value="merchant_order_refund" />
         <el-option label="用户状态调整" value="user_status_update" />
+        <el-option label="用户手机号变更" value="user_phone_update" />
         <el-option label="会员权益调整" value="user_member_adjust" />
       </el-select>
       <el-select v-model="filters.target_type" clearable placeholder="对象类型">
         <el-option label="商家" value="merchant" />
+        <el-option label="平台系统配置" value="platform_system_config" />
         <el-option label="收款配置" value="merchant_payment_config" />
         <el-option label="订单" value="order" />
         <el-option label="用户" value="user" />
@@ -63,9 +67,8 @@
         <el-table-column label="时间" min-width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column prop="actor_name" label="操作人" min-width="120" />
-        <el-table-column label="身份" width="110">
-          <template #default="{ row }">{{ actorLabel(row.actor_type) }}</template>
+        <el-table-column label="操作人 / ID" min-width="150">
+          <template #default="{ row }">{{ actorLabel(row.actor_type) }} #{{ row.actor_id || '-' }}</template>
         </el-table-column>
         <el-table-column label="风险" width="110">
           <template #default="{ row }">
@@ -80,13 +83,12 @@
         <el-table-column label="对象" min-width="180">
           <template #default="{ row }">
             <div class="target-name">{{ targetDisplay(row) }}</div>
-            <div class="muted">{{ targetLabel(row.target_type) }} #{{ row.target_id || '-' }}</div>
+            <div class="muted">{{ targetLabel(row.target_type) }}<template v-if="row.target_id"> #{{ row.target_id }}</template></div>
           </template>
         </el-table-column>
         <el-table-column label="商家ID" width="90">
           <template #default="{ row }">{{ row.merchant_id || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="ip" label="IP" min-width="120" />
         <el-table-column label="详情" min-width="240">
           <template #default="{ row }">
             <div class="detail-summary">{{ detailSummary(row) }}</div>
@@ -122,12 +124,11 @@
         <h3>{{ actionLabel(activeLog.action) }}</h3>
         <p>{{ detailSummary(activeLog) }}</p>
         <div class="drawer-grid">
-          <div><span>操作人</span><strong>{{ activeLog.actor_name || '-' }}</strong></div>
+          <div><span>操作人 / ID</span><strong>{{ actorLabel(activeLog.actor_type) }} #{{ activeLog.actor_id || '-' }}</strong></div>
           <div><span>关联对象</span><strong>{{ targetDisplay(activeLog) }}</strong></div>
           <div><span>商家ID</span><strong>{{ activeLog.merchant_id || '-' }}</strong></div>
           <div><span>时间</span><strong>{{ formatTime(activeLog.created_at) }}</strong></div>
           <div><span>复核状态</span><strong>{{ reviewStatusText(activeLog) }}</strong></div>
-          <div v-if="activeLog.review_remark"><span>复核备注</span><strong>{{ activeLog.review_remark }}</strong></div>
         </div>
         <div class="detail-fields">
           <div v-for="field in detailFields(activeLog)" :key="field.label">
@@ -182,6 +183,12 @@ const pagination = reactive({
 })
 
 const actionText = {
+  admin_role_create: '创建管理员角色',
+  admin_role_update: '调整管理员角色与权限',
+  admin_account_create: '创建普通管理员账号',
+  admin_account_update: '调整普通管理员账号',
+  platform_system_config_update: '平台系统配置更新',
+  ai_config_policy_update: 'AI 策略配置更新',
   merchant_payment_config_review: '收款审核',
   merchant_status_update: '商家状态调整',
   merchant_subscription_open: '开通商家订阅',
@@ -191,15 +198,22 @@ const actionText = {
   merchant_settlement_create: '生成商家结算',
   admin_order_refund: '平台退款',
   merchant_order_refund: '商家退款',
+  merchant_order_detail_view: '查看订单详情',
+  merchant_customer_lead_list_view: '查看客户线索',
   user_status_update: '用户状态调整',
+  user_phone_update: '用户手机号变更',
   user_member_adjust: '会员权益调整'
 }
 
 const targetText = {
+  admin_role: '管理员角色',
+  admin_account: '管理员账号',
+  platform_system_config: '平台系统配置',
   merchant: '商家',
   merchant_payment_config: '收款配置',
   merchant_follow_up: '商家跟进',
   merchant_settlement: '商家结算',
+  customer_lead_collection: '客户线索列表',
   order: '订单',
   user: '用户'
 }
@@ -282,9 +296,33 @@ const reset = () => {
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const actionLabel = (value) => actionText[value] || value || '-'
 const targetLabel = (value) => targetText[value] || value || '-'
+const configurationKeyText = (keys) => {
+  const labels = {
+    site_name: '站点名称',
+    payment_gateway: '支付网关配置',
+    platform_alipay_qr_code: '支付宝收款码',
+    platform_wechat_qr_code: '微信收款码',
+    platform_subscription_note: '订阅说明',
+    filing_info: '备案信息',
+    notice: '平台公告',
+    ai_policy_provider: 'AI 供应商',
+    ai_policy_base_url: 'AI 服务地址',
+    ai_policy_model: 'AI 模型',
+    ai_policy_enabled: 'AI 启用状态',
+    ai_policy_daily_quota_per_merchant: '商家日额度',
+    ai_policy_daily_cost_limit_cents: '每日成本上限',
+    ai_policy_failure_rate_alert_percent: '失败率告警阈值',
+    ai_policy_timeout_seconds: '超时时间',
+    ai_policy_remark: '策略备注'
+  }
+  if (!Array.isArray(keys) || !keys.length) return '未提供键名'
+  return keys.map((key) => labels[key] || '其他配置项').join('、')
+}
 const targetDisplay = (row) => {
+  if (row.target_type === 'platform_system_config') return '平台系统配置'
   if (row.target_type === 'merchant_follow_up') return `跟进记录 #${row.target_id || '-'}`
   if (row.target_type === 'merchant_settlement') return `结算单 #${row.target_id || '-'}`
+  if (row.target_type === 'customer_lead_collection') return `商家客户线索 #${row.target_id || '-'}`
   if (row.target_type === 'order') return row.target_name || `订单 #${row.target_id || '-'}`
   if (row.target_type === 'merchant') return row.target_name || `商家 #${row.target_id || '-'}`
   if (row.target_name && !String(row.target_name).includes('_')) return row.target_name
@@ -293,7 +331,7 @@ const targetDisplay = (row) => {
 const actorLabel = (value) => actorText[value] || value || '-'
 const riskMeta = (row) => {
   if (['admin_order_refund', 'merchant_order_refund', 'merchant_status_update'].includes(row.action)) return { label: '高', type: 'danger' }
-  if (['merchant_subscription_payment_confirm', 'merchant_payment_config_review', 'merchant_subscription_stop'].includes(row.action)) return { label: '中', type: 'warning' }
+  if (['admin_role_update', 'admin_account_update', 'platform_system_config_update', 'ai_config_policy_update', 'merchant_subscription_payment_confirm', 'merchant_payment_config_review', 'merchant_subscription_stop', 'user_phone_update'].includes(row.action)) return { label: '中', type: 'warning' }
   return { label: '低', type: 'info' }
 }
 
@@ -309,6 +347,9 @@ const parseDetail = (value) => {
 
 const detailSummary = (row) => {
   const detail = parseDetail(row.detail)
+  if (['platform_system_config_update', 'ai_config_policy_update'].includes(row.action)) return `已更新 ${detail.updated_count || 0} 项配置：${configurationKeyText(detail.updated_keys)}。仅记录键名，不保存配置值。`
+  if (detail.before !== undefined || detail.after !== undefined) return '已记录变更前后配置，可在下方逐项复核。'
+  if (detail.purpose) return `用途：${detail.purpose}`
   if (row.action === 'merchant_subscription_payment_confirm') return `已确认订阅收款 ${formatFen(detail.amount)}，${detailMerchantName(detail) ? `${detailMerchantName(detail)} ` : ''}开通至 ${formatTime(detail.expire_at)}。`
   if (row.action === 'merchant_follow_up_create') return detail.content || '已生成商家跟进记录。'
   if (row.action === 'merchant_payment_config_review') return `收款配置审核结果：${auditStatusLabel(detail.audit_status)}，启用状态：${statusText(detail.status)}。`
@@ -321,6 +362,14 @@ const detailSummary = (row) => {
 const detailFields = (row) => {
   const detail = parseDetail(row?.detail)
   const fields = []
+  if (detail.purpose) fields.push({ label: '用途', value: detail.purpose })
+  if (['platform_system_config_update', 'ai_config_policy_update'].includes(row?.action)) {
+    fields.push({ label: '更新项数量', value: String(detail.updated_count || 0) })
+    fields.push({ label: '配置键名', value: configurationKeyText(detail.updated_keys) })
+    fields.push({ label: '敏感值处理', value: '未写入审计日志' })
+  }
+  if (detail.before !== undefined) fields.push({ label: '变更前', value: adminAccessSnapshotText(detail.before) })
+  if (detail.after !== undefined) fields.push({ label: '变更后', value: adminAccessSnapshotText(detail.after) })
   if (detail.order_no) fields.push({ label: '关联订单', value: detail.order_no })
   if (detailMerchantName(detail)) fields.push({ label: '关联商家', value: detailMerchantName(detail) })
   if (detailPlanName(detail)) fields.push({ label: '订阅套餐', value: detailPlanName(detail) })
@@ -338,7 +387,20 @@ const detailFields = (row) => {
   return [{ label: '记录说明', value: detailSummary(row) || '暂无可读详情' }]
 }
 
+const adminAccessSnapshotText = (snapshot) => {
+  if (snapshot == null) return '无（新建记录）'
+  const fields = []
+  if (snapshot.name) fields.push(`角色名称：${snapshot.name}`)
+  if (snapshot.code) fields.push(`角色代码：${snapshot.code}`)
+  if (Array.isArray(snapshot.permissions)) fields.push(`权限：${snapshot.permissions.join('、') || '无'}`)
+  if (snapshot.status) fields.push(`状态：${statusText(snapshot.status)}`)
+  if (snapshot.role_id) fields.push(`角色 ID：${snapshot.role_id}`)
+  if (snapshot.role_code) fields.push(`角色代码：${snapshot.role_code}`)
+  return fields.join('；') || '无可展示字段'
+}
+
 const actionAdvice = (row) => {
+  if (['platform_system_config_update', 'ai_config_policy_update'].includes(row.action)) return '核对配置键名与操作人；审计日志不会显示支付密钥、收款码、地址或其他配置值。'
   if (row.action === 'merchant_subscription_payment_confirm') return '到订阅营收页核对该商家订阅订单是否已入账，并确认到期时间是否正确。'
   if (row.action === 'merchant_payment_config_review') return '进入商家详情核对收款配置、审核备注和启用状态，避免影响顾客付款。'
   if (row.action === 'merchant_status_update') return '进入商家运营页查看冻结或解冻原因，并检查是否需要补充跟进记录。'
@@ -375,7 +437,7 @@ const markReviewed = async (row) => {
     detailVisible.value = false
     return
   }
-  const res = await reviewAuditLog(row.id, { remark: '平台已复核该审计记录' })
+  const res = await reviewAuditLog(row.id, {})
   const updated = res.data?.log
   if (updated) {
     const index = logs.value.findIndex((item) => item.id === row.id)

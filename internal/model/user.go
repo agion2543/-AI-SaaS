@@ -24,20 +24,24 @@ type User struct {
 
 type VerificationCode struct {
 	BaseModel
-	Phone      string     `gorm:"size:30;index:idx_phone_scene,priority:1" json:"phone"`
-	Scene      string     `gorm:"size:40;index:idx_phone_scene,priority:2" json:"scene"`
-	Code       string     `gorm:"size:12" json:"-"`
-	UserID     *uint      `json:"user_id,omitempty"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+	Phone          string     `gorm:"size:30;index:idx_phone_scene,priority:1" json:"phone"`
+	Scene          string     `gorm:"size:40;index:idx_phone_scene,priority:2" json:"scene"`
+	Code           string     `gorm:"size:12" json:"-"`
+	CodeHash       string     `gorm:"column:code_hash;type:char(64)" json:"-"`
+	FailedAttempts uint       `gorm:"type:int unsigned;not null;default:0" json:"-"`
+	UserID         *uint      `json:"user_id,omitempty"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	ConsumedAt     *time.Time `json:"consumed_at,omitempty"`
 }
 
 type EmailVerificationCode struct {
 	BaseModel
-	Email      string     `gorm:"size:120;index:idx_email_scene,priority:1" json:"email"`
-	Scene      string     `gorm:"size:40;index:idx_email_scene,priority:2" json:"scene"`
-	Code       string     `gorm:"size:12" json:"-"`
-	UserID     *uint      `json:"user_id,omitempty"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+	Email          string     `gorm:"size:120;index:idx_email_scene,priority:1" json:"email"`
+	Scene          string     `gorm:"size:40;index:idx_email_scene,priority:2" json:"scene"`
+	Code           string     `gorm:"size:12" json:"-"`
+	CodeHash       string     `gorm:"column:code_hash;type:char(64)" json:"-"`
+	FailedAttempts uint       `gorm:"type:int unsigned;not null;default:0" json:"-"`
+	UserID         *uint      `json:"user_id,omitempty"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	ConsumedAt     *time.Time `json:"consumed_at,omitempty"`
 }

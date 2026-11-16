@@ -1,13 +1,8 @@
 package controller
 
 import (
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,13 +13,19 @@ import (
 )
 
 type AdminController struct {
-	admin     *service.AdminService
-	dashboard *service.DashboardService
-	audit     *service.AuditService
+	admin      *service.AdminService
+	dashboard  *service.DashboardService
+	audit      *service.AuditService
+	platformQR *platformPaymentQRStore
+	appURL     string
 }
 
-func NewAdminController(admin *service.AdminService, dashboard *service.DashboardService, audit *service.AuditService) *AdminController {
-	return &AdminController{admin: admin, dashboard: dashboard, audit: audit}
+func NewAdminController(admin *service.AdminService, dashboard *service.DashboardService, audit *service.AuditService, appURLs ...string) *AdminController {
+	appURL := "http://localhost:8080"
+	if len(appURLs) > 0 {
+		appURL = appURLs[0]
+	}
+	return &AdminController{admin: admin, dashboard: dashboard, audit: audit, platformQR: newDefaultPlatformPaymentQRStore(), appURL: appURL}
 }
 
 func (ctl *AdminController) Dashboard(c *gin.Context) {
@@ -68,6 +69,10 @@ func (ctl *AdminController) ReviewAuditLog(c *gin.Context) {
 }
 
 func (ctl *AdminController) Users(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
 	users, total, err := ctl.admin.ListUsersFiltered(page, pageSize, repository.UserListFilter{
 		Keyword:     c.Query("keyword"),
@@ -81,10 +86,21 @@ func (ctl *AdminController) Users(c *gin.Context) {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"list": users, "total": total})
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "user_directory", 0, "用户目录联系方式查看") {
+		return
+	}
+	rows := make([]gin.H, 0, len(users))
+	for _, user := range users {
+		rows = append(rows, serializeAdminUser(user, includeContact))
+	}
+	utils.Success(c, gin.H{"list": rows, "total": total})
 }
 
 func (ctl *AdminController) Customers(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
 	customers, total, err := ctl.admin.ListCustomerProfiles(page, pageSize, service.CustomerProfileFilter{
 		Keyword:   c.Query("keyword"),
@@ -97,7 +113,58 @@ func (ctl *AdminController) Customers(c *gin.Context) {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "customer_profiles", 0, "顾客档案联系方式查看") {
+		return
+	}
+	if !includeContact {
+		for i := range customers {
+			customers[i].CustomerPhone = utils.MaskPhone(customers[i].CustomerPhone)
+		}
+	}
 	utils.Success(c, gin.H{"list": customers, "total": total})
+}
+
+func (ctl *AdminController) ExportCustomerProfiles(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
+	customers, total, err := ctl.admin.ListCustomerProfiles(1, 10000, service.CustomerProfileFilter{
+		Keyword: c.Query("keyword"), AITag: c.Query("ai_tag"), Status: c.Query("status"),
+		SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order"),
+	})
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !recordAdminCustomerOrderExport(c, ctl.audit, "customer_profiles") {
+		return
+	}
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", "attachment; filename=platform-customer-profiles.xlsx")
+	if total > int64(len(customers)) {
+		c.Header("X-Export-Truncated", "true")
+	}
+	headers := []string{"Customer Phone", "Merchant", "Store", "Order Count", "Total Amount (Yuan)", "Discount Amount (Yuan)", "Last Order At", "Last Status"}
+	rows := make([][]string, 0, len(customers))
+	for _, customer := range customers {
+		phone := customer.CustomerPhone
+		if !includeContact {
+			phone = utils.MaskPhone(phone)
+		}
+		rows = append(rows, []string{
+			phone, customer.MerchantName, customer.StoreName, strconv.FormatInt(customer.OrderCount, 10),
+			utils.FenToYuan(customer.TotalAmount), utils.FenToYuan(customer.DiscountAmount),
+			customer.LastOrderAt.Format("2006-01-02 15:04:05"), customer.LastStatus,
+		})
+	}
+	if total > int64(len(customers)) {
+		rows = append(rows, []string{"已达到 10,000 条单次导出上限；剩余记录未导出，请缩小筛选范围后重试。"})
+	}
+	if err := utils.WriteXLSX(c.Writer, "Customer Profiles", headers, rows); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "failed to generate customer export")
+		return
+	}
 }
 
 func (ctl *AdminController) Merchants(c *gin.Context) {
@@ -126,7 +193,7 @@ func (ctl *AdminController) SaveMerchantPlan(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := ctl.admin.SaveMerchantPlan(id, req)
+	plan, err := ctl.admin.SaveMerchantPlan(id, req, service.AuditActorFromContext(c))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
@@ -151,17 +218,24 @@ func (ctl *AdminController) MerchantSubscriptionOrders(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"list": orders})
+	utils.Success(c, gin.H{"list": serializeAdminOrders(orders, false)})
 }
 
 func (ctl *AdminController) MerchantStoreOrders(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	id := uint(atoi(c.Param("id")))
 	orders, err := ctl.admin.ListMerchantStoreOrders(id, atoi(c.DefaultQuery("limit", "10")))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"list": orders})
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "merchant_orders", id, "商家维度订单联系方式查看") {
+		return
+	}
+	utils.Success(c, gin.H{"list": serializeAdminOrders(orders, includeContact)})
 }
 
 func (ctl *AdminController) MerchantSettlementPrepare(c *gin.Context) {
@@ -171,7 +245,12 @@ func (ctl *AdminController) MerchantSettlementPrepare(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, data)
+	utils.Success(c, gin.H{
+		"merchant_id": data.MerchantID, "order_count": data.OrderCount,
+		"total_amount_cents": data.TotalAmountCents, "refund_amount_cents": data.RefundAmountCents,
+		"net_amount_cents": data.NetAmountCents, "settlement_period_start": data.PeriodStart,
+		"settlement_period_end": data.PeriodEnd, "orders": serializeAdminOrders(data.Orders, false),
+	})
 }
 
 func (ctl *AdminController) MerchantSettlements(c *gin.Context) {
@@ -278,7 +357,7 @@ func (ctl *AdminController) CreateMerchantStore(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	store, err := ctl.admin.SaveMerchantStore(id, 0, req)
+	store, err := ctl.admin.SaveMerchantStore(id, 0, req, service.AuditEvent{Actor: service.AuditActorFromContext(c)})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
@@ -294,7 +373,7 @@ func (ctl *AdminController) UpdateMerchantStore(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	store, err := ctl.admin.SaveMerchantStore(id, storeID, req)
+	store, err := ctl.admin.SaveMerchantStore(id, storeID, req, service.AuditEvent{Actor: service.AuditActorFromContext(c)})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
@@ -305,7 +384,7 @@ func (ctl *AdminController) UpdateMerchantStore(c *gin.Context) {
 func (ctl *AdminController) DisableMerchantStore(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
 	storeID := uint(atoi(c.Param("store_id")))
-	if err := ctl.admin.DisableMerchantStore(id, storeID); err != nil {
+	if err := ctl.admin.DisableMerchantStore(id, storeID, service.AuditEvent{Actor: service.AuditActorFromContext(c)}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -313,6 +392,10 @@ func (ctl *AdminController) DisableMerchantStore(c *gin.Context) {
 }
 
 func (ctl *AdminController) MerchantLeads(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	id := uint(atoi(c.Param("id")))
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
 	leads, total, err := ctl.admin.ListMerchantLeads(id, page, pageSize)
@@ -320,7 +403,14 @@ func (ctl *AdminController) MerchantLeads(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"list": leads, "total": total})
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "merchant_customer_leads", id, "商家顾客线索联系方式查看") {
+		return
+	}
+	rows := make([]gin.H, 0, len(leads))
+	for _, lead := range leads {
+		rows = append(rows, serializeAdminCustomerLead(lead, includeContact))
+	}
+	utils.Success(c, gin.H{"list": rows, "total": total})
 }
 
 func (ctl *AdminController) MerchantLeadStats(c *gin.Context) {
@@ -334,16 +424,35 @@ func (ctl *AdminController) MerchantLeadStats(c *gin.Context) {
 }
 
 func (ctl *AdminController) MerchantAIInsights(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	id := uint(atoi(c.Param("id")))
 	data, err := ctl.admin.GenerateMerchantInsights(id)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	profiles, _ := data["customer_profiles"].([]service.CustomerProfileRow)
+	if includeContact {
+		if !recordAdminCustomerContactRead(c, ctl.audit, "merchant_customer_profiles", id, "商家顾客画像联系方式查看") {
+			return
+		}
+	} else {
+		for i := range profiles {
+			profiles[i].CustomerPhone = utils.MaskPhone(profiles[i].CustomerPhone)
+		}
+		data["customer_profiles"] = profiles
+	}
 	utils.Success(c, data)
 }
 
 func (ctl *AdminController) UpdateMerchantLead(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	id := uint(atoi(c.Param("id")))
 	leadID := uint(atoi(c.Param("lead_id")))
 	var req dto.UpdateCustomerLeadRequest
@@ -351,12 +460,17 @@ func (ctl *AdminController) UpdateMerchantLead(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	lead, err := ctl.admin.UpdateMerchantLead(id, leadID, req)
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "merchant_customer_lead", leadID, "商家顾客线索联系方式查看") {
+		return
+	}
+	lead, err := ctl.admin.UpdateMerchantLead(id, leadID, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"lead": lead, "updated": true})
+	utils.Success(c, gin.H{"lead": serializeAdminCustomerLead(*lead, includeContact), "updated": true})
 }
 
 func (ctl *AdminController) UpdateMerchantStatus(c *gin.Context) {
@@ -404,33 +518,14 @@ func (ctl *AdminController) CreateMerchantFollowUp(c *gin.Context) {
 	}
 	role, _ := c.Get("role")
 	operatorRole, _ := role.(string)
-	row, err := ctl.admin.CreateMerchantFollowUp(id, c.GetUint("user_id"), operatorRole, req)
+	row, err := ctl.admin.CreateMerchantFollowUp(id, c.GetUint("user_id"), operatorRole, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_follow_up_create", TargetType: "merchant_follow_up", MerchantID: &id},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	merchant, _ := ctl.admin.GetMerchant(id)
-	targetName := ""
-	if merchant != nil {
-		targetName = merchant.Name
-	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_follow_up_create",
-		TargetType: "merchant_follow_up",
-		TargetID:   row.ID,
-		TargetName: targetName,
-		MerchantID: &id,
-		Detail: gin.H{
-			"type":           row.Type,
-			"priority":       row.Priority,
-			"content":        row.Content,
-			"source":         row.Source,
-			"source_id":      row.SourceID,
-			"order_id":       row.OrderID,
-			"order_no":       row.OrderNo,
-			"next_follow_at": row.NextFollowAt,
-		},
-	})
 	utils.Success(c, gin.H{"follow_up": row})
 }
 
@@ -441,18 +536,14 @@ func (ctl *AdminController) UpdateMerchantFollowUpStatus(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	row, err := ctl.admin.UpdateMerchantFollowUpStatus(id, req.Status)
+	row, err := ctl.admin.UpdateMerchantFollowUpStatus(id, req.Status, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_follow_up_status_update", TargetType: "merchant_follow_up"},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctl.audit.Record(c, service.AuditRecordInput{
-		Action:     "merchant_follow_up_status_update",
-		TargetType: "merchant_follow_up",
-		TargetID:   row.ID,
-		MerchantID: &row.MerchantID,
-		Detail:     gin.H{"status": req.Status},
-	})
 	utils.Success(c, gin.H{"follow_up": row, "updated": true})
 }
 
@@ -558,7 +649,11 @@ func (ctl *AdminController) ManualOpenMember(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"updated": true, "user": user})
+	if user == nil {
+		utils.Success(c, gin.H{"updated": true})
+		return
+	}
+	utils.Success(c, gin.H{"updated": true, "user": serializeAdminUser(*user, false)})
 }
 
 func (ctl *AdminController) UpdateUserPhone(c *gin.Context) {
@@ -568,7 +663,9 @@ func (ctl *AdminController) UpdateUserPhone(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := ctl.admin.UpdateUserPhone(id, req.Phone); err != nil {
+	if err := ctl.admin.UpdateUserPhone(id, req.Phone, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -581,7 +678,7 @@ func (ctl *AdminController) GenerateCards(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	cards, err := ctl.admin.GenerateCards(req)
+	cards, err := ctl.admin.GenerateCards(req, service.AuditActorFromContext(c))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
@@ -598,19 +695,6 @@ func (ctl *AdminController) Cards(c *gin.Context) {
 	utils.Success(c, list)
 }
 
-func (ctl *AdminController) SaveConfigs(c *gin.Context) {
-	var req dto.SaveSystemConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := ctl.admin.SaveSystemConfig(req); err != nil {
-		utils.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	utils.Success(c, gin.H{"saved": true})
-}
-
 func (ctl *AdminController) Configs(c *gin.Context) {
 	list, err := ctl.admin.ListSystemConfigs()
 	if err != nil {
@@ -618,44 +702,6 @@ func (ctl *AdminController) Configs(c *gin.Context) {
 		return
 	}
 	utils.Success(c, list)
-}
-
-func (ctl *AdminController) UploadPaymentQRCode(c *gin.Context) {
-	file, err := c.FormFile("file")
-	if err != nil {
-		utils.Error(c, http.StatusBadRequest, "请选择要上传的收款码图片")
-		return
-	}
-	if file.Size > 3*1024*1024 {
-		utils.Error(c, http.StatusBadRequest, "收款码图片不能超过 3MB")
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(file.Filename))
-	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
-	if !allowed[ext] {
-		utils.Error(c, http.StatusBadRequest, "仅支持 jpg、png、webp 图片")
-		return
-	}
-
-	dir := filepath.Join("uploads", "platform-payment")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		utils.Error(c, http.StatusInternalServerError, "创建上传目录失败")
-		return
-	}
-	filename := fmt.Sprintf("platform_qr_%d%s", time.Now().UnixNano(), ext)
-	dst := filepath.Join(dir, filename)
-	if err := c.SaveUploadedFile(file, dst); err != nil {
-		utils.Error(c, http.StatusInternalServerError, "收款码保存失败")
-		return
-	}
-
-	scheme := "http"
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	url := fmt.Sprintf("%s://%s/uploads/platform-payment/%s", scheme, c.Request.Host, filename)
-	utils.Success(c, gin.H{"url": url})
 }
 
 func (ctl *AdminController) SecurityCheck(c *gin.Context) {
@@ -672,7 +718,7 @@ func (ctl *AdminController) SaveAIConfigPolicy(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	policy, err := ctl.admin.SaveAIConfigPolicy(req)
+	policy, err := ctl.admin.SaveAIConfigPolicy(req, service.AuditActorFromContext(c))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return

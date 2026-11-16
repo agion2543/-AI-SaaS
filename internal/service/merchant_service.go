@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -550,7 +549,7 @@ func (s *MerchantService) PaymentConfig(merchantID uint) (*model.MerchantPayment
 	return &config, nil
 }
 
-func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchantPaymentConfigRequest) (*model.MerchantPaymentConfig, error) {
+func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchantPaymentConfigRequest, audit AuditEvent) (*model.MerchantPaymentConfig, error) {
 	channel := strings.TrimSpace(req.Channel)
 	mode := strings.TrimSpace(req.Mode)
 	accountName := strings.TrimSpace(req.AccountName)
@@ -584,12 +583,13 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	if mode == "direct" && alipayQRCode == "" && wechatQRCode == "" {
 		return nil, errors.New("商家收款码模式至少需要填写一个收款码")
 	}
-	if _, err := s.merchants.FindByID(merchantID); err != nil {
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
 		return nil, errors.New("商家信息不存在")
 	}
 
 	var config model.MerchantPaymentConfig
-	err := s.db.Where("merchant_id = ?", merchantID).First(&config).Error
+	err = s.db.Where("merchant_id = ?", merchantID).First(&config).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		config = model.MerchantPaymentConfig{MerchantID: merchantID}
 	} else if err != nil {
@@ -609,10 +609,23 @@ func (s *MerchantService) SavePaymentConfig(merchantID uint, req dto.SaveMerchan
 	config.AuditStatus = "pending"
 	config.AuditRemark = "商家提交或修改收款信息，等待平台审核"
 
-	if err := s.db.Save(&config).Error; err != nil {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&config).Error; err != nil {
+			return err
+		}
+		event := audit
+		event.Input.TargetType = "merchant_payment_config"
+		event.Input.TargetID = config.ID
+		event.Input.TargetName = ""
+		merchantRef := merchantID
+		event.Input.MerchantID = &merchantRef
+		return AppendAuditTx(tx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
-	return s.PaymentConfig(merchantID)
+	config.Merchant = *merchant
+	return &config, nil
 }
 
 func (s *MerchantService) ReviewPaymentConfig(merchantID uint, req dto.ReviewMerchantPaymentConfigRequest, audit ...AuditEvent) (*model.MerchantPaymentConfig, error) {
@@ -816,31 +829,44 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 		return nil, errors.New("\u95e8\u5e97\u4e0d\u5b58\u5728")
 	}
 
+	var product *model.StoreProduct
 	if productID == 0 {
-		product := &model.StoreProduct{
-			StoreID:     req.StoreID,
-			Name:        name,
-			Price:       req.Price,
-			Description: description,
-			ImageURL:    imageURL,
-			Category:    category,
-			Status:      status,
-			Stock:       req.Stock,
-			Sort:        req.Sort,
+		product = &model.StoreProduct{MinimumOrderQuantity: 1, PriceTiers: []model.ProductPriceTier{}}
+	} else {
+		loaded, err := s.products.FindByID(productID)
+		if err != nil || loaded.Store.MerchantID != merchantID {
+			return nil, errors.New("\u5546\u54c1\u4e0d\u5b58\u5728")
 		}
-		if product.Sort == 0 {
-			product.Sort = 100
-		}
-		if err := s.products.Create(product); err != nil {
-			return nil, err
-		}
-		return product, nil
+		product = loaded
 	}
 
-	product, err := s.products.FindByID(productID)
-	if err != nil || product.Store.MerchantID != merchantID {
-		return nil, errors.New("\u5546\u54c1\u4e0d\u5b58\u5728")
+	salesUnit := product.SalesUnit
+	if req.SalesUnit != nil {
+		salesUnit = *req.SalesUnit
 	}
+	specification := product.Specification
+	if req.Specification != nil {
+		specification = *req.Specification
+	}
+	minimumOrderQuantity := product.MinimumOrderQuantity
+	if req.MinimumOrderQuantity != nil {
+		minimumOrderQuantity = *req.MinimumOrderQuantity
+	}
+	if minimumOrderQuantity == 0 {
+		minimumOrderQuantity = 1
+	}
+	priceTiers := product.PriceTiers
+	if req.PriceTiers != nil {
+		priceTiers = make([]model.ProductPriceTier, 0, len(*req.PriceTiers))
+		for _, tier := range *req.PriceTiers {
+			priceTiers = append(priceTiers, model.ProductPriceTier{MinQuantity: tier.MinQuantity, Price: tier.Price})
+		}
+	}
+	salesUnit, specification, minimumOrderQuantity, priceTiers, err := normalizeStoreProductPricing(salesUnit, specification, minimumOrderQuantity, priceTiers, req.Price)
+	if err != nil {
+		return nil, err
+	}
+
 	product.StoreID = req.StoreID
 	product.Name = name
 	product.Price = req.Price
@@ -850,10 +876,18 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 	product.Status = status
 	product.Stock = req.Stock
 	product.Sort = req.Sort
+	product.SalesUnit = salesUnit
+	product.Specification = specification
+	product.MinimumOrderQuantity = minimumOrderQuantity
+	product.PriceTiers = priceTiers
 	if product.Sort == 0 {
 		product.Sort = 100
 	}
-	if err := s.products.Save(product); err != nil {
+	if productID == 0 {
+		if err := s.products.Create(product); err != nil {
+			return nil, err
+		}
+	} else if err := s.products.Save(product); err != nil {
 		return nil, err
 	}
 	return product, nil
@@ -2131,51 +2165,11 @@ func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]inte
 }
 
 func (s *MerchantService) issueMerchantVerificationCode(phone, scene string, userID *uint) error {
-	code := devFixedSMSCode
-	if strings.EqualFold(s.cfg.AppEnv, "production") {
-		generated, err := generateNumericCode(6)
-		if err != nil {
-			return err
-		}
-		code = generated
-	}
-
-	if err := s.codes.InvalidateActive(phone, scene); err != nil {
-		return err
-	}
-
-	record := &model.VerificationCode{
-		Phone:     phone,
-		Scene:     scene,
-		Code:      code,
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	if err := s.codes.Create(record); err != nil {
-		return err
-	}
-
-	log.Printf("[mock-sms] scene=%s phone=%s code=%s expires_at=%s", scene, phone, code, record.ExpiresAt.Format(time.RFC3339))
-	return nil
+	return issueSMSVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, phone, scene, userID)
 }
 
 func (s *MerchantService) consumeMerchantVerificationCode(phone, scene, code string) error {
-	if !strings.EqualFold(s.cfg.AppEnv, "production") && strings.TrimSpace(code) == devFixedSMSCode {
-		log.Printf("[mock-sms] accepted fixed dev code scene=%s phone=%s code=%s", scene, phone, strings.TrimSpace(code))
-		return nil
-	}
-
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		codes := repository.NewVerificationCodeRepository(tx)
-		record, err := codes.FindValid(phone, scene, strings.TrimSpace(code))
-		if err != nil {
-			return errors.New("\u9a8c\u8bc1\u7801\u9519\u8bef\u6216\u5df2\u8fc7\u671f")
-		}
-
-		now := time.Now()
-		record.ConsumedAt = &now
-		return codes.Save(record)
-	})
+	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code)
 }
 
 func ptrUint(v uint) *uint {

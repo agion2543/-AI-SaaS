@@ -11,7 +11,7 @@ import (
 
 const (
 	BaselineVersion  = "schema-v1-candidate-20261113"
-	BaselineChecksum = "daba2b6532800c0b8203965358c197823c196eccedcba9d24c5a656700d470d6"
+	BaselineChecksum = "d4277d6999a8c5fade3edda12e6d7d9bfbf7874c34a0b0406d03573b68609006"
 	ledgerTable      = "app_schema_migrations"
 )
 

@@ -94,17 +94,28 @@ docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml logs schema-mi
 docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml logs -f backend
 ```
 
-健康检查：
+存活与就绪检查：
 
 ```bash
 curl http://127.0.0.1/health
+curl -i http://127.0.0.1/ready
 ```
 
-预期返回：
+`/health` 仅确认 HTTP 进程有响应，不依赖数据库；`/ready` 会 ping 当前数据库连接，数据库不可用时返回 HTTP 503，且不返回 DSN、主机名或凭据。
+
+`/health` 预期返回：
 
 ```json
 {"code":0,"message":"success","data":{"status":"ok"}}
 ```
+
+数据库可用时 `/ready` 预期返回：
+
+```json
+{"code":0,"message":"success","data":{"status":"ready","checks":{"database":"ready"}}}
+```
+
+数据库不可用时，`/ready` 返回 HTTP 503 和 `data.status: "not_ready"`。
 
 ## 5. 域名和 HTTPS
 

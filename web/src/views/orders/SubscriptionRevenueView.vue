@@ -7,7 +7,7 @@
       compact
     >
       <template #actions>
-        <el-button plain @click="exportRevenue">导出订阅账单</el-button>
+        <el-button v-if="auth.hasPermission('customer_order_export')" plain :loading="exporting" @click="exportRevenue">导出订阅账单</el-button>
         <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
       </template>
     </PageHero>
@@ -339,11 +339,12 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { confirmMerchantSubscriptionPayment, fetchManualSubscriptionReviews, fetchMerchants, fetchOrders, reviewLegacyMerchantSubscriptionOrder } from '../../api/modules'
+import { confirmMerchantSubscriptionPayment, exportAdminOrders, fetchManualSubscriptionReviews, fetchMerchants, fetchOrders, reviewLegacyMerchantSubscriptionOrder } from '../../api/modules'
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
-import { exportRowsToXlsx } from '../../utils/xlsx'
+import { useAuthStore } from '../../stores/auth'
+import { downloadBlob } from '../../utils/download'
 import {
   hasValidMerchantSubscriptionSnapshot,
   isLegacyMerchantSubscriptionOrderWithoutSnapshot,
@@ -353,6 +354,8 @@ import {
 import { providerPaidSubscriptionOrders, providerPaidSubscriptionRevenueCents } from '../../utils/subscriptionRevenue'
 
 const loading = ref(false)
+const exporting = ref(false)
+const auth = useAuthStore()
 const route = useRoute()
 const confirmingOrderId = ref(null)
 const orders = ref([])
@@ -487,17 +490,33 @@ const confirmSubscription = async (row) => {
   }
 }
 
-const exportRevenue = () => {
-  exportRowsToXlsx('platform-subscription-revenue.xlsx', '订阅营收', filteredSubscriptionOrders.value.map((item) => ({
-    订单号: item.order_no,
-    商家: item.merchant?.name || item.merchant_id || '',
-    套餐: planName(item),
-    金额: (orderAmount(item) / 100).toFixed(2),
-    状态: statusLabel(item.status),
-    支付方式: paymentChannelLabel(item.payment_channel),
-    创建时间: formatTime(item.created_at),
-    确认时间: formatTime(item.paid_at)
-  })))
+const exportRevenue = async () => {
+  exporting.value = true
+  try {
+    if (statusFilter.value === 'expiring' && !expiringMerchantIds.value.size) {
+      ElMessage.info('当前没有 7 天内到期的商家可导出。')
+      return
+    }
+    if (statusFilter.value === 'manually_verified') {
+      ElMessage.info('人工核验是独立台账，不属于订阅订单导出范围。')
+      return
+    }
+    const merchantIds = statusFilter.value === 'expiring' ? Array.from(expiringMerchantIds.value).join(',') : undefined
+    const blob = await exportAdminOrders({
+      order_type: 'merchant_subscription',
+      date_from: dateRange.value?.[0] || undefined,
+      date_to: dateRange.value?.[1] || undefined,
+      keyword: keyword.value || undefined,
+      status: ['expiring', 'manually_verified'].includes(statusFilter.value) ? undefined : statusFilter.value || undefined,
+      merchant_ids: merchantIds
+    })
+    downloadBlob(blob, 'platform-subscription-revenue.xlsx')
+    ElMessage.success('订阅账单已由服务端按当前筛选生成并记录审计。')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '订阅账单导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 const orderAmount = (row) => row?.manual_review?.amount_cents ?? merchantSubscriptionSnapshotPrice(row) ?? Number(row.total_amount ?? row.amount ?? 0)

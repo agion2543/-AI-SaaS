@@ -31,17 +31,18 @@
       <van-card
         v-for="item in cartItems"
         :key="item.id"
-        :price="formatPrice(item.price)"
+        :price="formatPrice(getProductUnitPrice(item, item.count))"
         :title="item.name"
-        :desc="item.description || ''"
+        :desc="productDescription(item)"
         :thumb="item.image_url || item.image || defaultProductImg"
         class="cart-item"
       >
         <template #num>
           <van-stepper
             v-model="item.count"
-            :min="1"
+            :min="getMinimumOrderQuantity(item)"
             :max="item.stock"
+            :disabled="item.stock !== null && item.stock !== undefined && item.stock < getMinimumOrderQuantity(item)"
             @change="(val) => updateCount(item, val)"
           />
         </template>
@@ -49,6 +50,8 @@
           <van-button size="mini" type="danger" plain @click="removeItem(item)">删除</van-button>
         </template>
       </van-card>
+
+      <van-notice-bar v-if="hasMOQViolation" type="warning" :text="minimumOrderIssue" wrapable />
 
       <!-- 订单备注 -->
       <van-cell-group inset title="订单备注" class="remark-group">
@@ -96,7 +99,8 @@
         :price="finalPrice"
         label="合计"
         button-text="提交订单"
-        :disabled="cartItems.length === 0"
+        :disabled="cartItems.length === 0 || hasMOQViolation"
+        :tip="hasMOQViolation ? minimumOrderIssue : ''"
         @submit="submitOrder"
       />
     </template>
@@ -133,6 +137,7 @@ import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
 import { fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder } from '@/api/modules'
 import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
 import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
+import { describeProductPricing, getMinimumOrderQuantity, getProductUnitPrice } from '@/utils/productPricing'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,7 +172,23 @@ const cartItems = computed(() => {
 })
 
 const originalPrice = computed(() => {
-  return cartItems.value.reduce((sum, item) => sum + item.price * item.count, 0)
+  return cartItems.value.reduce((sum, item) => sum + getProductUnitPrice(item, item.count) * item.count, 0)
+})
+
+const isMOQInvalid = (item) => {
+  const minimum = getMinimumOrderQuantity(item)
+  const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
+  return item.count < minimum || (stock !== undefined && stock < minimum)
+}
+const hasMOQViolation = computed(() => cartItems.value.some(isMOQInvalid))
+const minimumOrderIssue = computed(() => {
+  const invalid = cartItems.value.find(isMOQInvalid)
+  if (!invalid) return ''
+  const minimum = getMinimumOrderQuantity(invalid)
+  const stock = invalid.stock === undefined || invalid.stock === null ? undefined : Number(invalid.stock)
+  return stock !== undefined && stock < minimum
+    ? `${invalid.name} 库存不足最低起订量，请移除该商品后再提交`
+    : `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}`
 })
 
 const discountAmount = computed(() => {
@@ -199,6 +220,10 @@ function formatPrice(price) {
   return (Number(price || 0) / 100).toFixed(2)
 }
 
+function productDescription(product) {
+  return [product?.description, describeProductPricing(product)].filter(Boolean).join(' · ')
+}
+
 function goShopping() {
   router.push(`/m/store/${storeId}`)
 }
@@ -216,7 +241,14 @@ function loadCart() {
 
 function updateCount(item, value) {
   if (value > 0) {
-    cart.value[item.id] = value
+    const minimum = getMinimumOrderQuantity(item)
+    const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
+    if (value < minimum && (stock === undefined || stock >= minimum)) {
+      cart.value[item.id] = minimum
+      showToast(`最低起订量为 ${minimum}${item.sales_unit || '件'}`)
+    } else {
+      cart.value[item.id] = value
+    }
   } else {
     delete cart.value[item.id]
   }
@@ -278,6 +310,10 @@ async function loadCoupons() {
 }
 
 async function submitOrder() {
+  if (hasMOQViolation.value) {
+    showToast(minimumOrderIssue.value)
+    return
+  }
   if (cartItems.value.length === 0) {
     showToast('购物车是空的')
     return
@@ -294,7 +330,7 @@ async function submitOrder() {
       customerPhone: customerPhone.value,
       customerNote: remark.value,
       couponNo: selectedCoupon.value?.coupon_no,
-      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: item.price }))
+      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: getProductUnitPrice(item, item.count) }))
     }))
     const order = res.data.order || res.data
     const orderNo = order.order_no

@@ -12,19 +12,26 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go-web-gin-health/internal/dto"
+	"go-web-gin-health/internal/model"
 	"go-web-gin-health/internal/service"
 	"go-web-gin-health/internal/utils"
 )
 
 type MerchantController struct {
-	merchant *service.MerchantService
-	admin    *service.AdminService
-	alipay   *service.AlipayService
-	audit    *service.AuditService
+	merchant  *service.MerchantService
+	admin     *service.AdminService
+	alipay    *service.AlipayService
+	audit     *service.AuditService
+	paymentQR *merchantPaymentQRStore
+	appURL    string
 }
 
-func NewMerchantController(merchant *service.MerchantService, admin *service.AdminService, alipay *service.AlipayService, audit *service.AuditService) *MerchantController {
-	return &MerchantController{merchant: merchant, admin: admin, alipay: alipay, audit: audit}
+func NewMerchantController(merchant *service.MerchantService, admin *service.AdminService, alipay *service.AlipayService, audit *service.AuditService, appURLs ...string) *MerchantController {
+	appURL := ""
+	if len(appURLs) > 0 {
+		appURL = appURLs[0]
+	}
+	return &MerchantController{merchant: merchant, admin: admin, alipay: alipay, audit: audit, paymentQR: newDefaultMerchantPaymentQRStore(), appURL: appURL}
 }
 
 func (ctl *MerchantController) Register(c *gin.Context) {
@@ -268,7 +275,29 @@ func (ctl *MerchantController) Leads(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"list": leads, "total": total})
+	if err := ctl.audit.RecordSensitiveRead(c, "merchant_customer_lead_list_view", "customer_lead_collection", merchantID, merchantID, "客户跟进"); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "failed to record sensitive access audit")
+		return
+	}
+	utils.Success(c, gin.H{"list": serializeMerchantLeadSummaries(leads), "total": total})
+}
+
+type merchantLeadSummary struct {
+	CustomerName  string `json:"customer_name"`
+	CustomerPhone string `json:"customer_phone"`
+	Status        string `json:"status"`
+}
+
+func serializeMerchantLeadSummaries(leads []model.CustomerLead) []merchantLeadSummary {
+	rows := make([]merchantLeadSummary, 0, len(leads))
+	for _, lead := range leads {
+		rows = append(rows, merchantLeadSummary{
+			CustomerName:  lead.CustomerName,
+			CustomerPhone: lead.CustomerPhone,
+			Status:        lead.Status,
+		})
+	}
+	return rows
 }
 
 func (ctl *MerchantController) LeadStats(c *gin.Context) {
@@ -322,23 +351,107 @@ func (ctl *MerchantController) PaymentConfig(c *gin.Context) {
 	utils.Success(c, gin.H{"config": config})
 }
 
+type saveMerchantPaymentConfigWithQRUploads struct {
+	dto.SaveMerchantPaymentConfigRequest
+	AlipayQRUploadID string `json:"alipay_qr_upload_id"`
+	WechatQRUploadID string `json:"wechat_qr_upload_id"`
+}
+
 func (ctl *MerchantController) SavePaymentConfig(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
 		utils.Error(c, http.StatusForbidden, "merchant context missing")
 		return
 	}
-	var req dto.SaveMerchantPaymentConfigRequest
+	var req saveMerchantPaymentConfigWithQRUploads
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.Error(c, http.StatusBadRequest, "payment account info is required")
 		return
 	}
-	config, err := ctl.merchant.SavePaymentConfig(merchantID, req)
+	refs, err := ctl.paymentQR.ReserveUploads(merchantID, map[string]string{
+		"alipay": req.AlipayQRUploadID,
+		"wechat": req.WechatQRUploadID,
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	finalized := make([]finalizedMerchantQRCode, 0, len(refs))
+	for _, ref := range refs {
+		file, finalizeErr := ctl.paymentQR.Finalize(ref)
+		if finalizeErr != nil {
+			ctl.paymentQR.Abort(refs, finalized)
+			utils.Error(c, http.StatusInternalServerError, "收款码定稿失败，配置未保存")
+			return
+		}
+		finalized = append(finalized, file)
+		qrURL := merchantQRCodeURL(ctl.appURL, file.URLPath)
+		switch ref.Channel {
+		case "alipay":
+			req.AlipayQRCode = qrURL
+		case "wechat":
+			req.WechatQRCode = qrURL
+		}
+	}
+	merchantRef := merchantID
+	config, err := ctl.merchant.SavePaymentConfig(merchantID, req.SaveMerchantPaymentConfigRequest, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{
+			Action:     "merchant_payment_config_save",
+			TargetType: "merchant_payment_config",
+			MerchantID: &merchantRef,
+		},
+	})
+	if err != nil {
+		ctl.paymentQR.Abort(refs, finalized)
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctl.paymentQR.Commit(refs)
 	utils.Success(c, gin.H{"config": config, "updated": true})
+}
+
+func (ctl *MerchantController) UploadPaymentQRCode(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "请选择要上传的收款码图片")
+		return
+	}
+	if file.Size > merchantQRCodeMaxSize {
+		utils.Error(c, http.StatusBadRequest, "收款码图片不能超过 3MB")
+		return
+	}
+	channel := strings.TrimSpace(c.PostForm("channel"))
+	if channel != "alipay" && channel != "wechat" {
+		utils.Error(c, http.StatusBadRequest, "请指定支付宝或微信收款渠道")
+		return
+	}
+	extension := strings.ToLower(filepath.Ext(file.Filename))
+	if !validMerchantQRCodeExtensions[extension] {
+		utils.Error(c, http.StatusBadRequest, "仅支持 jpg、png、webp 图片")
+		return
+	}
+	source, err := file.Open()
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "读取收款码图片失败")
+		return
+	}
+	defer source.Close()
+	id, err := ctl.paymentQR.Stage(merchantID, channel, extension, source)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{
+		"upload_id":          id,
+		"channel":            channel,
+		"expires_in_seconds": int64(ctl.paymentQR.ttl.Seconds()),
+	})
 }
 
 func (ctl *MerchantController) AdminPaymentConfig(c *gin.Context) {
@@ -812,7 +925,6 @@ func (ctl *MerchantController) PublicStore(c *gin.Context) {
 			"id":            store.Merchant.ID,
 			"name":          store.Merchant.Name,
 			"contact_phone": store.Merchant.ContactPhone,
-			"contact_email": store.Merchant.ContactEmail,
 			"status":        store.Merchant.Status,
 		},
 		"promotions": promotions,
@@ -827,13 +939,13 @@ func (ctl *MerchantController) CreateCustomerLead(c *gin.Context) {
 		return
 	}
 
-	lead, err := ctl.merchant.CreateCustomerLead(storeID, req)
+	_, err := ctl.merchant.CreateCustomerLead(storeID, req)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.Success(c, gin.H{"lead": lead, "submitted": true})
+	utils.Success(c, gin.H{"submitted": true})
 }
 
 func currentMerchantID(c *gin.Context) (uint, bool) {

@@ -29,6 +29,7 @@ func TestAdminGroupBuyRoutesRequireAdminAndExposeNoMerchantAuditWrite(t *testing
 	if err := db.AutoMigrate(&model.Merchant{}, &model.Store{}, &model.AdminUser{}, &model.MerchantGroupBuyLink{}, &model.MerchantGroupBuyLinkAudit{}); err != nil {
 		t.Fatal(err)
 	}
+	seedSyntheticSuperAdmin(t, db, 7, "synthetic-group-buy-super")
 	merchant := model.Merchant{Name: "路由测试商家", Status: "active"}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatal(err)
@@ -50,10 +51,7 @@ func TestAdminGroupBuyRoutesRequireAdminAndExposeNoMerchantAuditWrite(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, 7)
 
 	request := func(method, path, token, body string) *httptest.ResponseRecorder {
 		t.Helper()

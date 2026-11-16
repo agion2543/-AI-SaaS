@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
   updated_at DATETIME(3) NULL,
   username VARCHAR(60) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  auth_version BIGINT UNSIGNED NOT NULL DEFAULT 1,
   display_name VARCHAR(80) NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'active',
   role_id BIGINT UNSIGNED NOT NULL
@@ -132,12 +133,8 @@ CREATE TABLE IF NOT EXISTS usage_records (
 );
 
 INSERT INTO admin_roles (id, name, code, permissions, created_at, updated_at)
-VALUES (1, 'Super Admin', 'super_admin', 'dashboard,users,packages,orders,payments,cards,configs', NOW(), NOW())
+VALUES (1, 'Super Admin', 'super_admin', 'read_only,operations,finance,system_admin', NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name), permissions = VALUES(permissions);
-
-INSERT INTO admin_users (id, username, password_hash, display_name, status, role_id, created_at, updated_at)
-VALUES (1, 'admin', '$2a$10$cE8LFVvs5/26l6.4l8hE8.mn1sXSzBHRVnaItSN.g14.tmtjcl/5a', 'System Admin', 'active', 1, NOW(), NOW())
-ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), status = VALUES(status), role_id = VALUES(role_id);
 
 INSERT INTO membership_packages (name, code, duration_days, price, original_price, quota, sort, status, is_lifetime, description, created_at, updated_at)
 VALUES

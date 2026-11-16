@@ -143,19 +143,19 @@
         <el-table-column prop="created_at" label="注册时间" min-width="180" sortable="custom">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="470" fixed="right">
+        <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <div class="action-row">
               <el-button size="small" @click="goDetail(row)">详情</el-button>
-              <el-button v-if="row.status !== 'active'" type="primary" size="small" @click="changeStatus(row, 'active')">
+              <el-button v-if="canOperate && row.status !== 'active'" type="primary" size="small" @click="changeStatus(row, 'active')">
                 通过/恢复
               </el-button>
-              <el-button v-if="row.status === 'active'" type="danger" plain size="small" @click="changeStatus(row, 'suspended')">
+              <el-button v-if="canOperate && row.status === 'active'" type="danger" plain size="small" @click="changeStatus(row, 'suspended')">
                 冻结
               </el-button>
-              <el-button size="small" type="success" plain @click="quickOpen(row, 'month')">开通月付</el-button>
-              <el-button size="small" type="success" plain @click="quickOpen(row, 'year')">开通年付</el-button>
-              <el-button size="small" type="warning" plain @click="openCustomDialog(row)">自定义时长</el-button>
+              <el-button v-if="canManageSubscriptions" size="small" type="success" plain @click="quickOpen(row, 'month')">开通月付</el-button>
+              <el-button v-if="canManageSubscriptions" size="small" type="success" plain @click="quickOpen(row, 'year')">开通年付</el-button>
+              <el-button v-if="canManageSubscriptions" size="small" type="warning" plain @click="openCustomDialog(row)">自定义时长</el-button>
             </div>
           </template>
         </el-table-column>
@@ -206,6 +206,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '../../stores/auth'
 import { fetchMerchants, openMerchantSubscription, updateMerchantStatus } from '../../api/modules'
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
@@ -227,6 +228,9 @@ const currentMerchant = ref(null)
 const savingSubscription = ref(false)
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
+const canOperate = computed(() => authStore.isSuperAdmin || authStore.hasPermission('operations'))
+const canManageSubscriptions = computed(() => authStore.isSuperAdmin || authStore.hasPermission('finance'))
 
 const subscriptionForm = reactive({
   plan: 'month',

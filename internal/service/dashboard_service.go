@@ -154,7 +154,7 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 
 	var orderPatrol []map[string]interface{}
 	s.db.Table("orders").
-		Select("orders.id, orders.order_no, orders.order_type, orders.status, orders.total_amount, orders.customer_phone, stores.name AS store_name, merchants.name AS merchant_name, orders.created_at").
+		Select("orders.id, orders.order_no, orders.order_type, orders.status, orders.total_amount, stores.name AS store_name, merchants.name AS merchant_name, orders.created_at").
 		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
 		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
 		Where("orders.order_type = ? AND orders.created_at BETWEEN ? AND ?", "store_order", start, end).

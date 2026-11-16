@@ -1,11 +1,8 @@
 package service
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"log"
-	"math/big"
 	"strings"
 	"time"
 
@@ -23,22 +20,20 @@ const mainlandPhoneLength = 11
 const devFixedSMSCode = "123456"
 
 type AuthService struct {
-	cfg        *config.Config
-	db         *gorm.DB
-	users      *repository.UserRepository
-	admin      *repository.AdminRepository
-	codes      *repository.VerificationCodeRepository
-	emailCodes *repository.EmailVerificationCodeRepository
+	cfg   *config.Config
+	db    *gorm.DB
+	users *repository.UserRepository
+	admin *repository.AdminRepository
+	codes *repository.VerificationCodeRepository
 }
 
 func NewAuthService(cfg *config.Config, db *gorm.DB) *AuthService {
 	return &AuthService{
-		cfg:        cfg,
-		db:         db,
-		users:      repository.NewUserRepository(db),
-		admin:      repository.NewAdminRepository(db),
-		codes:      repository.NewVerificationCodeRepository(db),
-		emailCodes: repository.NewEmailVerificationCodeRepository(db),
+		cfg:   cfg,
+		db:    db,
+		users: repository.NewUserRepository(db),
+		admin: repository.NewAdminRepository(db),
+		codes: repository.NewVerificationCodeRepository(db),
 	}
 }
 
@@ -160,7 +155,12 @@ func (s *AuthService) AdminLogin(req dto.AdminLoginRequest) (*model.AdminUser, s
 		return nil, "", errors.New("账号或密码错误")
 	}
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, admin.ID, admin.Username, admin.Role.Code, nil, 24)
+	tokenRole := "admin"
+	if admin.Role.Code == "super_admin" {
+		tokenRole = "super_admin"
+	}
+	credentialVersion := utils.AdminCredentialVersion(s.cfg.JWTSecret, admin.AuthVersion, admin.PasswordHash, admin.Status, admin.RoleID, admin.Role.Code, admin.Role.Permissions)
+	token, err := utils.GenerateAdminToken(s.cfg.JWTSecret, admin.ID, admin.Username, tokenRole, credentialVersion, 24)
 	return admin, token, err
 }
 
@@ -230,9 +230,9 @@ func (s *AuthService) BindPhone(userID uint, req dto.BindPhoneRequest) (*model.U
 	}
 
 	var updated *model.User
+	invalidCode := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		users := repository.NewUserRepository(tx)
-		codes := repository.NewVerificationCodeRepository(tx)
 
 		user, err := users.FindByID(userID)
 		if err != nil {
@@ -247,26 +247,30 @@ func (s *AuthService) BindPhone(userID uint, req dto.BindPhoneRequest) (*model.U
 			}
 		}
 
-		record, err := codes.FindValid(phone, "bind_phone", req.Code)
+		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "bind_phone", req.Code)
 		if err != nil {
-			return errors.New("验证码错误或已过期")
-		}
-
-		now := time.Now()
-		record.ConsumedAt = &now
-		user.Phone = phone
-
-		if err := codes.Save(record); err != nil {
 			return err
 		}
+		if !valid {
+			invalidCode = true
+			return nil
+		}
+
+		user.Phone = phone
+
 		if err := users.Save(user); err != nil {
 			return err
 		}
 		updated = user
 		return nil
 	})
-
-	return updated, err
+	if err != nil {
+		return nil, err
+	}
+	if invalidCode {
+		return nil, errSMSInvalidCode
+	}
+	return updated, nil
 }
 
 func (s *AuthService) ResetPasswordByPhone(req dto.ResetPasswordByPhoneRequest) error {
@@ -275,18 +279,22 @@ func (s *AuthService) ResetPasswordByPhone(req dto.ResetPasswordByPhoneRequest) 
 		return errors.New("手机号必须为 11 位数字")
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	invalidCode := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		users := repository.NewUserRepository(tx)
-		codes := repository.NewVerificationCodeRepository(tx)
 
 		user, err := users.FindByPhone(phone)
 		if err != nil {
 			return errors.New("手机号未注册")
 		}
 
-		record, err := codes.FindValid(phone, "reset_password", req.Code)
+		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "reset_password", req.Code)
 		if err != nil {
-			return errors.New("验证码错误或已过期")
+			return err
+		}
+		if !valid {
+			invalidCode = true
+			return nil
 		}
 
 		hash, err := utils.HashPassword(req.NewPassword)
@@ -295,15 +303,18 @@ func (s *AuthService) ResetPasswordByPhone(req dto.ResetPasswordByPhoneRequest) 
 		}
 
 		now := time.Now()
-		record.ConsumedAt = &now
 		user.PasswordHash = hash
 		user.ResetToken = fmt.Sprintf("reset_%d", now.Unix())
 
-		if err := codes.Save(record); err != nil {
-			return err
-		}
 		return users.Save(user)
 	})
+	if err != nil {
+		return err
+	}
+	if invalidCode {
+		return errSMSInvalidCode
+	}
+	return nil
 }
 
 func (s *AuthService) SendBindEmailCode(userID uint, req dto.SendEmailCodeRequest) error {
@@ -335,9 +346,9 @@ func (s *AuthService) BindEmail(userID uint, req dto.BindEmailRequest) (*model.U
 	}
 
 	var updated *model.User
+	invalidCode := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		users := repository.NewUserRepository(tx)
-		emailCodes := repository.NewEmailVerificationCodeRepository(tx)
 
 		user, err := users.FindByID(userID)
 		if err != nil {
@@ -352,18 +363,17 @@ func (s *AuthService) BindEmail(userID uint, req dto.BindEmailRequest) (*model.U
 			}
 		}
 
-		record, err := emailCodes.FindValid(email, "bind_email", req.Code)
+		valid, err := consumeEmailVerificationCodeInTransaction(tx, s.cfg.JWTSecret, email, "bind_email", req.Code)
 		if err != nil {
-			return errors.New("验证码错误或已过期")
-		}
-
-		now := time.Now()
-		record.ConsumedAt = &now
-		user.Email = email
-
-		if err := emailCodes.Save(record); err != nil {
 			return err
 		}
+		if !valid {
+			invalidCode = true
+			return nil
+		}
+
+		user.Email = email
+
 		if err := users.Save(user); err != nil {
 			return err
 		}
@@ -371,7 +381,13 @@ func (s *AuthService) BindEmail(userID uint, req dto.BindEmailRequest) (*model.U
 		return nil
 	})
 
-	return updated, err
+	if err != nil {
+		return nil, err
+	}
+	if invalidCode {
+		return nil, errEmailInvalidCode
+	}
+	return updated, nil
 }
 
 func (s *AuthService) DevResetPassword(req dto.DevResetPasswordRequest) error {
@@ -390,8 +406,10 @@ func (s *AuthService) DevResetPassword(req dto.DevResetPasswordRequest) error {
 		if err != nil {
 			return errors.New("管理员不存在")
 		}
-		admin.PasswordHash = hash
-		return s.db.Save(admin).Error
+		return s.db.Model(&model.AdminUser{}).Where("id = ?", admin.ID).Updates(map[string]interface{}{
+			"password_hash": hash,
+			"auth_version":  gorm.Expr("auth_version + ?", 1),
+		}).Error
 	case "user":
 		user, err := s.users.FindByIdentifier(strings.TrimSpace(req.Account))
 		if err != nil {
@@ -406,72 +424,15 @@ func (s *AuthService) DevResetPassword(req dto.DevResetPasswordRequest) error {
 }
 
 func (s *AuthService) issueVerificationCode(phone, scene string, userID *uint) error {
-	code, err := s.generateSMSCode()
-	if err != nil {
-		return err
-	}
-
-	if err := s.codes.InvalidateActive(phone, scene); err != nil {
-		return err
-	}
-
-	record := &model.VerificationCode{
-		Phone:     phone,
-		Scene:     scene,
-		Code:      code,
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	if err := s.codes.Create(record); err != nil {
-		return err
-	}
-
-	log.Printf("[mock-sms] scene=%s phone=%s code=%s expires_at=%s", scene, phone, code, record.ExpiresAt.Format(time.RFC3339))
-	return nil
+	return issueSMSVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, phone, scene, userID)
 }
 
 func (s *AuthService) issueEmailVerificationCode(email, scene string, userID *uint) error {
-	code, err := generateNumericCode(6)
-	if err != nil {
-		return err
-	}
-
-	if err := s.emailCodes.InvalidateActive(email, scene); err != nil {
-		return err
-	}
-
-	record := &model.EmailVerificationCode{
-		Email:     email,
-		Scene:     scene,
-		Code:      code,
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	if err := s.emailCodes.Create(record); err != nil {
-		return err
-	}
-
-	log.Printf("[mock-email] scene=%s email=%s code=%s expires_at=%s", scene, email, code, record.ExpiresAt.Format(time.RFC3339))
-	return nil
+	return issueEmailVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, email, scene, userID)
 }
 
 func (s *AuthService) consumeVerificationCode(phone, scene, code string) error {
-	if s.allowFixedSMSCode(code) {
-		log.Printf("[mock-sms] accepted fixed dev code scene=%s phone=%s code=%s", scene, phone, strings.TrimSpace(code))
-		return nil
-	}
-
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		codes := repository.NewVerificationCodeRepository(tx)
-		record, err := codes.FindValid(phone, scene, strings.TrimSpace(code))
-		if err != nil {
-			return errors.New("验证码错误或已过期")
-		}
-
-		now := time.Now()
-		record.ConsumedAt = &now
-		return codes.Save(record)
-	})
+	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code)
 }
 
 func (s *AuthService) ensureUserTenantDefaults(user *model.User) {
@@ -481,29 +442,7 @@ func (s *AuthService) ensureUserTenantDefaults(user *model.User) {
 }
 
 func (s *AuthService) generateSMSCode() (string, error) {
-	if !strings.EqualFold(s.cfg.AppEnv, "production") {
-		return devFixedSMSCode, nil
-	}
-	return generateNumericCode(6)
-}
-
-func (s *AuthService) allowFixedSMSCode(code string) bool {
-	return !strings.EqualFold(s.cfg.AppEnv, "production") && strings.TrimSpace(code) == devFixedSMSCode
-}
-
-func generateNumericCode(length int) (string, error) {
-	var builder strings.Builder
-	builder.Grow(length)
-
-	for i := 0; i < length; i++ {
-		n, err := rand.Int(rand.Reader, big.NewInt(10))
-		if err != nil {
-			return "", err
-		}
-		builder.WriteByte(byte('0' + n.Int64()))
-	}
-
-	return builder.String(), nil
+	return generateMockSMSCode(s.cfg.AppEnv)
 }
 
 func normalizePhone(phone string) string {

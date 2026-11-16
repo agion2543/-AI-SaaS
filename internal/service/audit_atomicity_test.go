@@ -298,7 +298,7 @@ func TestRefundAuditIntentFailurePreventsProviderDispatch(t *testing.T) {
 	if err := db.Where("action = ?", "merchant_order_refund").First(&log).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(log.Detail, "provider_dispatch_intent") || !strings.Contains(log.Detail, "processing") {
-		t.Fatalf("refund audit does not identify durable dispatch intent: %s", log.Detail)
+	if log.Detail != `{"purpose":"商家退款处理"}` || strings.Contains(log.Detail, "synthetic regression") {
+		t.Fatalf("refund audit must retain only the purpose and omit free-text reason: %s", log.Detail)
 	}
 }

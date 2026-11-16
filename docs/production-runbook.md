@@ -16,7 +16,7 @@
 2. 复制 `.env.production.example` 为生产环境变量文件。
 3. 修改 `APP_ENV=production`、`APP_URL`、`FRONTEND_URL`、`JWT_SECRET`、`AES_SECRET`、`INITIAL_ADMIN_PASSWORD`、`MYSQL_DSN`。
 4. 全新数据库安装使用 `docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build`；该入口专用新数据卷，禁止用于已有数据库。
-5. 访问 `/health` 确认后端健康。
+5. 访问 `/health` 确认 HTTP 进程有响应，再访问 `/ready` 确认数据库连接可用；`/health` 不代表数据库已就绪。
 6. 登录平台后台，立即修改初始化管理员密码。
 7. 打开“运营健康中心”，优先处理危险项。
 8. 用测试商家跑通：商家入驻、商品上架、顾客下单、支付状态页、商家接单、小票打印、退款记录。

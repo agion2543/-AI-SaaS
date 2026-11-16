@@ -31,13 +31,14 @@
           v-for="item in cartItems"
           :key="item.id"
           :title="item.name"
-          :label="`¥${formatPrice(item.price)} x ${item.count}`"
+          :label="orderItemLabel(item)"
         >
           <template #value>
-            <span class="item-price">¥{{ formatPrice(item.price * item.count) }}</span>
+            <span class="item-price">¥{{ formatPrice(getProductUnitPrice(item, item.count) * item.count) }}</span>
           </template>
         </van-cell>
       </van-cell-group>
+      <van-notice-bar v-if="hasMOQViolation" type="warning" :text="minimumOrderIssue" wrapable />
 
       <!-- 订单备注 -->
       <van-cell-group inset title="备注">
@@ -91,7 +92,7 @@
         label="订单金额"
         button-text="提交订单"
         :loading="submitting"
-        :disabled="submitting"
+        :disabled="submitting || hasMOQViolation"
         @submit="submitOrder"
       />
     </template>
@@ -120,6 +121,7 @@ import { showToast, showSuccessToast, showFailToast } from 'vant'
 import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder } from '@/api/modules'
 import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
 import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isDevMockPaymentFlagEnabled, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
+import { describeProductPricing, getMinimumOrderQuantity, getProductUnitPrice } from '@/utils/productPricing'
 
 const route = useRoute()
 const router = useRouter()
@@ -161,7 +163,22 @@ const totalCount = computed(() => {
 })
 
 const originalPrice = computed(() => {
-  return cartItems.value.reduce((sum, item) => sum + item.price * item.count, 0)
+  return cartItems.value.reduce((sum, item) => sum + getProductUnitPrice(item, item.count) * item.count, 0)
+})
+const isMOQInvalid = (item) => {
+  const minimum = getMinimumOrderQuantity(item)
+  const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
+  return item.count < minimum || (stock !== undefined && stock < minimum)
+}
+const hasMOQViolation = computed(() => cartItems.value.some(isMOQInvalid))
+const minimumOrderIssue = computed(() => {
+  const invalid = cartItems.value.find(isMOQInvalid)
+  if (!invalid) return ''
+  const minimum = getMinimumOrderQuantity(invalid)
+  const stock = invalid.stock === undefined || invalid.stock === null ? undefined : Number(invalid.stock)
+  return stock !== undefined && stock < minimum
+    ? `${invalid.name} 库存不足最低起订量，请返回购物车调整`
+    : `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}，请返回购物车调整`
 })
 
 const discountAmount = computed(() => {
@@ -190,6 +207,14 @@ const availableCoupons = computed(() => {
 // 方法
 function formatPrice(price) {
   return (Number(price || 0) / 100).toFixed(2)
+}
+
+function orderItemLabel(item) {
+  const unit = item.sales_unit ? `/${item.sales_unit}` : ''
+  const quantityUnit = item.sales_unit ? ` ${item.sales_unit}` : ''
+  const details = [describeProductPricing(item)]
+  details.push(`¥${formatPrice(getProductUnitPrice(item, item.count))}${unit} × ${item.count}${quantityUnit}`)
+  return details.filter(Boolean).join(' · ')
 }
 
 function loadCart() {
@@ -230,6 +255,10 @@ async function loadCoupons() {
 }
 
 async function submitOrder() {
+  if (hasMOQViolation.value) {
+    showToast(minimumOrderIssue.value)
+    return
+  }
   if (cartItems.value.length === 0) {
     showToast('购物车是空的')
     return
@@ -246,7 +275,7 @@ async function submitOrder() {
       customerPhone: customerPhone.value,
       customerNote: remark.value,
       couponNo: selectedCoupon.value?.coupon_no,
-      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: item.price }))
+      items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: getProductUnitPrice(item, item.count) }))
     }))
     const order = res.data.order || res.data
     const orderNo = order.order_no

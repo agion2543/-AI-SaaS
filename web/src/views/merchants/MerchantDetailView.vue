@@ -32,10 +32,10 @@
                   <p>平台可手动开通、调整或停用；暂停会立即撤销付费权限但不改变到期日，未到期才可恢复，过期需续费。</p>
                 </div>
                 <div class="action-row">
-                  <el-button type="primary" @click="openSubscriptionDialog">开通 / 调整</el-button>
-                  <el-button v-if="subscriptionValid" type="warning" plain @click="pauseSubscriptionNow">暂停订阅</el-button>
-                  <el-button v-if="isSubscriptionPaused" type="success" plain :disabled="!canResumeSubscription" @click="resumeSubscriptionNow">恢复订阅</el-button>
-                  <el-button v-if="merchant.subscription_status === 'active'" type="danger" plain @click="stopSubscriptionNow">停用</el-button>
+                  <el-button v-if="canFinance" type="primary" @click="openSubscriptionDialog">开通 / 调整</el-button>
+                  <el-button v-if="canFinance && subscriptionValid" type="warning" plain @click="pauseSubscriptionNow">暂停订阅</el-button>
+                  <el-button v-if="canFinance && isSubscriptionPaused" type="success" plain :disabled="!canResumeSubscription" @click="resumeSubscriptionNow">恢复订阅</el-button>
+                  <el-button v-if="canFinance && merchant.subscription_status === 'active'" type="danger" plain @click="stopSubscriptionNow">停用</el-button>
                 </div>
               </div>
               <div class="info-list">
@@ -48,7 +48,7 @@
               </div>
             </div>
 
-            <div class="inner-card">
+            <div v-if="canFinance" class="inner-card">
               <div class="toolbar">
                 <div>
                   <h3>收款资料审核</h3>
@@ -104,9 +104,9 @@
               </div>
               <div class="risk-actions">
                 <el-tag size="large" :type="riskLevelType">{{ riskLevel }}</el-tag>
-                <el-button type="primary" plain @click="openFollowUpDialog()">新增跟进</el-button>
-                <el-button v-if="merchant.status !== 'suspended'" type="danger" plain @click="changeMerchantStatus('suspended')">冻结商家</el-button>
-                <el-button v-else type="success" plain @click="changeMerchantStatus('active')">恢复营业</el-button>
+                <el-button v-if="canOperate" type="primary" plain @click="openFollowUpDialog()">新增跟进</el-button>
+                <el-button v-if="canOperate && merchant.status !== 'suspended'" type="danger" plain @click="changeMerchantStatus('suspended')">冻结商家</el-button>
+                <el-button v-else-if="canOperate" type="success" plain @click="changeMerchantStatus('active')">恢复营业</el-button>
               </div>
             </div>
 
@@ -151,7 +151,7 @@
           </section>
         </el-tab-pane>
 
-        <el-tab-pane label="结算记录" name="settlements">
+        <el-tab-pane v-if="canFinance" label="结算记录" name="settlements">
           <div class="toolbar settlement-toolbar">
             <div>
               <h3>人工结算</h3>
@@ -205,7 +205,11 @@
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="门店订单" name="orders">
+        <el-tab-pane v-if="canFinance" label="门店订单" name="orders">
+          <div class="store-order-contact-actions">
+            <span>顾客手机号默认脱敏；查看完整号码会记录审计。</span>
+            <el-button v-if="canViewCustomerContact" size="small" plain :loading="storeOrderLoading" @click="toggleStoreOrderContacts">{{ showStoreOrderContacts ? '隐藏完整手机号' : '查看完整手机号' }}</el-button>
+          </div>
           <el-table :data="storeOrders" empty-text="暂无门店订单">
             <el-table-column prop="order_no" label="订单号" min-width="180" />
             <el-table-column label="门店" min-width="130"><template #default="{ row }">{{ row.store?.name || '-' }}</template></el-table-column>
@@ -226,7 +230,7 @@
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="退款记录" name="refunds">
+        <el-tab-pane v-if="canFinance" label="退款记录" name="refunds">
           <el-table :data="merchantRefunds" empty-text="暂无退款记录">
             <el-table-column prop="refund_no" label="退款号" min-width="160" />
             <el-table-column label="关联订单" min-width="180"><template #default="{ row }">{{ row.order?.order_no || '-' }}</template></el-table-column>
@@ -239,7 +243,7 @@
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="订阅记录" name="subscriptionOrders">
+        <el-tab-pane v-if="canFinance" label="订阅记录" name="subscriptionOrders">
           <el-table :data="subscriptionOrders" empty-text="暂无订阅记录">
             <el-table-column prop="order_no" label="订单号" min-width="180" />
             <el-table-column label="套餐" min-width="120"><template #default="{ row }">{{ merchantPlanName(row.merchant_plan || row.merchantPlan || {}) }}</template></el-table-column>
@@ -251,7 +255,7 @@
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="操作审计" name="audit">
+        <el-tab-pane v-if="canSystem" label="操作审计" name="audit">
           <el-table :data="auditLogs" empty-text="暂无审计记录">
             <el-table-column prop="actor_name" label="操作人" width="130" />
             <el-table-column label="动作" min-width="150"><template #default="{ row }">{{ auditActionLabel(row.action) }}</template></el-table-column>
@@ -277,7 +281,7 @@
               <h3>异常工单 / 跟进记录</h3>
               <p>记录平台人工处理过程，例如电话联系商家、要求补充退款说明、暂停活动或安排复查。</p>
             </div>
-            <el-button type="primary" @click="openFollowUpDialog()">新增跟进</el-button>
+            <el-button v-if="canOperate" type="primary" @click="openFollowUpDialog()">新增跟进</el-button>
           </div>
           <el-table :data="followUps" empty-text="暂无跟进记录">
             <el-table-column label="类型" width="110">
@@ -302,8 +306,8 @@
             </el-table-column>
             <el-table-column label="操作" width="110" fixed="right">
               <template #default="{ row }">
-                <el-button v-if="row.status !== 'closed'" size="small" text type="success" @click="closeFollowUp(row)">标记处理</el-button>
-                <el-button v-else size="small" text @click="reopenFollowUp(row)">重新打开</el-button>
+                <el-button v-if="canOperate && row.status !== 'closed'" size="small" text type="success" @click="closeFollowUp(row)">标记处理</el-button>
+                <el-button v-else-if="canOperate" size="small" text @click="reopenFollowUp(row)">重新打开</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -311,7 +315,7 @@
       </el-tabs>
     </section>
 
-    <el-dialog v-model="settlementDialogVisible" title="发起人工结算" width="760px">
+    <el-dialog v-if="canFinance" v-model="settlementDialogVisible" title="发起人工结算" width="760px">
       <section class="settlement-stats compact">
         <div><span>订单数</span><strong>{{ settlementPrepare.order_count || 0 }}</strong></div>
         <div><span>订单实付</span><strong>{{ formatMoney(settlementPrepare.total_amount_cents) }}</strong></div>
@@ -340,7 +344,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="subscriptionDialogVisible" title="开通 / 调整订阅" width="520px">
+    <el-dialog v-if="canFinance" v-model="subscriptionDialogVisible" title="开通 / 调整订阅" width="520px">
       <el-form label-width="100px">
         <el-form-item label="套餐">
           <el-select v-model="subscriptionForm.plan">
@@ -361,7 +365,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="followUpDialogVisible" title="新增跟进记录" width="560px">
+    <el-dialog v-if="canOperate" v-model="followUpDialogVisible" title="新增跟进记录" width="560px">
       <el-form label-width="92px">
         <el-form-item label="类型">
           <el-select v-model="followUpForm.type">
@@ -407,6 +411,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '../../stores/auth'
 import {
   createAdminMerchantSettlement,
   createAdminMerchantFollowUp,
@@ -433,7 +438,14 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
+const canFinance = computed(() => authStore.isSuperAdmin || authStore.hasPermission('finance'))
+const canOperate = computed(() => authStore.isSuperAdmin || authStore.hasPermission('operations'))
+const canSystem = computed(() => authStore.isSuperAdmin || authStore.hasPermission('system_admin'))
+const canViewCustomerContact = computed(() => authStore.hasPermission('customer_contact_view'))
 const loading = ref(false)
+const storeOrderLoading = ref(false)
+const showStoreOrderContacts = ref(false)
 const activeTab = ref('overview')
 const merchant = ref({})
 const paymentConfig = ref({})
@@ -611,30 +623,65 @@ const summaryCards = computed(() => [
 const load = async () => {
   loading.value = true
   try {
-    const [merchantRes, paymentRes, storesRes, subscriptionRes, ordersRes, prepareRes, settlementsRes, followUpsRes, refundsRes, auditRes] = await Promise.all([
+    const [merchantRes, storesRes, followUpsRes] = await Promise.all([
       fetchMerchantDetail(merchantID()),
-      fetchAdminMerchantPaymentConfig(merchantID()),
       fetchAdminMerchantStores(merchantID(), { page: 1, page_size: 50 }),
-      fetchAdminMerchantSubscriptionOrders(merchantID()),
-      fetchAdminMerchantStoreOrders(merchantID(), { limit: 50 }),
-      fetchAdminMerchantSettlementPrepare(merchantID()),
-      fetchAdminMerchantSettlements(merchantID()),
-      fetchAdminMerchantFollowUps(merchantID()),
-      fetchRefunds(),
-      fetchAuditLogs({ merchant_id: merchantID(), page: 1, page_size: 50 })
+      fetchAdminMerchantFollowUps(merchantID())
     ])
     merchant.value = merchantRes.data || {}
-    paymentConfig.value = paymentRes.data.config || {}
     stores.value = storesRes.data.list || []
-    subscriptionOrders.value = subscriptionRes.data.list || []
-    storeOrders.value = ordersRes.data.list || []
-    settlementPrepare.value = prepareRes.data || {}
-    settlements.value = settlementsRes.data.list || []
     followUps.value = followUpsRes.data.list || []
-    refunds.value = refundsRes.data || []
-    auditLogs.value = auditRes.data.list || []
+    if (canFinance.value) {
+      const [paymentRes, subscriptionRes, ordersRes, prepareRes, settlementsRes, refundsRes] = await Promise.all([
+        fetchAdminMerchantPaymentConfig(merchantID()),
+        fetchAdminMerchantSubscriptionOrders(merchantID()),
+        fetchAdminMerchantStoreOrders(merchantID(), { limit: 50, include_contact: showStoreOrderContacts.value ? 'true' : undefined }),
+        fetchAdminMerchantSettlementPrepare(merchantID()),
+        fetchAdminMerchantSettlements(merchantID()),
+        fetchRefunds()
+      ])
+      paymentConfig.value = paymentRes.data.config || {}
+      subscriptionOrders.value = subscriptionRes.data.list || []
+      storeOrders.value = ordersRes.data.list || []
+      settlementPrepare.value = prepareRes.data || {}
+      settlements.value = settlementsRes.data.list || []
+      refunds.value = refundsRes.data || []
+    } else {
+      paymentConfig.value = {}
+      subscriptionOrders.value = []
+      storeOrders.value = []
+      settlementPrepare.value = {}
+      settlements.value = []
+      refunds.value = []
+    }
+    if (canSystem.value) {
+      const auditRes = await fetchAuditLogs({ merchant_id: merchantID(), page: 1, page_size: 50 })
+      auditLogs.value = auditRes.data.list || []
+    } else {
+      auditLogs.value = []
+    }
   } finally {
     loading.value = false
+  }
+}
+
+const toggleStoreOrderContacts = async () => {
+  if (!canViewCustomerContact.value) return
+  showStoreOrderContacts.value = !showStoreOrderContacts.value
+  storeOrders.value = []
+  storeOrderLoading.value = true
+  try {
+    const res = await fetchAdminMerchantStoreOrders(merchantID(), {
+      limit: 50,
+      include_contact: showStoreOrderContacts.value ? 'true' : undefined
+    })
+    storeOrders.value = res.data.list || []
+  } catch (error) {
+    showStoreOrderContacts.value = false
+    storeOrders.value = []
+    ElMessage.error(error?.response?.data?.message || '门店订单联系方式加载失败')
+  } finally {
+    storeOrderLoading.value = false
   }
 }
 
@@ -903,6 +950,16 @@ onMounted(load)
   background:
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.16), transparent 32%),
     linear-gradient(135deg, #ffffff, #f8fbff);
+}
+
+.store-order-contact-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #64748b;
+  font-size: 13px;
 }
 
 .back-button {

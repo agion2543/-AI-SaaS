@@ -284,16 +284,57 @@ func schemaFingerprint(ctx context.Context, conn *sql.Conn) (string, error) {
 }
 
 func schemaFingerprintExcluding(ctx context.Context, conn *sql.Conn, excludedTables, excludedTriggers []string) (string, error) {
+	return schemaFingerprintFiltered(ctx, conn, excludedTables, excludedTriggers, "", "")
+}
+
+func schemaFingerprintExcludingColumn(ctx context.Context, conn *sql.Conn, excludedTables, excludedTriggers []string, table, column string) (string, error) {
+	if table == "" || column == "" {
+		return "", fmt.Errorf("both table and column are required for schema fingerprint exclusion")
+	}
+	return schemaFingerprintExcludingColumns(ctx, conn, excludedTables, excludedTriggers, []schemaColumn{{table: table, column: column}})
+}
+
+type schemaColumn struct {
+	table  string
+	column string
+}
+
+func schemaFingerprintExcludingColumns(ctx context.Context, conn *sql.Conn, excludedTables, excludedTriggers []string, excludedColumns []schemaColumn) (string, error) {
+	for _, excluded := range excludedColumns {
+		if excluded.table == "" || excluded.column == "" {
+			return "", fmt.Errorf("both table and column are required for schema fingerprint exclusion")
+		}
+	}
+	return schemaFingerprintFilteredColumns(ctx, conn, excludedTables, excludedTriggers, excludedColumns)
+}
+
+func schemaFingerprintFiltered(ctx context.Context, conn *sql.Conn, excludedTables, excludedTriggers []string, excludedColumnTable, excludedColumn string) (string, error) {
+	var excludedColumns []schemaColumn
+	if excludedColumnTable != "" || excludedColumn != "" {
+		excludedColumns = []schemaColumn{{table: excludedColumnTable, column: excludedColumn}}
+	}
+	return schemaFingerprintFilteredColumns(ctx, conn, excludedTables, excludedTriggers, excludedColumns)
+}
+
+func schemaFingerprintFilteredColumns(ctx context.Context, conn *sql.Conn, excludedTables, excludedTriggers []string, excludedColumns []schemaColumn) (string, error) {
 	h := sha256.New()
 	tableFilter := " AND TABLE_NAME<>?"
 	tableArgs := []any{ledgerTable}
+	columnFilter := tableFilter
+	columnArgs := append([]any(nil), tableArgs...)
 	constraintFilter := " AND tc.TABLE_NAME<>?"
 	constraintArgs := []any{ledgerTable}
 	for _, table := range excludedTables {
 		tableFilter += " AND TABLE_NAME<>?"
 		tableArgs = append(tableArgs, table)
+		columnFilter += " AND TABLE_NAME<>?"
+		columnArgs = append(columnArgs, table)
 		constraintFilter += " AND tc.TABLE_NAME<>?"
 		constraintArgs = append(constraintArgs, table)
+	}
+	for _, excluded := range excludedColumns {
+		columnFilter += " AND NOT (TABLE_NAME=? AND COLUMN_NAME=?)"
+		columnArgs = append(columnArgs, excluded.table, excluded.column)
 	}
 	triggerFilter := ""
 	triggerArgs := make([]any, 0, len(excludedTriggers))
@@ -307,7 +348,7 @@ func schemaFingerprintExcluding(ctx context.Context, conn *sql.Conn, excludedTab
 		args  []any
 	}{
 		{"tables", fmt.Sprintf(`SELECT TABLE_NAME, COALESCE(ENGINE, '<NULL>'), COALESCE(TABLE_COLLATION, '<NULL>') FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'%s ORDER BY TABLE_NAME`, tableFilter), tableArgs},
-		{"columns", fmt.Sprintf(`SELECT TABLE_NAME, COLUMN_NAME, CAST(ORDINAL_POSITION AS CHAR), COLUMN_TYPE, IS_NULLABLE, COALESCE(CAST(COLUMN_DEFAULT AS CHAR), '<NULL>'), EXTRA, COALESCE(COLLATION_NAME, '<NULL>') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()%s ORDER BY TABLE_NAME, ORDINAL_POSITION`, tableFilter), tableArgs},
+		{"columns", fmt.Sprintf(`SELECT TABLE_NAME, COLUMN_NAME, CAST(ORDINAL_POSITION AS CHAR), COLUMN_TYPE, IS_NULLABLE, COALESCE(CAST(COLUMN_DEFAULT AS CHAR), '<NULL>'), EXTRA, COALESCE(COLLATION_NAME, '<NULL>') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()%s ORDER BY TABLE_NAME, ORDINAL_POSITION`, columnFilter), columnArgs},
 		{"indexes", fmt.Sprintf(`SELECT TABLE_NAME, INDEX_NAME, CAST(NON_UNIQUE AS CHAR), CAST(SEQ_IN_INDEX AS CHAR), COALESCE(COLUMN_NAME, '<NULL>'), COALESCE(CAST(SUB_PART AS CHAR), '<NULL>'), COALESCE(COLLATION, '<NULL>'), INDEX_TYPE, COALESCE(NULLABLE, '<NULL>'), IS_VISIBLE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()%s ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`, tableFilter), tableArgs},
 		{"constraints", fmt.Sprintf(`SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, COALESCE(kcu.COLUMN_NAME, '<NULL>'), COALESCE(CAST(kcu.ORDINAL_POSITION AS CHAR), '<NULL>'), COALESCE(kcu.REFERENCED_TABLE_NAME, '<NULL>'), COALESCE(kcu.REFERENCED_COLUMN_NAME, '<NULL>'), COALESCE(rc.MATCH_OPTION, '<NULL>'), COALESCE(rc.UPDATE_RULE, '<NULL>'), COALESCE(rc.DELETE_RULE, '<NULL>') FROM information_schema.TABLE_CONSTRAINTS tc LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu ON kcu.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND kcu.TABLE_NAME=tc.TABLE_NAME AND kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS rc ON rc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND rc.TABLE_NAME=tc.TABLE_NAME AND rc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME WHERE tc.CONSTRAINT_SCHEMA=DATABASE()%s ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`, constraintFilter), constraintArgs},
 		{"triggers", fmt.Sprintf(`SELECT TRIGGER_NAME, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, ACTION_TIMING, ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE()%s ORDER BY TRIGGER_NAME`, triggerFilter), triggerArgs},

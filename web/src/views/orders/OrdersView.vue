@@ -8,7 +8,8 @@
     >
       <template #actions>
         <el-button plain @click="goSubscriptionRevenue">订阅营收管理</el-button>
-        <el-button plain @click="exportOrdersXlsx">导出订单 XLSX</el-button>
+        <el-button v-if="auth.hasPermission('customer_contact_view')" plain :loading="loading" @click="toggleCustomerContact">{{ includeContact ? '隐藏完整联系方式' : '查看完整联系方式' }}</el-button>
+        <el-button v-if="auth.hasPermission('customer_order_export')" plain :loading="exporting" @click="exportOrdersXlsx">导出订单 XLSX</el-button>
         <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
       </template>
     </PageHero>
@@ -188,6 +189,9 @@
             <el-table-column label="商家 / 用户" min-width="180">
               <template #default="{ row }">{{ row.merchant?.name || row.user?.display_name || row.user?.phone || '-' }}</template>
             </el-table-column>
+            <el-table-column label="顾客联系方式" min-width="150">
+              <template #default="{ row }">{{ row.customer_phone || row.user?.phone || '-' }}</template>
+            </el-table-column>
             <el-table-column label="金额" width="120">
               <template #default="{ row }">{{ formatMoney(row.total_amount ?? row.amount ?? 0) }}</template>
             </el-table-column>
@@ -329,6 +333,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createAdminMerchantFollowUp,
+  exportAdminOrders,
   fetchOrders,
   fetchPayments,
   fetchRefunds,
@@ -339,14 +344,18 @@ import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
 import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '../../utils/refundIdempotency'
-import { exportRowsToXlsx } from '../../utils/xlsx'
+import { useAuthStore } from '../../stores/auth'
+import { downloadBlob } from '../../utils/download'
 
+const auth = useAuthStore()
 const orders = ref([])
 const route = useRoute()
 const router = useRouter()
 const payments = ref([])
 const refunds = ref([])
 const loading = ref(false)
+const exporting = ref(false)
+const includeContact = ref(false)
 const refundDialogVisible = ref(false)
 const refundSaving = ref(false)
 const refundOrder = ref(null)
@@ -406,13 +415,27 @@ const exceptionQuickFilters = computed(() => [
 const load = async () => {
   loading.value = true
   try {
-    const [ordersRes, paymentsRes, refundsRes] = await Promise.all([fetchOrders(), fetchPayments(), fetchRefunds()])
+    const [ordersRes, paymentsRes, refundsRes] = await Promise.all([
+      fetchOrders({ include_contact: includeContact.value ? 'true' : undefined }),
+      fetchPayments(),
+      fetchRefunds()
+    ])
     orders.value = ordersRes.data || []
     payments.value = paymentsRes.data || []
     refunds.value = refundsRes.data || []
+  } catch (error) {
+    includeContact.value = false
+    orders.value = []
+    ElMessage.error(error?.response?.data?.message || '订单数据加载失败')
   } finally {
     loading.value = false
   }
+}
+
+const toggleCustomerContact = async () => {
+  includeContact.value = !includeContact.value
+  orders.value = []
+  await load()
 }
 
 const resetFilters = () => {
@@ -598,20 +621,25 @@ const submitRefund = async () => {
   }
 }
 
-const exportOrdersXlsx = () => {
-  const rows = filteredOrders.value.map((item) => ({
-    订单号: item.order_no,
-    类型: orderTypeLabel(item.order_type),
-    商家或用户: item.merchant?.name || item.user?.display_name || item.user?.phone || '',
-    金额: (Number(item.total_amount ?? item.amount ?? 0) / 100).toFixed(2),
-    已退款: (Number(item.refunded_amount || 0) / 100).toFixed(2),
-    退款状态: refundLabel(item.refund_status),
-    状态: statusLabel(item.status),
-    支付方式: item.payment_channel || '',
-    支付时间: formatTime(item.paid_at),
-    创建时间: formatTime(item.created_at)
-  }))
-  exportRowsToXlsx('platform-orders-finance.xlsx', '订单财务', rows)
+const exportOrdersXlsx = async () => {
+  exporting.value = true
+  try {
+    const blob = await exportAdminOrders({
+      date_from: filters.dateRange?.[0] || undefined,
+      date_to: filters.dateRange?.[1] || undefined,
+      keyword: filters.keyword || undefined,
+      order_type: filters.orderType || undefined,
+      status: filters.status || undefined,
+      exception: filters.exception || undefined,
+      include_contact: includeContact.value ? 'true' : undefined
+    })
+    downloadBlob(blob, 'platform-orders-finance.xlsx')
+    ElMessage.success('订单文件由服务端按当前筛选生成并记录审计。')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '订单导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`

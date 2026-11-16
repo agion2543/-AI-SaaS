@@ -23,7 +23,6 @@ import (
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/schema"
-	"go-web-gin-health/internal/utils"
 )
 
 const (
@@ -317,7 +316,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, productPricingColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -330,8 +329,23 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.ManualReviewV2Version, schema.ManualReviewV2Checksum).Scan(&v2Rows); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 32 || triggers != 6 || v1Rows != 1 || v2Rows != 1 {
-		t.Fatalf("managed schema inventory tables/triggers/v1/v2=%d/%d/%d/%d; want 32/6/1/1", tables, triggers, v1Rows, v2Rows)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.AdminAuthV3Version, schema.AdminAuthV3Checksum).Scan(&v3Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.OTPSafetyV4Version, schema.OTPSafetyV4Checksum).Scan(&v4Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.EmailOTPSafetyV5Version, schema.EmailOTPSafetyV5Checksum).Scan(&v5Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.WholesaleRetailV6Version, schema.WholesaleRetailV6Checksum).Scan(&v6Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 32 || triggers != 6 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || productPricingColumns != 4 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v6=%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; want 32/6/1/1/1/1/1/1 and 4 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, productPricingColumns)
 	}
 }
 
@@ -400,10 +414,10 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 2 || len(right) != 2 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 2/2", len(left), len(right))
+	if len(left) != 6 || len(right) != 6 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 6/6", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version} {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version} {
 		if left[version] != right[version] {
 			t.Fatalf("source/restored ledger fingerprint differs for %s", version)
 		}
@@ -434,11 +448,9 @@ func assertLifecycleReadEndpoints(t *testing.T, databaseName, orderNo string) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	engine := gin.New()
 	cfg := &config.Config{JWTSecret: "synthetic-lifecycle-only-secret", FrontendURL: "http://localhost", RateLimitPerMinute: 1000}
+	seedSyntheticSuperAdmin(t, gormDB, 7, "synthetic-lifecycle-super")
 	Register(engine, gormDB, cfg)
-	token, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatalf("create synthetic-only administrator token: %v", err)
-	}
+	token := syntheticAdminToken(t, gormDB, cfg, 7)
 	request := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)

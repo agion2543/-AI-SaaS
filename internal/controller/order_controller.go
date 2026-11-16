@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/smartwalle/alipay/v3"
@@ -63,8 +64,15 @@ func (ctl *OrderController) PublicStoreProducts(c *gin.Context) {
 }
 
 func (ctl *OrderController) PublicStoreCoupons(c *gin.Context) {
+	var request struct {
+		Phone string `json:"phone"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		utils.Error(c, http.StatusBadRequest, "invalid coupon lookup request")
+		return
+	}
 	storeID := uint(atoi(c.Param("storeId")))
-	coupons, err := ctl.service.PublicStoreCoupons(storeID, c.Query("phone"))
+	coupons, err := ctl.service.PublicStoreCoupons(storeID, request.Phone)
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
@@ -321,7 +329,7 @@ func (ctl *OrderController) MerchantOrders(c *gin.Context) {
 		return
 	}
 
-	utils.Success(c, gin.H{"list": serializeOrders(list), "total": total})
+	utils.Success(c, gin.H{"list": serializeMerchantOrders(list), "total": total})
 }
 
 func (ctl *OrderController) MerchantOrderDetail(c *gin.Context) {
@@ -337,7 +345,11 @@ func (ctl *OrderController) MerchantOrderDetail(c *gin.Context) {
 		utils.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order)})
+	if err := ctl.audit.RecordSensitiveRead(c, "merchant_order_detail_view", "order", order.ID, merchantID, "履约与售后查询"); err != nil {
+		utils.Error(c, http.StatusInternalServerError, "failed to record sensitive access audit")
+		return
+	}
+	utils.Success(c, gin.H{"order": serializeMerchantOrderDetail(order)})
 }
 
 func (ctl *OrderController) AcceptMerchantOrder(c *gin.Context) {
@@ -368,7 +380,7 @@ func (ctl *OrderController) ConfirmMerchantOrderPayment(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "confirmed": true})
+	utils.Success(c, gin.H{"order": serializeMerchantOrderSummary(order), "confirmed": true})
 }
 
 func (ctl *OrderController) CompleteMerchantOrder(c *gin.Context) {
@@ -419,7 +431,7 @@ func (ctl *OrderController) UpdateMerchantOrderNote(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "updated": true})
+	utils.Success(c, gin.H{"order": serializeMerchantOrderSummary(order), "updated": true})
 }
 
 func (ctl *OrderController) RefundMerchantOrder(c *gin.Context) {
@@ -445,7 +457,7 @@ func (ctl *OrderController) RefundMerchantOrder(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "refunded": true})
+	utils.Success(c, gin.H{"order": serializeMerchantOrderSummary(order), "refunded": true})
 }
 
 func (ctl *OrderController) RefundAdminOrder(c *gin.Context) {
@@ -465,16 +477,23 @@ func (ctl *OrderController) RefundAdminOrder(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "refunded": true})
+	utils.Success(c, gin.H{"order": serializeAdminOrder(order, false), "refunded": true})
 }
 
 func (ctl *OrderController) ListAll(c *gin.Context) {
+	includeContact, allowed := authorizeAdminCustomerContactRequest(c)
+	if !allowed {
+		return
+	}
 	orders, err := ctl.service.AllOrders()
 	if err != nil {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	utils.Success(c, serializeOrders(orders))
+	if includeContact && !recordAdminCustomerContactRead(c, ctl.audit, "platform_orders", 0, "平台订单联系方式查看") {
+		return
+	}
+	utils.Success(c, serializeAdminOrders(orders, includeContact))
 }
 
 func (ctl *OrderController) Payments(c *gin.Context) {
@@ -483,7 +502,7 @@ func (ctl *OrderController) Payments(c *gin.Context) {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	utils.Success(c, list)
+	utils.Success(c, serializeAdminPayments(list))
 }
 
 func (ctl *OrderController) ConfirmMerchantSubscriptionPayment(c *gin.Context) {
@@ -498,7 +517,7 @@ func (ctl *OrderController) ConfirmMerchantSubscriptionPayment(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"order": serializeOrder(order), "confirmed": true})
+	utils.Success(c, gin.H{"order": serializeAdminOrder(order, false), "confirmed": true})
 }
 
 func (ctl *OrderController) ManualReviewLegacyMerchantSubscription(c *gin.Context) {
@@ -519,7 +538,7 @@ func (ctl *OrderController) ManualReviewLegacyMerchantSubscription(c *gin.Contex
 		return
 	}
 	utils.Success(c, gin.H{
-		"order":                      serializeOrder(result.Order),
+		"order":                      serializeAdminOrder(result.Order, false),
 		"manual_review":              result.Review,
 		"audit":                      result.Audit,
 		"idempotent":                 result.Idempotent,
@@ -608,7 +627,7 @@ func (ctl *OrderController) Refunds(c *gin.Context) {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	utils.Success(c, list)
+	utils.Success(c, serializeAdminRefunds(list))
 }
 
 func (ctl *OrderController) AdminUnknownRefundReservations(c *gin.Context) {
@@ -668,7 +687,7 @@ func (ctl *OrderController) MerchantRefunds(c *gin.Context) {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	utils.Success(c, list)
+	utils.Success(c, serializeMerchantRefunds(list))
 }
 
 func (ctl *OrderController) MerchantSettlements(c *gin.Context) {
@@ -692,6 +711,203 @@ func serializeOrders(orders []model.Order) []gin.H {
 		rows = append(rows, serializeOrder(&item))
 	}
 	return rows
+}
+
+func serializeMerchantOrders(orders []model.Order) []merchantOrderResponseDTO {
+	rows := make([]merchantOrderResponseDTO, 0, len(orders))
+	for i := range orders {
+		rows = append(rows, serializeMerchantOrderSummary(&orders[i]))
+	}
+	return rows
+}
+
+type merchantOrderStoreSummaryDTO struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+type merchantOrderItemDTO struct {
+	ProductID              uint                     `json:"product_id"`
+	Name                   string                   `json:"name"`
+	Price                  int64                    `json:"price"`
+	BasePrice              int64                    `json:"base_price,omitempty"`
+	Quantity               int                      `json:"quantity"`
+	LineAmount             int64                    `json:"line_amount,omitempty"`
+	Description            string                   `json:"description,omitempty"`
+	ImageURL               string                   `json:"image_url,omitempty"`
+	SalesUnit              string                   `json:"sales_unit,omitempty"`
+	Specification          string                   `json:"specification,omitempty"`
+	MinimumOrderQuantity   int                      `json:"minimum_order_quantity,omitempty"`
+	AppliedTierMinQuantity int                      `json:"applied_tier_min_quantity,omitempty"`
+	PriceTiers             []model.ProductPriceTier `json:"price_tiers,omitempty"`
+}
+
+type merchantOrderResponseDTO struct {
+	ID              uint                          `json:"id"`
+	OrderNo         string                        `json:"order_no"`
+	OrderType       string                        `json:"order_type"`
+	SettlementID    *uint                         `json:"settlement_id,omitempty"`
+	StoreID         *uint                         `json:"store_id,omitempty"`
+	Store           *merchantOrderStoreSummaryDTO `json:"store,omitempty"`
+	CustomerPhone   string                        `json:"customer_phone"`
+	Amount          int64                         `json:"amount"`
+	TotalAmount     int64                         `json:"total_amount"`
+	DiscountAmount  int64                         `json:"discount_amount"`
+	RefundedAmount  int64                         `json:"refunded_amount"`
+	RefundStatus    string                        `json:"refund_status"`
+	Items           []merchantOrderItemDTO        `json:"items"`
+	HasCustomerNote bool                          `json:"has_customer_note"`
+	HasMerchantNote bool                          `json:"has_merchant_note"`
+	CustomerNote    string                        `json:"customer_note,omitempty"`
+	MerchantNote    string                        `json:"merchant_note,omitempty"`
+	OperationLogs   []service.OrderOperationLog   `json:"operation_logs,omitempty"`
+	Status          string                        `json:"status"`
+	PaymentChannel  string                        `json:"payment_channel"`
+	PaidAt          *time.Time                    `json:"paid_at,omitempty"`
+	CreatedAt       time.Time                     `json:"created_at"`
+	UpdatedAt       time.Time                     `json:"updated_at"`
+	CanRefund       bool                          `json:"can_refund"`
+}
+
+func serializeMerchantOrderSummary(order *model.Order) merchantOrderResponseDTO {
+	if order == nil {
+		return merchantOrderResponseDTO{Items: []merchantOrderItemDTO{}}
+	}
+	row := merchantOrderResponseDTO{
+		ID:              order.ID,
+		OrderNo:         order.OrderNo,
+		OrderType:       order.OrderType,
+		SettlementID:    order.SettlementID,
+		StoreID:         order.StoreID,
+		CustomerPhone:   utils.MaskPhone(order.CustomerPhone),
+		Amount:          order.Amount,
+		TotalAmount:     order.TotalAmount,
+		DiscountAmount:  order.DiscountAmount,
+		RefundedAmount:  order.RefundedAmount,
+		RefundStatus:    order.RefundStatus,
+		Items:           serializeMerchantOrderItems(order.Items, false),
+		HasCustomerNote: strings.TrimSpace(order.CustomerNote) != "",
+		HasMerchantNote: strings.TrimSpace(order.MerchantNote) != "",
+		Status:          order.Status,
+		PaymentChannel:  order.PaymentChannel,
+		PaidAt:          order.PaidAt,
+		CreatedAt:       order.CreatedAt,
+		UpdatedAt:       order.UpdatedAt,
+		CanRefund:       merchantOrderCanRefund(order),
+	}
+	if order.Store != nil {
+		row.Store = &merchantOrderStoreSummaryDTO{ID: order.Store.ID, Name: order.Store.Name}
+	}
+	return row
+}
+
+func serializeMerchantOrderDetail(order *model.Order) merchantOrderResponseDTO {
+	row := serializeMerchantOrderSummary(order)
+	if order == nil {
+		return row
+	}
+	row.CustomerPhone = order.CustomerPhone
+	row.CustomerNote = order.CustomerNote
+	row.MerchantNote = order.MerchantNote
+	row.Items = serializeMerchantOrderItems(order.Items, true)
+	row.OperationLogs = parseOrderLogs(order.OperationLogs)
+	return row
+}
+
+func serializeMerchantOrderItems(raw string, includeDetails bool) []merchantOrderItemDTO {
+	snapshots := parseOrderItems(raw)
+	items := make([]merchantOrderItemDTO, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		item := merchantOrderItemDTO{
+			ProductID:              snapshot.ProductID,
+			Name:                   snapshot.Name,
+			Price:                  snapshot.Price,
+			BasePrice:              snapshot.BasePrice,
+			Quantity:               snapshot.Quantity,
+			SalesUnit:              snapshot.SalesUnit,
+			Specification:          snapshot.Specification,
+			MinimumOrderQuantity:   snapshot.MinimumOrderQuantity,
+			AppliedTierMinQuantity: snapshot.AppliedTierMinQuantity,
+			PriceTiers:             snapshot.PriceTiers,
+		}
+		if includeDetails {
+			item.LineAmount = snapshot.LineAmount
+			item.Description = snapshot.Description
+			item.ImageURL = snapshot.ImageURL
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func merchantOrderCanRefund(order *model.Order) bool {
+	if order == nil || order.OrderType != "store_order" || order.RefundStatus == "processing" || order.PaidAt == nil || order.TotalAmount <= 0 || order.TotalAmount-order.RefundedAmount <= 0 || order.PaymentChannel != "alipay" || strings.TrimSpace(order.TransactionNo) == "" {
+		return false
+	}
+	switch order.Status {
+	case "received", "accepted", "completed", "closed":
+		return true
+	default:
+		return false
+	}
+}
+
+type merchantRefundOrderSummaryDTO struct {
+	ID      uint   `json:"id"`
+	OrderNo string `json:"order_no"`
+	StoreID *uint  `json:"store_id,omitempty"`
+}
+
+type merchantRefundResponseDTO struct {
+	ID           uint                          `json:"id"`
+	OrderID      uint                          `json:"order_id"`
+	StoreID      *uint                         `json:"store_id,omitempty"`
+	RefundNo     string                        `json:"refund_no"`
+	Amount       int64                         `json:"amount"`
+	Reason       string                        `json:"reason"`
+	OperatorRole string                        `json:"operator_role"`
+	Status       string                        `json:"status"`
+	CreatedAt    time.Time                     `json:"created_at"`
+	ManualRecord bool                          `json:"manual_record"`
+	Order        merchantRefundOrderSummaryDTO `json:"order"`
+}
+
+func serializeMerchantRefunds(refunds []model.RefundRecord) []merchantRefundResponseDTO {
+	rows := make([]merchantRefundResponseDTO, 0, len(refunds))
+	for _, refund := range refunds {
+		storeID := refund.StoreID
+		if refund.Order.StoreID != nil {
+			storeID = refund.Order.StoreID
+		}
+		rows = append(rows, merchantRefundResponseDTO{
+			ID:           refund.ID,
+			OrderID:      refund.OrderID,
+			StoreID:      storeID,
+			RefundNo:     refund.RefundNo,
+			Amount:       refund.Amount,
+			Reason:       refund.Reason,
+			OperatorRole: refund.OperatorRole,
+			Status:       refund.Status,
+			CreatedAt:    refund.CreatedAt,
+			ManualRecord: merchantRefundIsManualRecord(refund.RawPayload),
+			Order: merchantRefundOrderSummaryDTO{
+				ID:      refund.OrderID,
+				OrderNo: refund.Order.OrderNo,
+				StoreID: storeID,
+			},
+		})
+	}
+	return rows
+}
+
+func merchantRefundIsManualRecord(raw string) bool {
+	var payload struct {
+		Mode string `json:"mode"`
+	}
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &payload) != nil {
+		return false
+	}
+	return payload.Mode == "manual_record"
 }
 
 func serializeOrder(order *model.Order) gin.H {
@@ -747,14 +963,20 @@ func serializePublicCustomerOrder(order *model.Order) gin.H {
 	items := make([]gin.H, 0)
 	for _, item := range parseOrderItems(order.Items) {
 		items = append(items, gin.H{
-			"product_id":   item.ProductID,
-			"name":         item.Name,
-			"product_name": item.Name,
-			"price":        item.Price,
-			"quantity":     item.Quantity,
-			"line_amount":  item.LineAmount,
-			"description":  item.Description,
-			"image_url":    item.ImageURL,
+			"product_id":                item.ProductID,
+			"name":                      item.Name,
+			"product_name":              item.Name,
+			"price":                     item.Price,
+			"base_price":                item.BasePrice,
+			"quantity":                  item.Quantity,
+			"line_amount":               item.LineAmount,
+			"description":               item.Description,
+			"image_url":                 item.ImageURL,
+			"sales_unit":                item.SalesUnit,
+			"specification":             item.Specification,
+			"minimum_order_quantity":    item.MinimumOrderQuantity,
+			"applied_tier_min_quantity": item.AppliedTierMinQuantity,
+			"price_tiers":               item.PriceTiers,
 		})
 	}
 	logs := make([]gin.H, 0)

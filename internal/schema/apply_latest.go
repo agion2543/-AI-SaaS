@@ -11,26 +11,100 @@ import (
 )
 
 // ApplyLatest installs v1 into a genuinely empty schema, then appends the
-// subscription manual-review v2 migration. Existing schemas are accepted only
-// when they are an exact managed v1 or exact managed v2; legacy and unknown
-// databases remain fail-closed.
+// subscription manual-review v2, administrator auth-version v3, phone OTP
+// safety v4, email OTP safety v5, and light wholesale/retail v6 migrations. Existing schemas are accepted
+// only when they are exact managed versions; legacy and unknown databases stay
+// fail-closed.
 func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
-	v1Result, err := ApplyCandidate(ctx, db)
-	if err != nil {
-		// ApplyCandidate intentionally retains its v1-only contract. An exact v2
-		// database is recognized by the v2 verifier below; no other schema is
-		// mutated by this fallback.
-		v2Result, v2Err := ApplyManualReviewV2(ctx, db)
-		if v2Err != nil {
-			return "", v2Err
+	var err error
+	v1Result, v1Err := ApplyCandidate(ctx, db)
+	if v1Err != nil {
+		// First accept or advance the latest exact version. If this fails, probe
+		// earlier exact versions in reverse order; every probe is read-only until
+		// its own source version has been fully verified.
+		v6Result, v6Err := ApplyWholesaleRetailV6(ctx, db)
+		if v6Err == nil {
+			return v6Result, nil
 		}
-		return v2Result, nil
+		v5Result, v5Err := ApplyEmailOTPSafetyV5(ctx, db)
+		if v5Err == nil {
+			v6Result, err := ApplyWholesaleRetailV6(ctx, db)
+			if err != nil {
+				return "", err
+			}
+			if v5Result == ResultApplied || v6Result == ResultApplied {
+				return ResultApplied, nil
+			}
+			return ResultAlready, nil
+		}
+		v4Result, v4Err := ApplyOTPSafetyV4(ctx, db)
+		if v4Err == nil {
+			v5Result, err = ApplyEmailOTPSafetyV5(ctx, db)
+			if err != nil {
+				return "", err
+			}
+			v6Result, err = ApplyWholesaleRetailV6(ctx, db)
+			if err != nil {
+				return "", err
+			}
+			if v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied {
+				return ResultApplied, nil
+			}
+			return ResultAlready, nil
+		}
+		if db != nil {
+			var laterLedgerRows int64
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_schema_migrations WHERE version IN (?, ?, ?, ?)`, AdminAuthV3Version, OTPSafetyV4Version, EmailOTPSafetyV5Version, WholesaleRetailV6Version).Scan(&laterLedgerRows); err == nil && laterLedgerRows > 0 {
+				return "", v6Err
+			}
+		}
+		v2Result, err := ApplyManualReviewV2(ctx, db)
+		if err != nil {
+			return "", err
+		}
+		v3Result, err := ApplyAdminAuthVersionV3(ctx, db)
+		if err != nil {
+			return "", err
+		}
+		v4Result, err = ApplyOTPSafetyV4(ctx, db)
+		if err != nil {
+			return "", err
+		}
+		v5Result, err = ApplyEmailOTPSafetyV5(ctx, db)
+		if err != nil {
+			return "", err
+		}
+		v6Result, err = ApplyWholesaleRetailV6(ctx, db)
+		if err != nil {
+			return "", err
+		}
+		if v2Result == ResultApplied || v3Result == ResultApplied || v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied {
+			return ResultApplied, nil
+		}
+		return ResultAlready, nil
 	}
+
 	v2Result, err := ApplyManualReviewV2(ctx, db)
 	if err != nil {
 		return "", err
 	}
-	if v1Result == ResultApplied || v2Result == ResultApplied {
+	v3Result, err := ApplyAdminAuthVersionV3(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	v4Result, err := ApplyOTPSafetyV4(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	v5Result, err := ApplyEmailOTPSafetyV5(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	v6Result, err := ApplyWholesaleRetailV6(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	if v1Result == ResultApplied || v2Result == ResultApplied || v3Result == ResultApplied || v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied {
 		return ResultApplied, nil
 	}
 	return ResultAlready, nil

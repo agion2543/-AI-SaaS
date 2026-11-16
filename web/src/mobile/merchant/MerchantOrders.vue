@@ -69,11 +69,11 @@
             </template>
           </van-cell>
 
-          <van-cell v-if="order.remark">
+          <van-cell v-if="order.has_customer_note">
             <template #label>
               <div class="order-remark">
                 <van-icon name="comment-o" />
-                备注: {{ order.remark }}
+                顾客有备注，请进入详情查看
               </div>
             </template>
           </van-cell>
@@ -221,7 +221,7 @@ const visibleOrders = computed(() => orders.value.filter((order) => {
   return true
 }))
 const isConfirmedPaid = (order) => Boolean(order?.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0
-const canRefund = (order) => order.refund_status !== 'processing' && isConfirmedPaid(order) && order.payment_channel === 'alipay' && Boolean(order.transaction_no) && Number(order.refunded_amount || 0) < Number(order.total_amount ?? order.amount ?? 0)
+const canRefund = (order) => Boolean(order?.can_refund)
 
 function formatPrice(price) {
   return parseFloat(price || 0).toFixed(2)

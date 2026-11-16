@@ -32,6 +32,7 @@ func TestRefundReconciliationRoutesAreAdminOnlyAndCannotBeMutatedByTenantOrCusto
 	if err := db.AutoMigrate(&model.Merchant{}, &model.Store{}, &model.Order{}, &model.RefundRecord{}, &model.RefundReconciliationAudit{}); err != nil {
 		t.Fatal(err)
 	}
+	seedSyntheticSuperAdmin(t, db, 7, "synthetic-refund-super")
 	merchant := model.Merchant{Name: "合成对账商户", Status: "active"}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatal(err)
@@ -63,10 +64,7 @@ func TestRefundReconciliationRoutesAreAdminOnlyAndCannotBeMutatedByTenantOrCusto
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, 7)
 	path := "/api/v1/admin/refund-reconciliations"
 	resolvePath := path + "/" + uintString(refund.ID) + "/resolve"
 	request := func(method, requestPath, token, body, customerAccessToken string) *httptest.ResponseRecorder {

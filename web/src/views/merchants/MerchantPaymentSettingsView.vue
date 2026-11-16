@@ -110,7 +110,7 @@
           <article v-for="item in qrPreviewItems" :key="item.key" class="qr-preview-card" :class="{ empty: !item.value }">
             <div class="qr-preview-head">
               <strong>{{ item.label }}</strong>
-              <el-tag size="small" :type="item.value ? 'success' : 'info'">{{ item.value ? '已配置' : '未配置' }}</el-tag>
+              <el-tag size="small" :type="item.pending ? 'warning' : item.value ? 'success' : 'info'">{{ item.pending ? '待保存' : item.value ? '已配置' : '未配置' }}</el-tag>
             </div>
             <div class="qr-preview-box">
               <img v-if="item.value" :src="qrDisplayUrl(item.value, item.key)" :alt="item.label" @error="markQrBroken(item.key)" />
@@ -130,7 +130,7 @@
           <el-input v-model="form.remark" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="例如：测试环境、门店收款账户、财务联系人等" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="saving" @click="save">{{ saveButtonText }}</el-button>
+          <el-button type="primary" :loading="saving" :disabled="Boolean(uploadingKey)" @click="save">{{ saveButtonText }}</el-button>
           <el-button :loading="loading" @click="load">重新加载</el-button>
         </el-form-item>
       </el-form>
@@ -149,15 +149,16 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchMerchantPaymentConfig, saveMerchantPaymentConfig, uploadMerchantProductImage } from '../../api/modules'
+import { fetchMerchantPaymentConfig, saveMerchantPaymentConfig, uploadMerchantPaymentQRCode } from '../../api/modules'
 
 const loading = ref(false)
 const saving = ref(false)
 const config = ref({})
 const brokenQrs = ref({})
 const uploadingKey = ref('')
+const pendingQr = reactive({ alipay: null, wechat: null })
 const form = reactive({
   channel: 'alipay',
   mode: 'direct',
@@ -190,8 +191,8 @@ const modeAdviceMap = {
 
 const modeAdvice = computed(() => modeAdviceMap[form.mode] || modeAdviceMap.direct)
 const qrPreviewItems = computed(() => [
-  { key: 'alipay', label: '支付宝收款码', value: form.alipay_qr_code.trim(), tip: '顾客订单页会展示为支付宝付款入口。' },
-  { key: 'wechat', label: '微信收款码', value: form.wechat_qr_code.trim(), tip: '顾客订单页会展示为微信付款入口。' }
+  { key: 'alipay', label: '支付宝收款码', value: pendingQr.alipay?.previewUrl || form.alipay_qr_code.trim(), pending: Boolean(pendingQr.alipay), tip: '点击保存后替换当前配置；保存前只在本页预览。' },
+  { key: 'wechat', label: '微信收款码', value: pendingQr.wechat?.previewUrl || form.wechat_qr_code.trim(), pending: Boolean(pendingQr.wechat), tip: '点击保存后替换当前配置；保存前只在本页预览。' }
 ])
 const hasAnyQrCode = computed(() => qrPreviewItems.value.some((item) => Boolean(item.value)))
 const hasBasicAccount = computed(() => Boolean(form.account_name.trim() && form.account_no.trim()))
@@ -295,6 +296,7 @@ const load = async () => {
       contact_phone: config.value.contact_phone || '',
       remark: config.value.remark || ''
     })
+    clearPendingQr()
   } finally {
     loading.value = false
   }
@@ -311,8 +313,24 @@ const save = async () => {
   }
   saving.value = true
   try {
-    const res = await saveMerchantPaymentConfig({ ...form })
+    const res = await saveMerchantPaymentConfig({
+      ...form,
+      alipay_qr_upload_id: pendingQr.alipay?.uploadId || '',
+      wechat_qr_upload_id: pendingQr.wechat?.uploadId || ''
+    })
     config.value = res.data.config || {}
+    Object.assign(form, {
+      channel: config.value.channel || form.channel,
+      mode: config.value.mode || form.mode,
+      account_name: config.value.account_name || '',
+      account_no: config.value.account_no || '',
+      alipay_qr_code: config.value.alipay_qr_code || '',
+      wechat_qr_code: config.value.wechat_qr_code || '',
+      app_id: config.value.app_id || '',
+      contact_phone: config.value.contact_phone || '',
+      remark: config.value.remark || ''
+    })
+    clearPendingQr()
     ElMessage.success('收款信息已提交，等待平台审核')
   } catch (error) {
     ElMessage.error(error?.response?.data?.message || '收款信息提交失败，请检查后重试')
@@ -337,10 +355,12 @@ const uploadQr = async (options, key) => {
   try {
     const formData = new FormData()
     formData.append('file', file)
-    const res = await uploadMerchantProductImage(formData)
-    if (key === 'alipay') form.alipay_qr_code = res.data.url || ''
-    if (key === 'wechat') form.wechat_qr_code = res.data.url || ''
-    ElMessage.success('收款码已上传')
+    formData.append('channel', key)
+    const res = await uploadMerchantPaymentQRCode(formData)
+    if (pendingQr[key]?.previewUrl) URL.revokeObjectURL(pendingQr[key].previewUrl)
+    pendingQr[key] = { uploadId: res.data.upload_id, previewUrl: URL.createObjectURL(file) }
+    brokenQrs.value = { ...brokenQrs.value, [key]: false }
+    ElMessage.success('收款码已安全暂存；点击保存后才会替换当前配置')
     options.onSuccess?.(res.data)
   } catch (error) {
     options.onError?.(error)
@@ -348,6 +368,18 @@ const uploadQr = async (options, key) => {
   } finally {
     uploadingKey.value = ''
   }
+}
+
+const clearPendingQr = () => {
+  for (const key of ['alipay', 'wechat']) {
+    if (pendingQr[key]?.previewUrl) URL.revokeObjectURL(pendingQr[key].previewUrl)
+    pendingQr[key] = null
+  }
+}
+
+const discardPendingQr = (key) => {
+  if (pendingQr[key]?.previewUrl) URL.revokeObjectURL(pendingQr[key].previewUrl)
+  pendingQr[key] = null
 }
 
 const auditLabel = (value) => ({ pending: '待审核', approved: '审核通过', rejected: '审核驳回' }[value] || '待填写')
@@ -358,6 +390,7 @@ const buildQrImage = (value) => `https://api.qrserver.com/v1/create-qr-code/?siz
 const qrDisplayUrl = (value, key = '') => {
   const text = String(value || '').trim()
   if (!text) return ''
+  if (text.startsWith('blob:')) return text
   if (key && brokenQrs.value[key]) return buildQrImage(text)
   if (text.startsWith('data:image/')) return text
   if (/\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(text)) return text
@@ -368,9 +401,12 @@ const markQrBroken = (key) => {
 }
 
 onMounted(load)
+onBeforeUnmount(clearPendingQr)
 
-watch(() => [form.alipay_qr_code, form.wechat_qr_code], () => {
+watch(() => [form.alipay_qr_code, form.wechat_qr_code], (current, previous) => {
   brokenQrs.value = {}
+  if (current[0] !== previous[0]) discardPendingQr('alipay')
+  if (current[1] !== previous[1]) discardPendingQr('wechat')
 })
 </script>
 

@@ -55,15 +55,18 @@
               class="product-item"
             >
               <van-card
-                :price="formatPrice(product.price)"
+                :price="formatPrice(getProductUnitPrice(product, cart[product.id] || getMinimumOrderQuantity(product)))"
                 :title="product.name"
-                :desc="product.description || ''"
+                :desc="productDescription(product)"
                 :thumb="product.image_url || product.image || defaultProductImg"
                 @click="showProductDetail(product)"
               >
                 <template #tags>
                   <van-tag v-if="isProductSoldOut(product)" type="danger">已售罄</van-tag>
+                  <van-tag v-else-if="isProductUnavailable(product)" type="danger">库存不足起订量</van-tag>
                   <van-tag v-else-if="isProductLowStock(product)" type="warning">仅剩{{ product.stock }}</van-tag>
+                  <van-tag v-if="getProductMinimum(product) > 1" type="warning">{{ getProductMinimum(product) }} 起订</van-tag>
+                  <van-tag v-if="getProductPriceTiers(product).length" type="primary">阶梯价</van-tag>
                   <van-tag v-if="product.discount" type="success">立减{{ product.discount }}元</van-tag>
                 </template>
                 <template #num>
@@ -71,7 +74,7 @@
                     v-model="cart[product.id]"
                     :min="0"
                     :max="productStockLimit(product)"
-                    :disabled="isProductSoldOut(product)"
+                    :disabled="isProductUnavailable(product)"
                     @change="(val) => updateCart(product, val)"
                     @click.stop
                   />
@@ -132,7 +135,7 @@
             v-for="p in searchResults"
             :key="p.id"
             :title="p.name"
-            :label="`¥${formatPrice(p.price)}`"
+            :label="`${formatPrice(getProductUnitPrice(p, getMinimumOrderQuantity(p)))}${describeProductPricing(p) ? ` · ${describeProductPricing(p)}` : ''}`"
             :thumb="p.image_url || p.image || defaultProductImg"
             is-link
             @click="showProductDetail(p)"
@@ -155,18 +158,20 @@
           <h3>{{ currentProduct.name }}</h3>
           <p class="product-desc">{{ currentProduct.description || '暂无描述' }}</p>
           <div class="product-meta">
-            <span class="product-price">¥{{ formatPrice(currentProduct.price) }}</span>
+            <span class="product-price">¥{{ formatPrice(getProductUnitPrice(currentProduct, addCount)) }}</span>
             <span v-if="productStockLimit(currentProduct) === undefined" class="product-stock">库存充足</span>
             <span v-else-if="currentProduct.stock > 0" class="product-stock">库存: {{ currentProduct.stock }}</span>
-            <van-tag v-else type="danger">已售罄</van-tag>
+            <van-tag v-else-if="isProductSoldOut(currentProduct)" type="danger">已售罄</van-tag>
+            <van-tag v-else-if="isProductUnavailable(currentProduct)" type="danger">库存不足起订量</van-tag>
           </div>
+          <p v-if="describeProductPricing(currentProduct)" class="product-pricing">{{ describeProductPricing(currentProduct) }}</p>
         </div>
         <div class="product-actions">
-          <van-stepper v-model="addCount" :min="1" :max="productStockLimit(currentProduct)" :disabled="isProductSoldOut(currentProduct)" />
+          <van-stepper v-model="addCount" :min="getMinimumOrderQuantity(currentProduct)" :max="productStockLimit(currentProduct)" :disabled="isProductUnavailable(currentProduct)" />
           <van-button
             type="primary"
             size="small"
-            :disabled="isProductSoldOut(currentProduct)"
+            :disabled="isProductUnavailable(currentProduct)"
             @click="addToCartFromDetail"
           >
             加入购物车
@@ -185,9 +190,10 @@
         <van-card
           v-for="item in cartItems"
           :key="item.id"
-          :price="formatPrice(item.price)"
+          :price="formatPrice(getProductUnitPrice(item, item.count))"
           :title="item.name"
-          :thumb="item.image || defaultProductImg"
+          :desc="productDescription(item)"
+          :thumb="item.image_url || item.image || defaultProductImg"
           :num="cart[item.id]"
         >
           <template #footer>
@@ -206,6 +212,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast } from 'vant'
 import { fetchCustomerStore, fetchCustomerStoreProducts } from '@/api/modules'
 import { customerResponseList } from '@/utils/mobileCustomerOrder'
+import { describeProductPricing, getMinimumOrderQuantity, getProductPriceTiers, getProductUnitPrice } from '@/utils/productPricing'
 
 const route = useRoute()
 const router = useRouter()
@@ -248,7 +255,7 @@ const totalCount = computed(() => {
 const totalPrice = computed(() => {
   return products.value.reduce((sum, p) => {
     const count = cart.value[p.id] || 0
-    return sum + count * p.price
+    return sum + count * getProductUnitPrice(p, count || getMinimumOrderQuantity(p))
   }, 0)
 })
 
@@ -273,6 +280,19 @@ function isProductSoldOut(product) {
   return stock !== undefined && stock <= 0
 }
 
+function isProductUnavailable(product) {
+  const stock = productStockLimit(product)
+  return (stock !== undefined && stock <= 0) || (stock !== undefined && stock < getMinimumOrderQuantity(product))
+}
+
+function getProductMinimum(product) {
+  return getMinimumOrderQuantity(product)
+}
+
+function productDescription(product) {
+  return [product?.description, describeProductPricing(product)].filter(Boolean).join(' · ')
+}
+
 function isProductLowStock(product) {
   const stock = productStockLimit(product)
   return stock !== undefined && stock > 0 && stock <= 5
@@ -292,12 +312,13 @@ function onBack() {
 
 function showProductDetail(product) {
   currentProduct.value = product
-  addCount.value = 1
+  addCount.value = getMinimumOrderQuantity(product)
   showProductPopup.value = true
 }
 
 function addToCartFromDetail() {
   const product = currentProduct.value
+  if (isProductUnavailable(product)) return
   const newCount = (cart.value[product.id] || 0) + addCount.value
   const stockLimit = productStockLimit(product)
   cart.value[product.id] = stockLimit === undefined ? newCount : Math.min(newCount, stockLimit)
@@ -308,7 +329,19 @@ function addToCartFromDetail() {
 
 function updateCart(product, value) {
   if (value > 0) {
-    cart.value[product.id] = value
+    const minimum = getMinimumOrderQuantity(product)
+    const stockLimit = productStockLimit(product)
+    if (value < minimum) {
+      if (stockLimit !== undefined && stockLimit < minimum) {
+        delete cart.value[product.id]
+        showToast('库存不足最低起订量')
+      } else {
+        cart.value[product.id] = minimum
+        showToast(`最低起订量为 ${minimum}${product.sales_unit || '件'}`)
+      }
+    } else {
+      cart.value[product.id] = value
+    }
   } else {
     delete cart.value[product.id]
   }
@@ -520,6 +553,13 @@ onMounted(() => {
 .product-stock {
   font-size: 12px;
   color: #666;
+}
+
+.product-pricing {
+  margin: 8px 16px 0;
+  color: #806217;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .product-actions {

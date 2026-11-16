@@ -6,7 +6,11 @@
         <h2 class="page-title">顾客数据</h2>
         <p class="muted">沉淀扫码点单顾客，按手机号、商家、门店、消费次数和 AI 标签进行管理。</p>
       </div>
-      <el-button type="primary" :loading="loading" @click="load">刷新数据</el-button>
+      <div class="hero-actions">
+        <el-button v-if="auth.hasPermission('customer_contact_view')" plain :loading="loading" @click="toggleCustomerContact">{{ includeContact ? '隐藏完整联系方式' : '查看完整联系方式' }}</el-button>
+        <el-button v-if="auth.hasPermission('customer_order_export')" plain :loading="exporting" @click="exportCustomers">导出客户档案</el-button>
+        <el-button type="primary" :loading="loading" @click="load">刷新数据</el-button>
+      </div>
     </section>
 
     <section class="page-card filter-card">
@@ -121,10 +125,16 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { fetchCustomerProfiles } from '../../api/modules'
+import { ElMessage } from 'element-plus'
+import { exportCustomerProfiles, fetchCustomerProfiles } from '../../api/modules'
+import { useAuthStore } from '../../stores/auth'
+import { downloadBlob } from '../../utils/download'
 
+const auth = useAuthStore()
 const customers = ref([])
 const loading = ref(false)
+const exporting = ref(false)
+const includeContact = ref(false)
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -150,12 +160,43 @@ const load = async () => {
       ai_tag: filters.ai_tag,
       status: filters.status,
       sort_by: filters.sort_by,
-      sort_order: filters.sort_order
+      sort_order: filters.sort_order,
+      include_contact: includeContact.value ? 'true' : undefined
     })
     customers.value = res.data.list || []
     total.value = res.data.total || 0
+  } catch (error) {
+    includeContact.value = false
+    customers.value = []
+    ElMessage.error(error?.response?.data?.message || '顾客数据加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+const toggleCustomerContact = async () => {
+  includeContact.value = !includeContact.value
+  customers.value = []
+  await load()
+}
+
+const exportCustomers = async () => {
+  exporting.value = true
+  try {
+    const blob = await exportCustomerProfiles({
+      keyword: filters.keyword,
+      ai_tag: filters.ai_tag,
+      status: filters.status,
+      sort_by: filters.sort_by,
+      sort_order: filters.sort_order,
+      include_contact: includeContact.value ? 'true' : undefined
+    })
+    downloadBlob(blob, 'platform-customer-profiles.xlsx')
+    ElMessage.success('客户档案已导出。完整联系方式还需另有查看权限并已开启查看。')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '客户档案导出失败')
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -228,6 +269,13 @@ onMounted(load)
   gap: 20px;
   align-items: flex-start;
   padding: 24px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .eyebrow {

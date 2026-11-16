@@ -136,4 +136,13 @@ func TestMerchantExpiredReadOnlyPauseLockAndRenewalRoutes(t *testing.T) {
 	if response := request(http.MethodPost, "/api/v1/merchant/stores", `{"name":"有效期内创建","contact_phone":"13800138000"}`); response.Code != http.StatusOK {
 		t.Fatalf("active merchant behavior changed: status=%d body=%s", response.Code, response.Body.String())
 	}
+	if err := db.Model(&model.Merchant{}).Where("id = ?", merchant.ID).Update("status", "pending").Error; err != nil {
+		t.Fatalf("set synthetic merchant to pending: %v", err)
+	}
+	if response := request(http.MethodGet, "/api/v1/merchant/stores", ""); response.Code != http.StatusForbidden {
+		t.Errorf("pending merchant business read status=%d, want %d; body=%s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/api/v1/merchant/check-subscription", ""); response.Code != http.StatusOK {
+		t.Errorf("pending merchant lost subscription status recovery route: status=%d body=%s", response.Code, response.Body.String())
+	}
 }

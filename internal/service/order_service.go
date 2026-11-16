@@ -16,13 +16,19 @@ import (
 )
 
 type StoreOrderItemSnapshot struct {
-	ProductID   uint   `json:"product_id"`
-	Name        string `json:"name"`
-	Price       int64  `json:"price"`
-	Quantity    int    `json:"quantity"`
-	LineAmount  int64  `json:"line_amount"`
-	Description string `json:"description,omitempty"`
-	ImageURL    string `json:"image_url,omitempty"`
+	ProductID              uint                     `json:"product_id"`
+	Name                   string                   `json:"name"`
+	Price                  int64                    `json:"price"`
+	BasePrice              int64                    `json:"base_price,omitempty"`
+	Quantity               int                      `json:"quantity"`
+	LineAmount             int64                    `json:"line_amount"`
+	Description            string                   `json:"description,omitempty"`
+	ImageURL               string                   `json:"image_url,omitempty"`
+	SalesUnit              string                   `json:"sales_unit,omitempty"`
+	Specification          string                   `json:"specification,omitempty"`
+	MinimumOrderQuantity   int                      `json:"minimum_order_quantity,omitempty"`
+	AppliedTierMinQuantity int                      `json:"applied_tier_min_quantity,omitempty"`
+	PriceTiers             []model.ProductPriceTier `json:"price_tiers,omitempty"`
 }
 
 type OrderOperationLog struct {
@@ -134,15 +140,12 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 	if req.CustomerPhone != "" && !isValidMainlandPhone(normalizePhone(req.CustomerPhone)) {
 		return nil, errors.New("customer phone must be 11 digits")
 	}
-	if len(req.Items) == 0 {
-		return nil, errors.New("please select at least one product")
+	orderItems, err := aggregateCustomerOrderItems(req.Items)
+	if err != nil {
+		return nil, err
 	}
-
-	productIDs := make([]uint, 0, len(req.Items))
-	for _, item := range req.Items {
-		if item.Quantity <= 0 {
-			return nil, errors.New("product quantity must be greater than 0")
-		}
+	productIDs := make([]uint, 0, len(orderItems))
+	for _, item := range orderItems {
 		productIDs = append(productIDs, item.ProductID)
 	}
 
@@ -159,9 +162,9 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		productMap[product.ID] = product
 	}
 
-	snapshots := make([]StoreOrderItemSnapshot, 0, len(req.Items))
+	snapshots := make([]StoreOrderItemSnapshot, 0, len(orderItems))
 	var total int64
-	for _, item := range req.Items {
+	for _, item := range orderItems {
 		product, ok := productMap[item.ProductID]
 		if !ok {
 			return nil, errors.New("some products are unavailable")
@@ -172,17 +175,15 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 			}
 			return nil, fmt.Errorf("%s 库存仅剩 %d 件", product.Name, *product.Stock)
 		}
-		lineAmount := product.Price * int64(item.Quantity)
-		total += lineAmount
-		snapshots = append(snapshots, StoreOrderItemSnapshot{
-			ProductID:   product.ID,
-			Name:        product.Name,
-			Price:       product.Price,
-			Quantity:    item.Quantity,
-			LineAmount:  lineAmount,
-			Description: product.Description,
-			ImageURL:    product.ImageURL,
-		})
+		snapshot, lineAmount, err := buildStoreOrderItemSnapshot(product, item.Quantity)
+		if err != nil {
+			return nil, err
+		}
+		total, err = addStoreOrderAmount(total, lineAmount)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snapshot)
 	}
 
 	itemsJSON, err := json.Marshal(snapshots)
@@ -372,11 +373,12 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string
 		return nil, errors.New("store is unavailable")
 	}
 
-	productIDs := make([]uint, 0, len(req.Items))
-	for _, item := range req.Items {
-		if item.Quantity <= 0 {
-			return nil, errors.New("product quantity must be greater than 0")
-		}
+	orderItems, err := aggregateCustomerOrderItems(req.Items)
+	if err != nil {
+		return nil, err
+	}
+	productIDs := make([]uint, 0, len(orderItems))
+	for _, item := range orderItems {
 		productIDs = append(productIDs, item.ProductID)
 	}
 	products, err := s.products.FindActiveByIDs(store.ID, productIDs)
@@ -397,15 +399,10 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string
 			return nil, errors.New("order items are invalid")
 		}
 	}
-	existingMap := make(map[uint]int, len(existing))
-	for index, item := range existing {
-		existingMap[item.ProductID] = index
-	}
-
 	var appendedAmount int64
 	var appendedQuantity int
-	appendedNames := make([]string, 0, len(req.Items))
-	for _, item := range req.Items {
+	appendedNames := make([]string, 0, len(orderItems))
+	for _, item := range orderItems {
 		product, ok := productMap[item.ProductID]
 		if !ok {
 			return nil, errors.New("some products are unavailable")
@@ -416,25 +413,20 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string
 			}
 			return nil, fmt.Errorf("%s 库存仅剩 %d 件", product.Name, *product.Stock)
 		}
-		lineAmount := product.Price * int64(item.Quantity)
-		appendedAmount += lineAmount
+		snapshot, lineAmount, err := buildStoreOrderItemSnapshot(product, item.Quantity)
+		if err != nil {
+			return nil, err
+		}
+		appendedAmount, err = addStoreOrderAmount(appendedAmount, lineAmount)
+		if err != nil {
+			return nil, err
+		}
+		if item.Quantity > int(^uint(0)>>1)-appendedQuantity {
+			return nil, errors.New("product quantity exceeds the allowed range")
+		}
 		appendedQuantity += item.Quantity
 		appendedNames = append(appendedNames, fmt.Sprintf("%s x%d", product.Name, item.Quantity))
-		if index, ok := existingMap[product.ID]; ok {
-			existing[index].Quantity += item.Quantity
-			existing[index].LineAmount += lineAmount
-			continue
-		}
-		existingMap[product.ID] = len(existing)
-		existing = append(existing, StoreOrderItemSnapshot{
-			ProductID:   product.ID,
-			Name:        product.Name,
-			Price:       product.Price,
-			Quantity:    item.Quantity,
-			LineAmount:  lineAmount,
-			Description: product.Description,
-			ImageURL:    product.ImageURL,
-		})
+		existing = append(existing, snapshot)
 	}
 
 	itemsJSON, err := json.Marshal(existing)
@@ -442,8 +434,14 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string
 		return nil, err
 	}
 	order.Items = string(itemsJSON)
-	order.Amount += appendedAmount
-	order.TotalAmount += appendedAmount
+	order.Amount, err = addStoreOrderAmount(order.Amount, appendedAmount)
+	if err != nil {
+		return nil, err
+	}
+	order.TotalAmount, err = addStoreOrderAmount(order.TotalAmount, appendedAmount)
+	if err != nil {
+		return nil, err
+	}
 	if note := strings.TrimSpace(req.CustomerNote); note != "" {
 		if order.CustomerNote != "" {
 			order.CustomerNote = strings.TrimSpace(order.CustomerNote + "；追加备注：" + note)

@@ -174,4 +174,4 @@ env -i \
   "SCHEMA_MIGRATION_IT_DSN=$SCHEMA_DSN" \
   "SCHEMA_MIGRATION_IT_ROOT=$TMP_ROOT" \
   "SCHEMA_MIGRATION_IT_MIGRATOR_BIN=$MIGRATOR_BIN" \
-  go test ./internal/router -run '^TestMySQLManualReviewBackupRestoreLifecycle$' -count=1 -v
+  go test ./internal/schema ./internal/router -run '^TestMySQL(CandidateSchemaMigration|ManualReviewV2Migration|ManualReviewBackupRestoreLifecycle)$' -count=1 -v

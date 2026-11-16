@@ -55,7 +55,7 @@
           <el-descriptions-item v-if="detail.suspension_reason" label="平台暂停原因">{{ detail.suspension_reason }}</el-descriptions-item>
         </el-descriptions>
         <section class="history"><h3>操作与规则审计</h3><el-timeline v-if="history.length"><el-timeline-item v-for="event in history" :key="event.id" :timestamp="formatTime(event.created_at)" placement="top"><div class="history-title"><strong>{{ actionName(event.action) }}</strong><el-tag v-if="event.rule_id" size="small" effect="plain">{{ event.rule_id }}</el-tag></div><p>{{ event.actor_name || event.actor_type || '—' }}<template v-if="event.reason"> · {{ event.reason }}</template></p><small>变更：{{ stateDiff(event) }}</small></el-timeline-item></el-timeline><el-empty v-else description="暂无历史记录" :image-size="70" /></section>
-        <div class="action-bar"><el-button v-if="detail.review_status === 'pending'" type="success" :loading="acting" @click="approve">人工通过</el-button><el-button v-if="detail.review_status === 'pending'" type="danger" plain :loading="acting" @click="reject">拒绝</el-button><el-button v-if="detail.review_status === 'approved' && !detail.admin_suspended" type="warning" plain :loading="acting" @click="perform('suspend')">平台暂停</el-button><el-button v-if="detail.review_status === 'approved' && detail.admin_suspended" type="primary" :loading="acting" @click="perform('resume')">恢复入口</el-button></div>
+        <div v-if="canOperate" class="action-bar"><el-button v-if="detail.review_status === 'pending'" type="success" :loading="acting" @click="approve">人工通过</el-button><el-button v-if="detail.review_status === 'pending'" type="danger" plain :loading="acting" @click="reject">拒绝</el-button><el-button v-if="detail.review_status === 'approved' && !detail.admin_suspended" type="warning" plain :loading="acting" @click="perform('suspend')">平台暂停</el-button><el-button v-if="detail.review_status === 'approved' && detail.admin_suspended" type="primary" :loading="acting" @click="perform('resume')">恢复入口</el-button></div>
         <p class="footnote">人工通过须填写理由，且会再次校验 HTTPS、平台域名家族及商家/门店状态。平台暂停、商家停用或门店未启用时仍不可跳转。本审核不是官方资质或 API 审核。</p>
       </div>
     </el-drawer>
@@ -72,9 +72,13 @@
   </div>
 </template>
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '../../stores/auth'
 import { fetchAdminGroupBuyLinks, fetchAdminGroupBuyLinkDetail, reviewAdminGroupBuyLink } from '../../api/modules'
+
+const authStore = useAuthStore()
+const canOperate = computed(() => authStore.isSuperAdmin || authStore.hasPermission('operations'))
 const rows = ref([]), total = ref(0), loading = ref(false), acting = ref(false), drawer = ref(false), rulesDrawer = ref(false), detail = ref(null), history = ref([]), exceptionOnly = ref(false), page = ref(1), pageSize = ref(20)
 const summary = reactive({ total_links: 0, pending_count: 0, manual_review_count: 0, auto_approved_count: 0, auto_rejected_count: 0, suspended_count: 0, click_total: 0 })
 const filters = reactive({ keyword: '', channel: '', review_status: '', review_method: '', entry_state: '' })

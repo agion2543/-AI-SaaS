@@ -49,7 +49,7 @@ func Load() (*Config, error) {
 		JWTSecret:          getEnv("JWT_SECRET", "replace-with-a-very-strong-secret"),
 		AESSecret:          getEnv("AES_SECRET", "0123456789abcdef0123456789abcdef"),
 		InitialAdminUser:   getEnv("INITIAL_ADMIN_USERNAME", "admin"),
-		InitialAdminPass:   getEnv("INITIAL_ADMIN_PASSWORD", "SaasAdmin@2026!"),
+		InitialAdminPass:   getEnv("INITIAL_ADMIN_PASSWORD", ""),
 		RateLimitPerMinute: getEnvAsInt("RATE_LIMIT_PER_MINUTE", 120),
 		MySQLDSN:           getEnv("MYSQL_DSN", "root:123456@tcp(127.0.0.1:3306)/saas_billing?charset=utf8mb4&parseTime=True&loc=Local"),
 		DBAutoMigrate:      getEnvAsBool("DB_AUTO_MIGRATE", true),
@@ -75,9 +75,15 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Validate rejects unsafe development defaults when the service is configured
-// to run in production. Development defaults remain available for local use.
+// Validate rejects unsafe production defaults and weak explicitly configured
+// initial admin passwords. An empty initial password is handled by bootstrap:
+// it is allowed for an existing installation but cannot create a new admin.
 func (c *Config) Validate() error {
+	initialAdminPass := strings.TrimSpace(c.InitialAdminPass)
+	if initialAdminPass != "" && (len(initialAdminPass) < 12 || isPlaceholderValue(initialAdminPass)) {
+		return errors.New("INITIAL_ADMIN_PASSWORD must be a non-placeholder password of at least 12 characters when creating an initial admin account")
+	}
+
 	if !strings.EqualFold(strings.TrimSpace(c.AppEnv), "production") {
 		return nil
 	}
@@ -87,9 +93,6 @@ func (c *Config) Validate() error {
 	}
 	if len(c.AESSecret) != 32 || isPlaceholderValue(c.AESSecret) || c.AESSecret == "0123456789abcdef0123456789abcdef" {
 		return errors.New("unsafe production configuration: AES_SECRET must be a non-placeholder 32-character secret")
-	}
-	if len(c.InitialAdminPass) < 12 || isPlaceholderValue(c.InitialAdminPass) || c.InitialAdminPass == "SaasAdmin@2026!" {
-		return errors.New("unsafe production configuration: INITIAL_ADMIN_PASSWORD must be a non-placeholder password of at least 12 characters")
 	}
 	dsn := strings.ToLower(c.MySQLDSN)
 	if strings.TrimSpace(c.MySQLDSN) == "" || strings.Contains(dsn, "root:123456@") || isPlaceholderValue(c.MySQLDSN) {

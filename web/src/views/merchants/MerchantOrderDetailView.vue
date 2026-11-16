@@ -282,14 +282,19 @@
               <div>
                 <strong>{{ row.name }}</strong>
                 <p>{{ row.description || '暂无描述' }}</p>
+                <small v-if="row.specification" class="product-snapshot">规格：{{ row.specification }}</small>
+                <small v-if="row.minimum_order_quantity > 1" class="product-snapshot">下单时最低 {{ row.minimum_order_quantity }}{{ row.sales_unit || '件' }}</small>
+                <small v-if="row.applied_tier_min_quantity > 0" class="product-snapshot">实际按 {{ row.applied_tier_min_quantity }}{{ row.sales_unit || '件' }}档计价</small>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="单价" width="120">
-          <template #default="{ row }">{{ formatMoney(row.price) }}</template>
+        <el-table-column label="单价" width="140">
+          <template #default="{ row }">{{ formatMoney(row.price) }}<span v-if="row.sales_unit"> / {{ row.sales_unit }}</span></template>
         </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="100" />
+        <el-table-column label="数量" width="110">
+          <template #default="{ row }">{{ row.quantity }}<span v-if="row.sales_unit"> {{ row.sales_unit }}</span></template>
+        </el-table-column>
         <el-table-column label="小计" width="120">
           <template #default="{ row }">{{ formatMoney(itemLineAmount(row)) }}</template>
         </el-table-column>
@@ -805,7 +810,7 @@ const callCustomer = () => {
   window.location.href = `tel:${order.value.customer_phone}`
 }
 const canClose = (row) => ['submitted', 'payment_confirming', 'received', 'preparing', 'accepted'].includes(row.status)
-const canRefund = (row) => row?.order_type === 'store_order' && row.refund_status !== 'processing' && Boolean(row.paid_at) && Number(row.total_amount ?? row.amount ?? 0) > 0 && refundableAmount.value > 0 && row.payment_channel === 'alipay' && Boolean(row.transaction_no) && ['received', 'accepted', 'completed', 'closed'].includes(row.status)
+const canRefund = (row) => Boolean(row?.can_refund)
 const itemLineAmount = (row) => Number(row.line_amount ?? row.amount ?? (Number(row.price || 0) * Number(row.quantity || 0)))
 const formatMoney = (value) => `¥${(Number(value || 0) / 100).toFixed(2)}`
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
@@ -1563,6 +1568,13 @@ onMounted(load)
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.product-snapshot {
+  display: block;
+  margin-top: 3px;
+  color: #8b6b30;
+  font-size: 12px;
 }
 
 .product-cell img {

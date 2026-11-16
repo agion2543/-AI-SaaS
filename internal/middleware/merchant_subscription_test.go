@@ -52,6 +52,7 @@ func TestMerchantSubscriptionMiddlewareRequiresActiveStatusAndFutureExpiry(t *te
 		{name: "pending or unpaid subscription despite future expiry", merchantStatus: "active", subscriptionStatus: "pending", expireAt: &future},
 		{name: "unknown subscription state despite future expiry", merchantStatus: "active", subscriptionStatus: "unknown", expireAt: &future},
 		{name: "active state without expiry", merchantStatus: "active", subscriptionStatus: "active"},
+		{name: "pending merchant with active subscription", merchantStatus: "pending", subscriptionStatus: "active", expireAt: &future},
 		{name: "suspended merchant with active subscription", merchantStatus: "suspended", subscriptionStatus: "active", expireAt: &future},
 	}
 

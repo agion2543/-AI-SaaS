@@ -7,15 +7,27 @@ import (
 
 func TestValidateAllowsDevelopmentDefaults(t *testing.T) {
 	cfg := &Config{
-		AppEnv:           "development",
-		JWTSecret:        "replace-with-a-very-strong-secret",
-		AESSecret:        "0123456789abcdef0123456789abcdef",
-		InitialAdminPass: "SaasAdmin@2026!",
-		MySQLDSN:         "root:123456@tcp(127.0.0.1:3306)/saas_billing",
+		AppEnv:    "development",
+		JWTSecret: "replace-with-a-very-strong-secret",
+		AESSecret: "0123456789abcdef0123456789abcdef",
+		MySQLDSN:  "root:123456@tcp(127.0.0.1:3306)/saas_billing",
 	}
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("development defaults should remain available: %v", err)
+	}
+}
+
+func TestLoadDoesNotSupplyAnInitialAdminPassword(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("INITIAL_ADMIN_PASSWORD", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load without an initial admin password: %v", err)
+	}
+	if cfg.InitialAdminPass != "" {
+		t.Fatal("Load supplied an initial admin password when none was configured")
 	}
 }
 
@@ -53,7 +65,6 @@ func TestValidateProductionRejectsUnsafeConfiguration(t *testing.T) {
 		{"default AES secret", func(c *Config) { c.AESSecret = "0123456789abcdef0123456789abcdef" }},
 		{"wrong length AES secret", func(c *Config) { c.AESSecret = "too-short" }},
 		{"placeholder AES secret", func(c *Config) { c.AESSecret = "replace-with-32-char-production-key" }},
-		{"default admin password", func(c *Config) { c.InitialAdminPass = "SaasAdmin@2026!" }},
 		{"weak admin password", func(c *Config) { c.InitialAdminPass = "short" }},
 		{"placeholder admin password", func(c *Config) { c.InitialAdminPass = "replace-with-initial-admin-password" }},
 		{"default database credentials", func(c *Config) { c.MySQLDSN = "root:123456@tcp(mysql:3306)/saas_billing" }},
@@ -74,6 +85,14 @@ func TestValidateProductionRejectsUnsafeConfiguration(t *testing.T) {
 func TestValidateProductionAcceptsConfiguredSecrets(t *testing.T) {
 	if err := validProductionConfig().Validate(); err != nil {
 		t.Fatalf("valid production configuration was rejected: %v", err)
+	}
+}
+
+func TestValidateProductionAllowsMissingInitialPasswordUntilBootstrap(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.InitialAdminPass = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("production config without an initial password should reach bootstrap: %v", err)
 	}
 }
 

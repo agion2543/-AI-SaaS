@@ -95,10 +95,10 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 		t.Fatalf("public product contract must return list with price in cents: %+v", productList.List)
 	}
 
-	couponResponse := customerOrderAPIRequest(t, engine, http.MethodGet,
-		fmt.Sprintf("/api/v1/customer/store/%d/coupons?phone=%s", store.ID, phone), "", nil)
+	couponResponse := customerOrderAPIRequest(t, engine, http.MethodPost,
+		fmt.Sprintf("/api/v1/customer/store/%d/coupons", store.ID), "", map[string]string{"phone": phone})
 	if couponResponse.Code != http.StatusOK {
-		t.Fatalf("GET coupons for explicitly supplied synthetic phone: status=%d body=%s", couponResponse.Code, couponResponse.Body.String())
+		t.Fatalf("POST coupons for explicitly supplied synthetic phone: status=%d body=%s", couponResponse.Code, couponResponse.Body.String())
 	}
 	couponData := customerOrderAPIData(t, couponResponse)
 	var couponList struct {

@@ -38,7 +38,7 @@ const router = useRouter()
 const store = useAuthStore()
 const form = reactive({
   username: 'admin',
-  password: 'Admin@123456'
+  password: ''
 })
 
 const submit = async () => {

@@ -15,16 +15,25 @@ type Store struct {
 	AutoAccept    bool     `gorm:"default:false;index" json:"auto_accept"`
 }
 
+type ProductPriceTier struct {
+	MinQuantity int   `json:"min_quantity"`
+	Price       int64 `json:"price"`
+}
+
 type StoreProduct struct {
 	BaseModel
-	StoreID     uint   `gorm:"not null;index" json:"store_id"`
-	Store       Store  `json:"store,omitempty"`
-	Name        string `gorm:"size:120;not null" json:"name"`
-	Price       int64  `gorm:"not null;default:0" json:"price"`
-	Description string `gorm:"size:500" json:"description"`
-	ImageURL    string `gorm:"size:500" json:"image_url"`
-	Category    string `gorm:"size:80;default:默认分类;index" json:"category"`
-	Status      string `gorm:"size:20;default:active;index" json:"status"`
-	Stock       *int   `gorm:"default:null" json:"stock"`
-	Sort        int    `gorm:"default:100;index" json:"sort"`
+	StoreID              uint               `gorm:"not null;index" json:"store_id"`
+	Store                Store              `json:"store,omitempty"`
+	Name                 string             `gorm:"size:120;not null" json:"name"`
+	Price                int64              `gorm:"not null;default:0" json:"price"`
+	Description          string             `gorm:"size:500" json:"description"`
+	ImageURL             string             `gorm:"size:500" json:"image_url"`
+	Category             string             `gorm:"size:80;default:默认分类;index" json:"category"`
+	Status               string             `gorm:"size:20;default:active;index" json:"status"`
+	Stock                *int               `gorm:"default:null" json:"stock"`
+	Sort                 int                `gorm:"default:100;index" json:"sort"`
+	SalesUnit            string             `gorm:"size:30;not null;default:''" json:"sales_unit,omitempty"`
+	Specification        string             `gorm:"size:80;not null;default:''" json:"specification,omitempty"`
+	MinimumOrderQuantity int                `gorm:"not null;default:1" json:"minimum_order_quantity"`
+	PriceTiers           []ProductPriceTier `gorm:"serializer:json;type:json" json:"price_tiers,omitempty"`
 }

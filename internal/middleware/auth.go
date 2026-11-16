@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ var expiredMerchantReadOnlyRoutes = map[string]struct{}{
 	"/group-buy-links":          {},
 }
 
-func Auth(cfg *config.Config, requiredRole string) gin.HandlerFunc {
+func Auth(cfg *config.Config, requiredRole string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" || !strings.HasPrefix(header, "Bearer ") {
@@ -44,7 +45,8 @@ func Auth(cfg *config.Config, requiredRole string) gin.HandlerFunc {
 			return
 		}
 
-		if requiredRole == "user" && claims.Role == "super_admin" {
+		effectiveRole := claims.Role
+		if requiredRole == "user" && claims.Role != "customer" {
 			utils.Error(c, http.StatusForbidden, "permission denied")
 			c.Abort()
 			return
@@ -59,9 +61,62 @@ func Auth(cfg *config.Config, requiredRole string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if requiredRole == "admin" {
+			if db == nil {
+				utils.Error(c, http.StatusUnauthorized, "invalid token")
+				c.Abort()
+				return
+			}
+			var admin model.AdminUser
+			if err := db.Preload("Role").First(&admin, claims.UserID).Error; err != nil {
+				utils.Error(c, http.StatusUnauthorized, "invalid token")
+				c.Abort()
+				return
+			}
+			if admin.Status != "active" {
+				utils.Error(c, http.StatusForbidden, "account disabled")
+				c.Abort()
+				return
+			}
+			if admin.Role.Code == "" {
+				utils.Error(c, http.StatusForbidden, "permission denied")
+				c.Abort()
+				return
+			}
+			expectedRole := "admin"
+			if admin.Role.Code == "super_admin" {
+				expectedRole = "super_admin"
+			}
+			currentCredentialVersion := utils.AdminCredentialVersion(cfg.JWTSecret, admin.AuthVersion, admin.PasswordHash, admin.Status, admin.RoleID, admin.Role.Code, admin.Role.Permissions)
+			if claims.Role != expectedRole || claims.AdminCredentialVersion == "" || subtle.ConstantTimeCompare([]byte(claims.AdminCredentialVersion), []byte(currentCredentialVersion)) != 1 {
+				utils.Error(c, http.StatusUnauthorized, "invalid token")
+				c.Abort()
+				return
+			}
+			c.Set("admin_user", &admin)
+			c.Set("admin_permissions", admin.Role.Permissions)
+			effectiveRole = "admin"
+			if admin.Role.Code == "super_admin" {
+				effectiveRole = "super_admin"
+			}
+			c.Set("user_id", admin.ID)
+		}
+		if requiredRole == "user" || requiredRole == "merchant" {
+			var user model.User
+			if db == nil || db.First(&user, claims.UserID).Error != nil {
+				utils.Error(c, http.StatusUnauthorized, "invalid token")
+				c.Abort()
+				return
+			}
+			if user.Status != "active" {
+				utils.Error(c, http.StatusForbidden, "account disabled")
+				c.Abort()
+				return
+			}
+		}
 
 		c.Set("user_id", claims.UserID)
-		c.Set("role", claims.Role)
+		c.Set("role", effectiveRole)
 		c.Set("merchant_id", claims.MerchantID)
 		c.Set("identity", claims.Identity)
 		c.Next()
@@ -103,6 +158,11 @@ func merchantSubscriptionMiddlewareAt(db *gorm.DB, now func() time.Time) gin.Han
 
 		if merchant.Status == "suspended" {
 			utils.Error(c, http.StatusForbidden, "商家已被禁用")
+			c.Abort()
+			return
+		}
+		if merchant.Status != "active" {
+			utils.Error(c, http.StatusForbidden, "商家尚未通过平台审核")
 			c.Abort()
 			return
 		}

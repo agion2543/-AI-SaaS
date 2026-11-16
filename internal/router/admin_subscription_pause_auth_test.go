@@ -30,6 +30,7 @@ func TestSubscriptionPauseRouteRequiresPlatformAdmin(t *testing.T) {
 	if err := db.AutoMigrate(&model.Merchant{}, &model.AuditLog{}, &model.AdminUser{}); err != nil {
 		t.Fatalf("migrate test schema: %v", err)
 	}
+	seedSyntheticSuperAdmin(t, db, 7, "synthetic-pause-super")
 
 	expiry := time.Now().Add(48 * time.Hour)
 	merchant := &model.Merchant{Name: "合成路由鉴权测试商家", Status: "active", SubscriptionStatus: "active", SubscriptionExpireAt: &expiry}
@@ -44,10 +45,7 @@ func TestSubscriptionPauseRouteRequiresPlatformAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create merchant token: %v", err)
 	}
-	adminToken, err := utils.GenerateToken(cfg.JWTSecret, 7, "admin", "admin", nil, 1)
-	if err != nil {
-		t.Fatalf("create admin token: %v", err)
-	}
+	adminToken := syntheticAdminToken(t, db, cfg, 7)
 
 	request := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/merchants/"+uintString(merchant.ID)+"/subscription/pause", bytes.NewBufferString(`{"reason":"合成鉴权测试"}`))

@@ -74,14 +74,10 @@ npm run dev
 - 平台后台：http://localhost:5173/admin/dashboard
 - 商家端：http://localhost:5173/merchant/login
 - 顾客端：http://localhost:5173/customer/store/5
-- 后端健康检查：http://localhost:8080/health
+- 后端存活检查：http://localhost:8080/health（仅确认 HTTP 进程响应）
+- 数据库就绪检查：http://localhost:8080/ready（检查活动数据库连接）
 
-默认管理员：
-
-```text
-账号：admin
-密码：SaasAdmin@2026!
-```
+首次创建管理员时，须在本地 `.env` 中显式设置至少 12 位的 `INITIAL_ADMIN_PASSWORD`；未设置时，服务会拒绝完成新库初始化。已有数据库中已存在管理员账号时，可以不设置该变量，启动不会更改该账号的密码、角色或状态。初始用户名默认是 `admin`，也可通过 `INITIAL_ADMIN_USERNAME` 配置。
 
 ## 生产部署
 
@@ -104,9 +100,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 - `JWT_SECRET`
 - `AES_SECRET`
-- `INITIAL_ADMIN_PASSWORD`
+- 新数据库首次创建管理员时设置 `INITIAL_ADMIN_PASSWORD`
 - MySQL 密码
-- 管理员默认密码
 - 支付宝 APPID、公钥、私钥、回调地址
 
 ## GitHub 上传注意
