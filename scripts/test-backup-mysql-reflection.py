@@ -79,6 +79,37 @@ for variable, age_snapshot, parent_snapshot in (
     if not parent_restore.search(source):
         sys.exit(f"FAIL: original parent {variable} is not restored at script exit")
 
+TEST_SCRIPT = ROOT / "scripts" / "test-backup-mysql.ps1"
+test_source = TEST_SCRIPT.read_text(encoding="utf-8")
+expected_timestamp = re.search(
+    r'(?im)^\$script:backupTestTimestamp\s*=\s*"([^"]+)"\s*$', test_source
+)
+if not expected_timestamp:
+    sys.exit("FAIL: PowerShell backup test must declare its expected fixed timestamp")
+
+date_mock = re.search(
+    r'(?ims)^\s*function\s+Get-Date\s*\(\s*\[string\]\$Format\s*\)\s*\{(.*?)^\s*\}',
+    test_source,
+)
+if not date_mock:
+    sys.exit("FAIL: could not find the test Get-Date mock")
+mock_return = re.search(
+    r'(?im)\$Format\s+-eq\s*"yyyyMMdd-HHmmss"\s*\)\s*\{\s*return\s*"([^"]+)"',
+    date_mock.group(1),
+)
+if not mock_return:
+    sys.exit("FAIL: Get-Date mock must return a scope-independent fixed timestamp")
+if mock_return.group(1) != expected_timestamp.group(1):
+    sys.exit("FAIL: Get-Date mock timestamp differs from the expected output timestamp")
+if re.search(r'(?i)\$script:backupTestTimestamp', date_mock.group(1)):
+    sys.exit("FAIL: Get-Date mock must not resolve the timestamp through script scope")
+if not re.search(
+    r'(?i)synthetic_test_db-\$script:backupTestTimestamp\.sql\.age', test_source
+):
+    sys.exit("FAIL: successful backup assertion must use the declared fixed timestamp")
+
+print("PASS: Get-Date mock timestamp is fixed and independent of script scope.")
+
 print(
     "PASS: exact Unix mode overload; age removes both DB variables and restores snapshots (static only)."
 )

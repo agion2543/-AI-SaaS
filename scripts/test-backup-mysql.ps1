@@ -13,7 +13,7 @@ $script:recipientsFile = Join-Path $testRoot "synthetic-recipients.txt"
 
 # Shadow Get-Date while the backup script runs so its destination is deterministic.
 function Get-Date([string]$Format) {
-  if ($Format -eq "yyyyMMdd-HHmmss") { return $script:backupTestTimestamp }
+  if ($Format -eq "yyyyMMdd-HHmmss") { return "20261120-120000" }
   throw "Unexpected Get-Date format in backup test: $Format"
 }
 
