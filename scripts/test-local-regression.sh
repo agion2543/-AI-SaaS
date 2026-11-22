@@ -120,6 +120,12 @@ for file in "${SHELL_SCRIPTS[@]}"; do
 done
 printf 'PASS: bash -n checked %d scripts/*.sh files.\n' "${#SHELL_SCRIPTS[@]}"
 
+printf '%s\n' '== Static GitHub upload filter regression (no PowerShell or gh) =='
+run_clean python3 "$SCRIPT_DIR/test-upload-github-filter.py"
+
+printf '%s\n' '== Static PowerShell backup reflection regression (no PowerShell) =='
+run_clean python3 "$SCRIPT_DIR/test-backup-mysql-reflection.py"
+
 printf '%s\n' '== Synthetic backup tests (no real DB or age) =='
 for test_script in test-backup-mysql.sh test-backup-integrity.sh test-backup-retention.sh; do
   run_clean bash "$SCRIPT_DIR/$test_script"

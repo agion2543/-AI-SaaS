@@ -67,7 +67,11 @@ try {
   } else {
     [System.IO.Directory]::CreateDirectory($temporaryDirectory) | Out-Null
     $tempDirectoryCreated = $true
-    if ([System.IO.File].GetMethod("SetUnixFileMode")) {
+    $setUnixFileModeMethod = [System.IO.File].GetMethod(
+      "SetUnixFileMode",
+      [type[]]@([string], [System.IO.UnixFileMode])
+    )
+    if ($null -ne $setUnixFileModeMethod) {
       $privateMode = [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute
       [System.IO.File]::SetUnixFileMode($temporaryDirectory, $privateMode)
     }

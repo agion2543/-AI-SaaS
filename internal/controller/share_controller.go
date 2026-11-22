@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go-web-gin-health/internal/model"
 	"go-web-gin-health/internal/service"
 	"go-web-gin-health/internal/utils"
 )
@@ -34,7 +35,21 @@ func (ctl *ShareController) TrackShareScan(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.Success(c, gin.H{"campaign": campaign})
+	utils.Success(c, gin.H{"campaign": serializePublicShareCampaign(campaign)})
+}
+
+type publicShareCampaignResponse struct {
+	ShareCode   string `json:"share_code"`
+	PosterTitle string `json:"poster_title"`
+	PosterCopy  string `json:"poster_copy"`
+}
+
+func serializePublicShareCampaign(campaign *model.ShareCampaign) publicShareCampaignResponse {
+	return publicShareCampaignResponse{
+		ShareCode:   campaign.ShareCode,
+		PosterTitle: campaign.PosterTitle,
+		PosterCopy:  campaign.PosterCopy,
+	}
 }
 
 func (ctl *ShareController) MerchantShareStats(c *gin.Context) {

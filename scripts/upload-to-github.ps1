@@ -32,7 +32,11 @@ function Should-SkipFile {
     }
   }
 
-  if ($File.Name -eq ".env") { return $true }
+  $envExampleFiles = @(".env.example", ".env.production.example")
+  if ($File.Name -eq ".env" -or
+      ($File.Name -like ".env.*" -and $File.Name -notin $envExampleFiles)) {
+    return $true
+  }
   if ($File.Name -like "github-upload-source-*.zip") { return $true }
   if ($File.Name -like "*.exe") { return $true }
   if ($File.Name -like "*.exe~") { return $true }
