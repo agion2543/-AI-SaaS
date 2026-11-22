@@ -110,8 +110,8 @@ try {
   $ageMysqlPwd = [Environment]::GetEnvironmentVariable("MYSQL_PWD", "Process")
   $ageDbPassword = [Environment]::GetEnvironmentVariable("DB_PASSWORD", "Process")
   try {
-    [Environment]::SetEnvironmentVariable("MYSQL_PWD", $null, "Process")
-    [Environment]::SetEnvironmentVariable("DB_PASSWORD", $null, "Process")
+    Remove-Item -LiteralPath Env:MYSQL_PWD -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Env:DB_PASSWORD -ErrorAction SilentlyContinue
     & $ageExecutable -R $AgeRecipientsFile -o $temporaryEncrypted $temporarySql
     $ageExitCode = $LASTEXITCODE
   } finally {
