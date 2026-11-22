@@ -57,7 +57,7 @@ func (s *AuthService) Register(req dto.RegisterRequest) (*model.User, string, er
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, "", err
 	}
-	if err := s.consumeVerificationCode(req.Phone, "register", req.SMSCode); err != nil {
+	if err := s.consumeVerificationCode(req.Phone, "register", req.SMSCode, nil); err != nil {
 		return nil, "", err
 	}
 
@@ -82,7 +82,7 @@ func (s *AuthService) Register(req dto.RegisterRequest) (*model.User, string, er
 		return nil, "", err
 	}
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
+	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return user, token, err
 }
 
@@ -100,7 +100,7 @@ func (s *AuthService) Login(req dto.LoginRequest) (*model.User, string, error) {
 
 	s.ensureUserTenantDefaults(user)
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
+	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return user, token, err
 }
 
@@ -117,13 +117,13 @@ func (s *AuthService) LoginByPhone(req dto.PhoneLoginRequest) (*model.User, stri
 	if user.Status != "active" {
 		return nil, "", errors.New("账号已被禁用")
 	}
-	if err := s.consumeVerificationCode(phone, "login", req.Code); err != nil {
+	if err := s.consumeVerificationCode(phone, "login", req.Code, &user.ID); err != nil {
 		return nil, "", err
 	}
 
 	s.ensureUserTenantDefaults(user)
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
+	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return user, token, err
 }
 
@@ -247,7 +247,7 @@ func (s *AuthService) BindPhone(userID uint, req dto.BindPhoneRequest) (*model.U
 			}
 		}
 
-		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "bind_phone", req.Code)
+		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "bind_phone", req.Code, &userID)
 		if err != nil {
 			return err
 		}
@@ -288,7 +288,7 @@ func (s *AuthService) ResetPasswordByPhone(req dto.ResetPasswordByPhoneRequest) 
 			return errors.New("手机号未注册")
 		}
 
-		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "reset_password", req.Code)
+		valid, err := consumeSMSVerificationCodeInTransaction(tx, s.cfg.JWTSecret, phone, "reset_password", req.Code, &user.ID)
 		if err != nil {
 			return err
 		}
@@ -363,7 +363,7 @@ func (s *AuthService) BindEmail(userID uint, req dto.BindEmailRequest) (*model.U
 			}
 		}
 
-		valid, err := consumeEmailVerificationCodeInTransaction(tx, s.cfg.JWTSecret, email, "bind_email", req.Code)
+		valid, err := consumeEmailVerificationCodeInTransaction(tx, s.cfg.JWTSecret, email, "bind_email", req.Code, &userID)
 		if err != nil {
 			return err
 		}
@@ -391,8 +391,8 @@ func (s *AuthService) BindEmail(userID uint, req dto.BindEmailRequest) (*model.U
 }
 
 func (s *AuthService) DevResetPassword(req dto.DevResetPasswordRequest) error {
-	if strings.EqualFold(s.cfg.AppEnv, "production") {
-		return errors.New("生产环境不允许使用开发重置密码功能")
+	if s.cfg == nil || !s.cfg.DevPasswordResetEnabled || !strings.EqualFold(strings.TrimSpace(s.cfg.AppEnv), "development") {
+		return errors.New("开发重置密码功能仅允许在 development 环境使用")
 	}
 
 	hash, err := utils.HashPassword(req.NewPassword)
@@ -431,8 +431,8 @@ func (s *AuthService) issueEmailVerificationCode(email, scene string, userID *ui
 	return issueEmailVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, email, scene, userID)
 }
 
-func (s *AuthService) consumeVerificationCode(phone, scene, code string) error {
-	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code)
+func (s *AuthService) consumeVerificationCode(phone, scene, code string, userID *uint) error {
+	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code, userID)
 }
 
 func (s *AuthService) ensureUserTenantDefaults(user *model.User) {

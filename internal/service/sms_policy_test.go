@@ -61,13 +61,13 @@ func TestDevelopmentSMSMockStillIssuesAndAcceptsCodes(t *testing.T) {
 			t.Fatalf("legacy compatibility column must contain only the redaction marker, got %q", record.Code)
 		}
 	}
-	if err := auth.consumeVerificationCode("13800138003", "register", devFixedSMSCode); err != nil {
+	if err := auth.consumeVerificationCode("13800138003", "register", devFixedSMSCode, nil); err != nil {
 		t.Fatalf("development customer registration mock should remain accepted: %v", err)
 	}
-	if err := merchant.consumeMerchantVerificationCode("13800138004", "merchant_register", devFixedSMSCode); err != nil {
+	if err := merchant.consumeMerchantVerificationCode("13800138004", "merchant_register", devFixedSMSCode, nil); err != nil {
 		t.Fatalf("development merchant registration mock should remain accepted: %v", err)
 	}
-	if err := auth.consumeVerificationCode("13800138003", "register", devFixedSMSCode); !errors.Is(err, errSMSInvalidCode) {
+	if err := auth.consumeVerificationCode("13800138003", "register", devFixedSMSCode, nil); !errors.Is(err, errSMSInvalidCode) {
 		t.Fatalf("a consumed customer code must not be reusable; got %v", err)
 	}
 	if strings.Contains(logs.String(), devFixedSMSCode) || strings.Contains(logs.String(), "[mock-sms]") {
@@ -130,7 +130,7 @@ func TestSMSFailedAttemptsLockCodeAndSuccessIsSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for attempt := uint(1); attempt <= otpMaxFailedAttempts; attempt++ {
-		if err := auth.consumeVerificationCode(phone, "register", "000000"); !errors.Is(err, errSMSInvalidCode) {
+		if err := auth.consumeVerificationCode(phone, "register", "000000", nil); !errors.Is(err, errSMSInvalidCode) {
 			t.Fatalf("failed attempt %d should be rejected; got %v", attempt, err)
 		}
 	}
@@ -141,7 +141,7 @@ func TestSMSFailedAttemptsLockCodeAndSuccessIsSingleUse(t *testing.T) {
 	if record.FailedAttempts != otpMaxFailedAttempts || record.ConsumedAt == nil {
 		t.Fatalf("fifth failed attempt should lock the code; attempts=%d consumed=%v", record.FailedAttempts, record.ConsumedAt)
 	}
-	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode); !errors.Is(err, errSMSInvalidCode) {
+	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode, nil); !errors.Is(err, errSMSInvalidCode) {
 		t.Fatalf("locked code must reject the correct value; got %v", err)
 	}
 
@@ -149,11 +149,64 @@ func TestSMSFailedAttemptsLockCodeAndSuccessIsSingleUse(t *testing.T) {
 	if err := auth.SendRegisterCode(dto.SendSMSCodeRequest{Phone: phone}); err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode); err != nil {
+	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode, nil); err != nil {
 		t.Fatalf("first correct attempt should consume the code: %v", err)
 	}
-	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode); !errors.Is(err, errSMSInvalidCode) {
+	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode, nil); !errors.Is(err, errSMSInvalidCode) {
 		t.Fatalf("successfully consumed code must not be replayable; got %v", err)
+	}
+}
+
+func TestSMSBindingCodeIsScopedToIssuingUser(t *testing.T) {
+	db := newSMSTestDB(t)
+	customer, merchantAdmin := seedSMSTestUsers(t, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	targetPhone := "13800138009"
+	if err := auth.SendBindPhoneCode(customer.ID, dto.SendSMSCodeRequest{Phone: targetPhone}); err != nil {
+		t.Fatalf("issue synthetic bind code: %v", err)
+	}
+
+	if _, err := auth.BindPhone(merchantAdmin.ID, dto.BindPhoneRequest{Phone: targetPhone, Code: devFixedSMSCode}); !errors.Is(err, errSMSInvalidCode) {
+		t.Fatalf("another user must not consume the binding code; got %v", err)
+	}
+	var record model.VerificationCode
+	if err := db.Where("phone = ? AND scene = ?", targetPhone, "bind_phone").First(&record).Error; err != nil {
+		t.Fatalf("read synthetic bind code: %v", err)
+	}
+	if record.UserID == nil || *record.UserID != customer.ID || record.ConsumedAt != nil || record.FailedAttempts != 0 {
+		t.Fatalf("cross-user attempt changed or mis-scoped OTP record: user_id=%v consumed=%v failed=%d", record.UserID, record.ConsumedAt, record.FailedAttempts)
+	}
+
+	bound, err := auth.BindPhone(customer.ID, dto.BindPhoneRequest{Phone: targetPhone, Code: devFixedSMSCode})
+	if err != nil {
+		t.Fatalf("issuing user should still be able to bind phone: %v", err)
+	}
+	if bound.Phone != targetPhone {
+		t.Fatalf("bound phone=%q, want %q", bound.Phone, targetPhone)
+	}
+}
+
+func TestSMSExpiredCodeCannotBeConsumed(t *testing.T) {
+	db := newSMSTestDB(t)
+	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	phone := "13800138025"
+	if err := auth.SendRegisterCode(dto.SendSMSCodeRequest{Phone: phone}); err != nil {
+		t.Fatalf("send synthetic registration code: %v", err)
+	}
+	if err := db.Model(&model.VerificationCode{}).
+		Where("phone = ? AND scene = ?", phone, "register").
+		Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatalf("expire synthetic code: %v", err)
+	}
+	if err := auth.consumeVerificationCode(phone, "register", devFixedSMSCode, nil); !errors.Is(err, errSMSInvalidCode) {
+		t.Fatalf("expired SMS code must be rejected; got %v", err)
+	}
+	var record model.VerificationCode
+	if err := db.Where("phone = ? AND scene = ?", phone, "register").First(&record).Error; err != nil {
+		t.Fatalf("read synthetic code record: %v", err)
+	}
+	if record.ConsumedAt != nil || record.FailedAttempts != 0 {
+		t.Fatalf("expired code should not be consumed or counted as a wrong attempt: consumed=%v failed_attempts=%d", record.ConsumedAt, record.FailedAttempts)
 	}
 }
 
@@ -243,10 +296,10 @@ func TestFixedSMSCodeIsNotAcceptedOutsideDevelopment(t *testing.T) {
 			auth := NewAuthService(cfg, db)
 			merchant := NewMerchantService(cfg, db)
 
-			if err := auth.consumeVerificationCode("13800138001", "login", devFixedSMSCode); err == nil {
+			if err := auth.consumeVerificationCode("13800138001", "login", devFixedSMSCode, nil); err == nil {
 				t.Fatal("fixed mock code must not authenticate a customer outside development")
 			}
-			if err := merchant.consumeMerchantVerificationCode("13800138002", "merchant_reset_password", devFixedSMSCode); err == nil {
+			if err := merchant.consumeMerchantVerificationCode("13800138002", "merchant_reset_password", devFixedSMSCode, nil); err == nil {
 				t.Fatal("fixed mock code must not authenticate a merchant outside development")
 			}
 		})

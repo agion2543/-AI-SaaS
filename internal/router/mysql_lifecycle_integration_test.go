@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +18,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/schema"
+	"go-web-gin-health/internal/service"
 )
 
 const (
@@ -67,7 +70,11 @@ func TestMySQLManualReviewBackupRestoreLifecycle(t *testing.T) {
 
 	reviewID, auditID := insertLifecycleManualReview(t, source, merchantID, orderID, orderNo)
 	assertLifecycleData(t, source, orderID, orderNo, reviewID, auditID)
-	assertAppendOnlyLifecycle(t, source, reviewID, auditID)
+	expenseID := insertLifecycleExpense(t, source)
+	reversalID := insertLifecycleExpenseReversal(t, source, expenseID)
+	assertLifecycleExpenseReversal(t, source, expenseID, reversalID)
+	assertAppendOnlyLifecycle(t, source, reviewID, auditID, expenseID, reversalID)
+	assertConcurrentPartialReversalLimit(t, source)
 
 	dumpFile, err := os.CreateTemp(root, "synthetic-mysql-backup-*.sql")
 	if err != nil {
@@ -138,7 +145,8 @@ func TestMySQLManualReviewBackupRestoreLifecycle(t *testing.T) {
 	assertLifecycleInventory(t, target)
 	assertMatchingLedgers(t, source, target)
 	assertLifecycleData(t, target, orderID, orderNo, reviewID, auditID)
-	assertAppendOnlyLifecycle(t, target, reviewID, auditID)
+	assertLifecycleExpenseReversal(t, target, expenseID, reversalID)
+	assertAppendOnlyLifecycle(t, target, reviewID, auditID, expenseID, reversalID)
 	assertLifecycleReadEndpoints(t, targetName, orderNo)
 }
 
@@ -316,7 +324,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, productPricingColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, productPricingColumns, expenseColumns, expenseReversalColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -341,11 +349,23 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.WholesaleRetailV6Version, schema.WholesaleRetailV6Checksum).Scan(&v6Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.PlatformExpensesV7Version, schema.PlatformExpensesV7Checksum).Scan(&v7Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.PlatformExpenseReversalsV8Version, schema.PlatformExpenseReversalsV8Checksum).Scan(&v8Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 32 || triggers != 6 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || productPricingColumns != 4 {
-		t.Fatalf("managed schema inventory tables/triggers/v1-v6=%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; want 32/6/1/1/1/1/1/1 and 4 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, productPricingColumns)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='platform_expenses'`).Scan(&expenseColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='platform_expense_reversals'`).Scan(&expenseReversalColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 34 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || productPricingColumns != 4 || expenseColumns != 10 || expenseReversalColumns != 9 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v8=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; want 34/10/eight applied rows and 4/10/9 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, productPricingColumns, expenseColumns, expenseReversalColumns)
 	}
 }
 
@@ -369,7 +389,100 @@ func assertLifecycleData(t *testing.T, db *sql.DB, orderID uint64, orderNo strin
 	}
 }
 
-func assertAppendOnlyLifecycle(t *testing.T, db *sql.DB, reviewID, auditID uint64) {
+func assertConcurrentPartialReversalLimit(t *testing.T, db *sql.DB) {
+	t.Helper()
+	// The pool is the already-validated disposable socket-only source database.
+	gormDB, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: db}), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open isolated MySQL pool through application ORM: %v", err)
+	}
+	admin := service.NewAdminService(&config.Config{}, gormDB)
+	actor := service.AuditActor{ID: 4242, Type: "super_admin"}
+	date := time.Now().In(time.Local).Format("2006-01-02")
+	original, created, err := admin.CreatePlatformExpense(dto.CreatePlatformExpenseRequest{
+		Category: "cloud_hosting", AmountCents: 10000, Currency: "CNY", ExpenseDate: date,
+		Memo: "synthetic concurrent reversal expense", IdempotencyKey: uuid.NewString(),
+	}, actor)
+	if err != nil || !created {
+		t.Fatalf("create synthetic concurrency source expense: created=%v err=%v", created, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		request := dto.CreatePlatformExpenseReversalRequest{
+			ReversalDate: date, AmountCents: 6000, Reason: "synthetic concurrent partial reversal", IdempotencyKey: uuid.NewString(),
+		}
+		go func() {
+			<-start
+			_, _, err := admin.CreatePlatformExpenseReversal(original.ID, request, actor)
+			results <- err
+		}()
+	}
+	close(start)
+	var successes, rejected int
+	for i := 0; i < 2; i++ {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, service.ErrPlatformExpenseReversalExceedsOriginal):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent synthetic reversal error: %v", err)
+		}
+	}
+	var count, total, audits int64
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(amount_cents), 0) FROM platform_expense_reversals WHERE expense_id=?`, original.ID).Scan(&count, &total); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action='platform_expense_reversal_create'`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if successes != 1 || rejected != 1 || count != 1 || total != 6000 || audits != 1 {
+		t.Fatalf("concurrent partial limit/audit mismatch: successes=%d rejected=%d rows=%d total=%d audits=%d", successes, rejected, count, total, audits)
+	}
+}
+
+func insertLifecycleExpense(t *testing.T, db *sql.DB) uint64 {
+	t.Helper()
+	now := time.Now()
+	result, err := db.Exec(`INSERT INTO platform_expenses(created_at, updated_at, category, amount_cents, currency, expense_date, memo, created_by, idempotency_key) VALUES(?,?,?,?,?,?,?,?,?)`, now, now, "cloud_hosting", 12345, "CNY", now.Format("2006-01-02"), "synthetic lifecycle expense", 1, "b3c10ad5-3757-4b94-aee5-72cd6705f3c5")
+	if err != nil {
+		t.Fatalf("insert synthetic v7 platform expense: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read synthetic v7 expense id: %v", err)
+	}
+	return uint64(id)
+}
+
+func insertLifecycleExpenseReversal(t *testing.T, db *sql.DB, expenseID uint64) uint64 {
+	t.Helper()
+	now := time.Now()
+	result, err := db.Exec(`INSERT INTO platform_expense_reversals(created_at, updated_at, expense_id, amount_cents, reversal_date, reason, created_by, idempotency_key) VALUES(?,?,?,?,?,?,?,?)`, now, now, expenseID, 2500, now.Format("2006-01-02"), "synthetic lifecycle reversal reason", 1, "2192bcdf-3f21-4e10-b90b-70f61a96b856")
+	if err != nil {
+		t.Fatalf("insert synthetic lifecycle expense reversal: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return uint64(id)
+}
+
+func assertLifecycleExpenseReversal(t *testing.T, db *sql.DB, expenseID, reversalID uint64) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM platform_expense_reversals WHERE id=? AND expense_id=? AND amount_cents=2500 AND reason='synthetic lifecycle reversal reason' AND created_by=1`, reversalID, expenseID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("synthetic reversal row count=%d; want one unchanged reversal linked to its source expense", count)
+	}
+}
+
+func assertAppendOnlyLifecycle(t *testing.T, db *sql.DB, reviewID, auditID, expenseID, reversalID uint64) {
 	t.Helper()
 	for _, statement := range []struct {
 		label string
@@ -380,6 +493,10 @@ func assertAppendOnlyLifecycle(t *testing.T, db *sql.DB, reviewID, auditID uint6
 		{"review DELETE", `DELETE FROM merchant_subscription_manual_reviews WHERE id=?`, reviewID},
 		{"audit UPDATE", `UPDATE merchant_subscription_manual_review_audits SET reason='tampered' WHERE id=?`, auditID},
 		{"audit DELETE", `DELETE FROM merchant_subscription_manual_review_audits WHERE id=?`, auditID},
+		{"expense UPDATE", `UPDATE platform_expenses SET memo='tampered' WHERE id=?`, expenseID},
+		{"expense DELETE", `DELETE FROM platform_expenses WHERE id=?`, expenseID},
+		{"expense reversal UPDATE", `UPDATE platform_expense_reversals SET reason='tampered' WHERE id=?`, reversalID},
+		{"expense reversal DELETE", `DELETE FROM platform_expense_reversals WHERE id=?`, reversalID},
 	} {
 		_, err := db.Exec(statement.sql, statement.id)
 		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "append-only") {
@@ -387,8 +504,10 @@ func assertAppendOnlyLifecycle(t *testing.T, db *sql.DB, reviewID, auditID uint6
 		}
 	}
 	if countLifecycle(t, db, `SELECT COUNT(*) FROM merchant_subscription_manual_reviews WHERE id=? AND reason='synthetic immutable review'`, reviewID) != 1 ||
-		countLifecycle(t, db, `SELECT COUNT(*) FROM merchant_subscription_manual_review_audits WHERE id=? AND reason='synthetic audit'`, auditID) != 1 {
-		t.Fatal("append-only rejection changed the synthetic manual review or audit")
+		countLifecycle(t, db, `SELECT COUNT(*) FROM merchant_subscription_manual_review_audits WHERE id=? AND reason='synthetic audit'`, auditID) != 1 ||
+		countLifecycle(t, db, `SELECT COUNT(*) FROM platform_expenses WHERE id=? AND memo='synthetic lifecycle expense' AND amount_cents=12345 AND currency='CNY'`, expenseID) != 1 ||
+		countLifecycle(t, db, `SELECT COUNT(*) FROM platform_expense_reversals WHERE id=? AND reason='synthetic lifecycle reversal reason'`, reversalID) != 1 {
+		t.Fatal("append-only rejection changed a synthetic review, audit, expense, or reversal")
 	}
 }
 
@@ -414,11 +533,13 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 6 || len(right) != 6 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 6/6", len(left), len(right))
+	if len(left) != 8 || len(right) != 8 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 8/8", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version} {
-		if left[version] != right[version] {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version} {
+		leftValue, leftOK := left[version]
+		rightValue, rightOK := right[version]
+		if !leftOK || !rightOK || leftValue != rightValue {
 			t.Fatalf("source/restored ledger fingerprint differs for %s", version)
 		}
 	}

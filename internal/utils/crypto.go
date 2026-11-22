@@ -12,18 +12,18 @@ import (
 const encryptedStringV1Prefix = "v1:"
 
 var (
-	errInvalidAESSecret        = errors.New("AES secret must be at least 32 bytes")
+	errInvalidAESSecret        = errors.New("AES secret must be exactly 32 bytes")
 	errMalformedCiphertext     = errors.New("malformed encrypted string")
 	errUnsupportedCiphertext   = errors.New("unsupported encrypted string version")
 	errCannotDecryptCiphertext = errors.New("unable to decrypt encrypted string")
 )
 
 func newAESGCM(secret string) (cipher.AEAD, error) {
-	if len(secret) < 32 {
+	if len(secret) != 32 {
 		return nil, errInvalidAESSecret
 	}
 
-	block, err := aes.NewCipher([]byte(secret[:32]))
+	block, err := aes.NewCipher([]byte(secret))
 	if err != nil {
 		return nil, err
 	}

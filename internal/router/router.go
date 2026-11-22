@@ -1,7 +1,9 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -13,10 +15,18 @@ import (
 )
 
 func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
+	if err := engine.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		panic(fmt.Errorf("invalid TRUSTED_PROXIES configuration: %w", err))
+	}
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.Logger())
 	engine.Use(middleware.CORS(cfg.FrontendURL))
 	engine.Use(middleware.RateLimit(cfg.RateLimitPerMinute))
+	otpSendLimit := cfg.OTPSendRateLimitPerIPPerMinute
+	if otpSendLimit < 1 {
+		otpSendLimit = config.DefaultOTPSendRateLimitPerIPPerMinute
+	}
+	engine.Use(middleware.OTPSendRateLimit(otpSendLimit))
 
 	authService := service.NewAuthService(cfg, db)
 	packageService := service.NewPackageService(db)
@@ -73,8 +83,10 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		apiLegacy.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		apiLegacy.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		apiLegacy.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		apiLegacy.POST("/customer/orders/recover", orderCtl.RecoverCustomerOrder)
 		apiLegacy.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
 		apiLegacy.POST("/customer/orders/:orderNo/items", orderCtl.AppendCustomerOrderItems)
+		apiLegacy.POST("/customer/orders/:orderNo/items/recover", orderCtl.RecoverCustomerOrderAppend)
 		apiLegacy.POST("/customer/orders/:orderNo/paid", orderCtl.MarkCustomerOrderPaid)
 		apiLegacy.POST("/customer/orders/:orderNo/retry", orderCtl.RetryCustomerOrderPayment)
 		apiLegacy.POST("/customer/orders/:orderNo/review", orderCtl.ReviewCustomerOrder)
@@ -205,6 +217,9 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.GET("/ai-config/status", adminCtl.AIConfigStatus)
 			adminLegacy.POST("/ai-config/policy", adminCtl.SaveAIConfigPolicy)
 			adminLegacy.GET("/ai-usage/overview", adminCtl.AIUsageOverview)
+			adminLegacy.GET("/platform-costs/overview", adminCtl.PlatformCostOverview)
+			adminLegacy.POST("/platform-costs/expenses", adminCtl.CreatePlatformExpense)
+			adminLegacy.POST("/platform-costs/expenses/:id/reversals", adminCtl.CreatePlatformExpenseReversal)
 			adminLegacy.GET("/configs", adminCtl.Configs)
 			adminLegacy.POST("/configs", adminCtl.SaveConfigs)
 			adminLegacy.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
@@ -234,15 +249,17 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		v1.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		v1.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		v1.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		v1.POST("/customer/orders/recover", orderCtl.RecoverCustomerOrder)
 		v1.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
 		v1.POST("/customer/orders/:orderNo/items", orderCtl.AppendCustomerOrderItems)
+		v1.POST("/customer/orders/:orderNo/items/recover", orderCtl.RecoverCustomerOrderAppend)
 		v1.POST("/customer/orders/:orderNo/paid", orderCtl.MarkCustomerOrderPaid)
 		v1.POST("/customer/orders/:orderNo/retry", orderCtl.RetryCustomerOrderPayment)
 		v1.POST("/customer/orders/:orderNo/review", orderCtl.ReviewCustomerOrder)
 		v1.POST("/customer/orders/:orderNo/share", shareCtl.CreateOrderShare)
 		v1.POST("/share/:code/scan", shareCtl.TrackShareScan)
 		v1.GET("/group-buy/r/:code", groupBuyCtl.Redirect)
-		if cfg.AppEnv != "production" {
+		if cfg.DevPasswordResetEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "development") {
 			v1.POST("/auth/dev/reset-password", authCtl.DevResetPassword)
 		}
 
@@ -349,6 +366,9 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.GET("/ai-config/status", adminCtl.AIConfigStatus)
 			adminGroup.POST("/ai-config/policy", adminCtl.SaveAIConfigPolicy)
 			adminGroup.GET("/ai-usage/overview", adminCtl.AIUsageOverview)
+			adminGroup.GET("/platform-costs/overview", adminCtl.PlatformCostOverview)
+			adminGroup.POST("/platform-costs/expenses", adminCtl.CreatePlatformExpense)
+			adminGroup.POST("/platform-costs/expenses/:id/reversals", adminCtl.CreatePlatformExpenseReversal)
 			adminGroup.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 			adminGroup.GET("/merchants", adminCtl.Merchants)
 			adminGroup.GET("/merchant-plans", adminCtl.MerchantPlans)

@@ -43,7 +43,9 @@ func TestUserAuthRequiresCustomerRoleAndActiveCurrentUser(t *testing.T) {
 
 	tokenForRole := func(role string) string {
 		t.Helper()
-		token, err := utils.GenerateToken(cfg.JWTSecret, user.ID, user.Phone, role, nil, 1)
+		candidate := user
+		candidate.Role = role
+		token, err := utils.GenerateUserToken(cfg.JWTSecret, candidate, 1)
 		if err != nil {
 			t.Fatalf("create synthetic %s token: %v", role, err)
 		}
@@ -67,6 +69,13 @@ func TestUserAuthRequiresCustomerRoleAndActiveCurrentUser(t *testing.T) {
 			t.Errorf("%s token status=%d, want %d; body=%s", role, response.Code, http.StatusForbidden, response.Body.String())
 		}
 	}
+	legacyToken, err := utils.GenerateToken(cfg.JWTSecret, user.ID, user.Phone, user.Role, nil, 1)
+	if err != nil {
+		t.Fatalf("create synthetic legacy token: %v", err)
+	}
+	if response := request(legacyToken); response.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy token without credential version status=%d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
 
 	for _, status := range []string{"disabled", "banned"} {
 		t.Run("existing token rejected after "+status, func(t *testing.T) {
@@ -81,4 +90,38 @@ func TestUserAuthRequiresCustomerRoleAndActiveCurrentUser(t *testing.T) {
 			t.Fatalf("restore synthetic user status: %v", err)
 		}
 	}
+
+	t.Run("existing token rejected after password change", func(t *testing.T) {
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("password_hash", "synthetic-changed-password-hash").Error; err != nil {
+			t.Fatalf("change synthetic password hash: %v", err)
+		}
+		if response := request(customerToken); response.Code != http.StatusUnauthorized {
+			t.Fatalf("token after password change status=%d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body.String())
+		}
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("password_hash", user.PasswordHash).Error; err != nil {
+			t.Fatalf("restore synthetic password hash: %v", err)
+		}
+	})
+	t.Run("existing token rejected after role change", func(t *testing.T) {
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("role", "merchant_admin").Error; err != nil {
+			t.Fatalf("change synthetic role: %v", err)
+		}
+		if response := request(customerToken); response.Code != http.StatusUnauthorized {
+			t.Fatalf("token after role change status=%d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body.String())
+		}
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("role", "customer").Error; err != nil {
+			t.Fatalf("restore synthetic role: %v", err)
+		}
+	})
+	t.Run("existing token rejected after merchant reassignment", func(t *testing.T) {
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("merchant_id", uint(9876)).Error; err != nil {
+			t.Fatalf("change synthetic merchant assignment: %v", err)
+		}
+		if response := request(customerToken); response.Code != http.StatusUnauthorized {
+			t.Fatalf("token after merchant reassignment status=%d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body.String())
+		}
+		if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("merchant_id", nil).Error; err != nil {
+			t.Fatalf("restore synthetic merchant assignment: %v", err)
+		}
+	})
 }

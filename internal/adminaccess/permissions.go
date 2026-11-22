@@ -221,6 +221,9 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"GET /admin/access/admins",
 		"POST /admin/access/admins",
 		"PUT /admin/access/admins/:id",
+		"GET /admin/platform-costs/overview",
+		"POST /admin/platform-costs/expenses",
+		"POST /admin/platform-costs/expenses/:id/reversals",
 	)
 	return m
 }

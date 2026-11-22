@@ -96,11 +96,11 @@ func issueEmailVerificationCode(db *gorm.DB, appEnv, secret, email, scene string
 	})
 }
 
-func consumeEmailVerificationCode(db *gorm.DB, secret, email, scene, code string) error {
+func consumeEmailVerificationCode(db *gorm.DB, secret, email, scene, code string, userID *uint) error {
 	valid := false
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var err error
-		valid, err = consumeEmailVerificationCodeInTransaction(tx, secret, email, scene, code)
+		valid, err = consumeEmailVerificationCodeInTransaction(tx, secret, email, scene, code, userID)
 		return err
 	})
 	if err != nil {
@@ -115,14 +115,14 @@ func consumeEmailVerificationCode(db *gorm.DB, secret, email, scene, code string
 // consumeEmailVerificationCodeInTransaction persists failed attempts when the
 // caller commits an invalid result, and allows successful code consumption to
 // be atomic with the protected account change.
-func consumeEmailVerificationCodeInTransaction(tx *gorm.DB, secret, email, scene, code string) (bool, error) {
+func consumeEmailVerificationCodeInTransaction(tx *gorm.DB, secret, email, scene, code string, userID *uint) (bool, error) {
 	digest, err := hashEmailCode(secret, email, scene, code)
 	if err != nil {
 		return false, err
 	}
 	codes := repository.NewEmailVerificationCodeRepository(tx)
 	now := time.Now()
-	record, err := codes.FindActiveForUpdate(email, scene, now)
+	record, err := codes.FindActiveForUpdate(email, scene, userID, now)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	testAESSecret = "0123456789abcdef0123456789abcdef-test-only"
+	testAESSecret = "0123456789abcdef0123456789abcdef"
 	// This fixture was generated with testAESSecret and the legacy deterministic nonce.
 	legacyCiphertextFixture = "9cyAWyCzuGuUfE7Y3XBcQCPysbh2sUoNTfe7bLudg2UEJeDlzLNgS+lWxtqIXA=="
 	legacyPlaintextFixture  = "legacy payment gateway fixture"
@@ -81,11 +81,31 @@ func TestDecryptStringRejectsMalformedAndTamperedCiphertext(t *testing.T) {
 	}
 }
 
-func TestEncryptStringAndDecryptStringRejectShortSecret(t *testing.T) {
-	if _, err := EncryptString("too-short", "synthetic plaintext"); err == nil {
-		t.Fatal("expected encryption with a short secret to fail")
+func TestEncryptStringAndDecryptStringRequireExactly32ByteSecret(t *testing.T) {
+	for _, secret := range []string{"too-short", strings.Repeat("s", 31), strings.Repeat("s", 33), strings.Repeat("s", 64)} {
+		if _, err := EncryptString(secret, "synthetic plaintext"); err == nil {
+			t.Errorf("encryption with %d-byte secret must fail", len(secret))
+		}
+		if _, err := DecryptString(secret, legacyCiphertextFixture); err == nil {
+			t.Errorf("decryption with %d-byte secret must fail", len(secret))
+		}
 	}
-	if _, err := DecryptString("too-short", legacyCiphertextFixture); err == nil {
-		t.Fatal("expected decryption with a short secret to fail")
+}
+
+func TestDecryptStringRejectsDifferentKeyForLegacyAndVersionedData(t *testing.T) {
+	versioned, err := EncryptString(testAESSecret, "synthetic key-mismatch fixture")
+	if err != nil {
+		t.Fatalf("create versioned fixture: %v", err)
+	}
+	wrongKey := "X" + testAESSecret[1:]
+	for name, ciphertext := range map[string]string{
+		"legacy":    legacyCiphertextFixture,
+		"versioned": versioned,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecryptString(wrongKey, ciphertext); err == nil {
+				t.Fatal("ciphertext decrypted with a different AES key")
+			}
+		})
 	}
 }

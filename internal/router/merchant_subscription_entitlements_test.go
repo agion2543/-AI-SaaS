@@ -63,7 +63,7 @@ func TestMerchantExpiredReadOnlyPauseLockAndRenewalRoutes(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "test-only-secret", FrontendURL: "http://localhost:5173", RateLimitPerMinute: 100}
 	engine := gin.New()
 	Register(engine, db, cfg)
-	token, err := utils.GenerateToken(cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 1)
+	token, err := utils.GenerateUserToken(cfg.JWTSecret, user, 1)
 	if err != nil {
 		t.Fatalf("create synthetic merchant token: %v", err)
 	}

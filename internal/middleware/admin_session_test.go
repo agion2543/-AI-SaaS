@@ -13,6 +13,7 @@ import (
 
 	"go-web-gin-health/internal/adminrecovery"
 	"go-web-gin-health/internal/config"
+	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
 	"go-web-gin-health/internal/service"
 	"go-web-gin-health/internal/utils"
@@ -74,8 +75,12 @@ func TestAdminTokensRevokeOnRecoveryRolePermissionAndStatusChanges(t *testing.T)
 			t.Fatal(err)
 		}
 	}
+	deletedAdmin := model.AdminUser{Username: "synthetic-session-deleted", DisplayName: "待删除合成管理员", PasswordHash: operatorPasswordHash, Status: "active", RoleID: operatorRole.ID}
+	if err := db.Create(&deletedAdmin).Error; err != nil {
+		t.Fatalf("create synthetic admin for deletion check: %v", err)
+	}
 
-	cfg := &config.Config{JWTSecret: "synthetic-admin-session-secret"}
+	cfg := &config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: "synthetic-admin-session-secret"}
 	engine := gin.New()
 	adminGroup := engine.Group("/api/v1/admin")
 	adminGroup.Use(Auth(cfg, "admin", db), AdminAuthorization())
@@ -89,6 +94,14 @@ func TestAdminTokensRevokeOnRecoveryRolePermissionAndStatusChanges(t *testing.T)
 		response := httptest.NewRecorder()
 		engine.ServeHTTP(response, req)
 		return response
+	}
+
+	deletedToken := issueSyntheticAdminToken(t, cfg, db, deletedAdmin.ID)
+	if err := db.Delete(&model.AdminUser{}, deletedAdmin.ID).Error; err != nil {
+		t.Fatalf("delete synthetic admin: %v", err)
+	}
+	if response := request(http.MethodGet, "/api/v1/admin/access/admins", deletedToken); response.Code != http.StatusUnauthorized {
+		t.Fatalf("deleted-admin token status=%d, want 401; body=%s", response.Code, response.Body.String())
 	}
 
 	superToken := issueSyntheticAdminToken(t, cfg, db, superAdmin.ID)
@@ -112,6 +125,38 @@ func TestAdminTokensRevokeOnRecoveryRolePermissionAndStatusChanges(t *testing.T)
 	currentSuperToken := issueSyntheticAdminToken(t, cfg, db, superAdmin.ID)
 	if response := request(http.MethodGet, "/api/v1/admin/access/admins", currentSuperToken); response.Code != http.StatusNoContent {
 		t.Fatalf("post-recovery token status=%d, want 204; body=%s", response.Code, response.Body.String())
+	}
+	for _, appEnv := range []string{"production", "prod", "staging", ""} {
+		blockedCfg := *cfg
+		blockedCfg.AppEnv = appEnv
+		err := service.NewAuthService(&blockedCfg, db).DevResetPassword(dto.DevResetPasswordRequest{
+			AccountType: "admin", Account: superAdmin.Username, NewPassword: "synthetic-blocked-reset-password",
+		})
+		if err == nil {
+			t.Fatalf("dev password reset unexpectedly succeeded for APP_ENV=%q", appEnv)
+		}
+		if response := request(http.MethodGet, "/api/v1/admin/access/admins", currentSuperToken); response.Code != http.StatusNoContent {
+			t.Fatalf("blocked APP_ENV=%q reset changed current token status=%d; body=%s", appEnv, response.Code, response.Body.String())
+		}
+	}
+	implicitDevCfg := *cfg
+	implicitDevCfg.DevPasswordResetEnabled = false
+	if err := service.NewAuthService(&implicitDevCfg, db).DevResetPassword(dto.DevResetPasswordRequest{
+		AccountType: "admin", Account: superAdmin.Username, NewPassword: "synthetic-implicit-reset-password",
+	}); err == nil {
+		t.Fatal("dev password reset unexpectedly succeeded without explicit development configuration")
+	}
+	if err := service.NewAuthService(cfg, db).DevResetPassword(dto.DevResetPasswordRequest{
+		AccountType: "admin", Account: superAdmin.Username, NewPassword: "synthetic-dev-reset-password-000",
+	}); err != nil {
+		t.Fatalf("reset synthetic admin password in development: %v", err)
+	}
+	if response := request(http.MethodGet, "/api/v1/admin/access/admins", currentSuperToken); response.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-dev-reset token status=%d, want 401; body=%s", response.Code, response.Body.String())
+	}
+	devResetToken := issueSyntheticAdminToken(t, cfg, db, superAdmin.ID)
+	if response := request(http.MethodGet, "/api/v1/admin/access/admins", devResetToken); response.Code != http.StatusNoContent {
+		t.Fatalf("post-dev-reset token status=%d, want 204; body=%s", response.Code, response.Body.String())
 	}
 
 	access := service.NewAdminAccessService(db)

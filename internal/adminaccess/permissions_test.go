@@ -2,6 +2,7 @@ package adminaccess
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,24 @@ func TestAdminRouteMapIsExplicitByMethodAndPattern(t *testing.T) {
 				t.Fatalf("route access = %#v; want permissions=%#v super=%v session=%v", access, tc.want, tc.super, tc.session)
 			}
 		})
+	}
+}
+
+func TestRegisteredAdminPrefixesResolveIdenticalAuthorization(t *testing.T) {
+	for route, expected := range adminRouteAccess {
+		method, path, found := strings.Cut(route, " ")
+		if !found {
+			t.Fatalf("invalid registered admin route key %q", route)
+		}
+		for _, prefix := range []string{"/api", "/api/v1"} {
+			access, ok := ResolveAdminRoute(method, prefix+path)
+			if !ok {
+				t.Errorf("registered route %q was not resolved through %s", route, prefix)
+				continue
+			}
+			if !reflect.DeepEqual(access, expected) {
+				t.Errorf("route %q through %s resolved to %#v, want %#v", route, prefix, access, expected)
+			}
+		}
 	}
 }

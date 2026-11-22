@@ -121,6 +121,8 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 		"coupon_no":       validCoupon.CouponNo,
 		"payment_channel": "alipay",
 		"pay_mode":        "page",
+		"request_key":     strings.Repeat("a1", 32),
+		"access_token":    strings.Repeat("b2", 32),
 		"items": []map[string]any{{
 			"product_id": product.ID,
 			"quantity":   1,
@@ -149,7 +151,7 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 	if err := json.Unmarshal(createData, &created); err != nil {
 		t.Fatalf("decode customer order create response: %v", err)
 	}
-	if created.Order.OrderNo == "" || created.AccessToken == "" {
+	if created.Order.OrderNo == "" || created.AccessToken != strings.Repeat("b2", 32) {
 		t.Fatalf("create response must include order number and one-time access token: %s", createData)
 	}
 	if created.Order.Status != "submitted" || created.Order.Amount != 1250 || created.Order.Discount != 200 || created.Order.TotalAmount != 1050 {
@@ -181,11 +183,193 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 	if rawTokenColumnCount != 0 {
 		t.Fatal("raw customer access token must not have a database column")
 	}
+	retryResponse := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders", "", createPayload)
+	if retryResponse.Code != http.StatusOK {
+		t.Fatalf("retry identical mobile customer-order request: status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
+	}
+	var replayed struct {
+		Order struct {
+			OrderNo string `json:"order_no"`
+		} `json:"order"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, retryResponse), &replayed); err != nil {
+		t.Fatalf("decode idempotent customer-order response: %v", err)
+	}
+	if replayed.Order.OrderNo != created.Order.OrderNo || replayed.AccessToken != created.AccessToken {
+		t.Fatalf("identical API retry must return original order and access token: first=%+v retry=%+v", created, replayed)
+	}
+	var duplicateOrderCount int64
+	if err := db.Model(&model.Order{}).Where("order_no = ?", created.Order.OrderNo).Count(&duplicateOrderCount).Error; err != nil {
+		t.Fatalf("count idempotent customer order: %v", err)
+	}
+	if duplicateOrderCount != 1 {
+		t.Fatalf("identical API retry created %d copies of the order", duplicateOrderCount)
+	}
+	recoverCreateResponse := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders/recover", "", map[string]string{
+		"request_key":  strings.Repeat("a1", 32),
+		"access_token": strings.Repeat("b2", 32),
+	})
+	if recoverCreateResponse.Code != http.StatusOK {
+		t.Fatalf("POST customer order recovery: status=%d body=%s", recoverCreateResponse.Code, recoverCreateResponse.Body.String())
+	}
+	var recoveredCreate struct {
+		Order struct {
+			OrderNo string `json:"order_no"`
+		} `json:"order"`
+		AccessToken string `json:"access_token"`
+		Recovered   bool   `json:"recovered"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, recoverCreateResponse), &recoveredCreate); err != nil {
+		t.Fatalf("decode recovered customer order: %v", err)
+	}
+	if recoveredCreate.Order.OrderNo != created.Order.OrderNo || recoveredCreate.AccessToken != created.AccessToken || !recoveredCreate.Recovered {
+		t.Fatalf("create recovery must return the same unpaid order access without creating another order: %+v", recoveredCreate)
+	}
+	unauthorizedRecovery := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders/recover", "", map[string]string{
+		"request_key":  strings.Repeat("a1", 32),
+		"access_token": strings.Repeat("c3", 32),
+	})
+	if unauthorizedRecovery.Code != http.StatusNotFound {
+		t.Fatalf("create recovery with a wrong access token must be hidden as not found: status=%d body=%s", unauthorizedRecovery.Code, unauthorizedRecovery.Body.String())
+	}
 	if stored.CustomerPhone != phone || stored.CouponNo != validCoupon.CouponNo || stored.CouponID == nil || *stored.CouponID != validCoupon.ID {
 		t.Fatalf("persisted order does not match synthetic customer/coupon ownership: %+v", stored)
 	}
 
 	orderPath := "/api/v1/customer/orders/" + stored.OrderNo
+	appendCreatePayload := map[string]any{
+		"store_id":        store.ID,
+		"customer_note":   "独立追加验证订单",
+		"payment_channel": "alipay",
+		"request_key":     strings.Repeat("d4", 32),
+		"access_token":    strings.Repeat("e5", 32),
+		"items":           []map[string]any{{"product_id": product.ID, "quantity": 1, "price": 1}},
+	}
+	appendCreateResponse := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders", "", appendCreatePayload)
+	if appendCreateResponse.Code != http.StatusOK {
+		t.Fatalf("create isolated synthetic append-test order: status=%d body=%s", appendCreateResponse.Code, appendCreateResponse.Body.String())
+	}
+	var appendOrderCredential struct {
+		Order struct {
+			OrderNo string `json:"order_no"`
+		} `json:"order"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, appendCreateResponse), &appendOrderCredential); err != nil {
+		t.Fatalf("decode isolated append-test order: %v", err)
+	}
+	appendOrderPath := "/api/v1/customer/orders/" + appendOrderCredential.Order.OrderNo
+	appendPath := appendOrderPath + "/items"
+	appendPayload := map[string]any{
+		"customer_note": "合成追加备注",
+		"request_key":   strings.Repeat("c3", 32),
+		"items": []map[string]any{{
+			"product_id": product.ID,
+			"quantity":   2,
+			"price":      1, // The server must continue to use the catalog price.
+		}},
+	}
+	unauthorizedAppend := customerOrderAPIRequest(t, engine, http.MethodPost, appendPath, "synthetic-wrong-access-token", appendPayload)
+	if unauthorizedAppend.Code != http.StatusBadRequest {
+		t.Fatalf("append without the matching order access token must fail: status=%d body=%s", unauthorizedAppend.Code, unauthorizedAppend.Body.String())
+	}
+	appendStart := make(chan struct{})
+	appendResults := make(chan *httptest.ResponseRecorder, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-appendStart
+			appendResults <- customerOrderAPIRequest(t, engine, http.MethodPost, appendPath, appendOrderCredential.AccessToken, appendPayload)
+		}()
+	}
+	close(appendStart)
+	firstAppend := <-appendResults
+	replayedAppend := <-appendResults
+	for _, response := range []*httptest.ResponseRecorder{firstAppend, replayedAppend} {
+		if response.Code != http.StatusOK {
+			t.Fatalf("concurrent POST customer order append: status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	var firstAppendOrder struct {
+		Order struct {
+			Amount       int64            `json:"subtotal_amount"`
+			TotalAmount  int64            `json:"total_amount"`
+			Items        []map[string]any `json:"items"`
+			OperationLog []map[string]any `json:"operation_logs"`
+		} `json:"order"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, firstAppend), &firstAppendOrder); err != nil {
+		t.Fatalf("decode first append response: %v", err)
+	}
+	if firstAppendOrder.Order.Amount != 3750 || firstAppendOrder.Order.TotalAmount != 3750 || len(firstAppendOrder.Order.Items) != 2 {
+		t.Fatalf("first append must use server pricing and preserve existing total semantics: %+v", firstAppendOrder.Order)
+	}
+	var replayedAppendOrder struct {
+		Order struct {
+			Amount      int64            `json:"subtotal_amount"`
+			TotalAmount int64            `json:"total_amount"`
+			Items       []map[string]any `json:"items"`
+			Logs        []map[string]any `json:"operation_logs"`
+		} `json:"order"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, replayedAppend), &replayedAppendOrder); err != nil {
+		t.Fatalf("decode append replay response: %v", err)
+	}
+	if replayedAppendOrder.Order.Amount != firstAppendOrder.Order.Amount || replayedAppendOrder.Order.TotalAmount != firstAppendOrder.Order.TotalAmount || len(replayedAppendOrder.Order.Items) != 2 {
+		t.Fatalf("identical API retry duplicated appended items or amount: %+v", replayedAppendOrder.Order)
+	}
+	appendAuditCount := 0
+	for _, log := range replayedAppendOrder.Order.Logs {
+		if log["action"] == "items_appended" {
+			appendAuditCount++
+		}
+		if _, leaked := log["append_request_key_hash"]; leaked {
+			t.Fatal("public order logs must not expose the server-side append request-key hash")
+		}
+		if _, leaked := log["append_request_fingerprint"]; leaked {
+			t.Fatal("public order logs must not expose the server-side append fingerprint")
+		}
+	}
+	if appendAuditCount != 1 {
+		t.Fatalf("identical API retry must retain exactly one append audit entry, found %d", appendAuditCount)
+	}
+	recoverAppendPath := appendOrderPath + "/items/recover"
+	recoverAppendResponse := customerOrderAPIRequest(t, engine, http.MethodPost, recoverAppendPath, appendOrderCredential.AccessToken, map[string]string{
+		"request_key": strings.Repeat("c3", 32),
+	})
+	if recoverAppendResponse.Code != http.StatusOK {
+		t.Fatalf("POST customer order append recovery: status=%d body=%s", recoverAppendResponse.Code, recoverAppendResponse.Body.String())
+	}
+	var recoveredAppend struct {
+		Order struct {
+			OrderNo     string `json:"order_no"`
+			TotalAmount int64  `json:"total_amount"`
+			Items       []any  `json:"items"`
+		} `json:"order"`
+		Recovered bool `json:"recovered"`
+	}
+	if err := json.Unmarshal(customerOrderAPIData(t, recoverAppendResponse), &recoveredAppend); err != nil {
+		t.Fatalf("decode recovered append order: %v", err)
+	}
+	if recoveredAppend.Order.OrderNo != appendOrderCredential.Order.OrderNo || recoveredAppend.Order.TotalAmount != firstAppendOrder.Order.TotalAmount || len(recoveredAppend.Order.Items) != 2 || !recoveredAppend.Recovered {
+		t.Fatalf("append recovery must return the existing order without duplicating items: %+v", recoveredAppend)
+	}
+	unauthorizedAppendRecovery := customerOrderAPIRequest(t, engine, http.MethodPost, recoverAppendPath, "synthetic-wrong-access-token", map[string]string{
+		"request_key": strings.Repeat("c3", 32),
+	})
+	if unauthorizedAppendRecovery.Code != http.StatusNotFound {
+		t.Fatalf("append recovery with a wrong access token must be hidden as not found: status=%d body=%s", unauthorizedAppendRecovery.Code, unauthorizedAppendRecovery.Body.String())
+	}
+	conflictingAppend := make(map[string]any, len(appendPayload))
+	for key, value := range appendPayload {
+		conflictingAppend[key] = value
+	}
+	conflictingAppend["items"] = []map[string]any{{"product_id": product.ID, "quantity": 3, "price": product.Price}}
+	conflictResponse := customerOrderAPIRequest(t, engine, http.MethodPost, appendPath, appendOrderCredential.AccessToken, conflictingAppend)
+	if conflictResponse.Code != http.StatusBadRequest || !strings.Contains(conflictResponse.Body.String(), "different request") {
+		t.Fatalf("reusing an append request key with different items must fail: status=%d body=%s", conflictResponse.Code, conflictResponse.Body.String())
+	}
+
 	for _, tc := range []struct {
 		name  string
 		token string
@@ -236,6 +420,8 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 	}
 	withoutCouponPayload["customer_phone"] = ""
 	withoutCouponPayload["coupon_no"] = ""
+	delete(withoutCouponPayload, "request_key")
+	delete(withoutCouponPayload, "access_token")
 	withoutCouponResponse := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders", "", withoutCouponPayload)
 	if withoutCouponResponse.Code != http.StatusOK {
 		t.Fatalf("order without phone/coupon should remain available: status=%d body=%s", withoutCouponResponse.Code, withoutCouponResponse.Body.String())
@@ -346,6 +532,8 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 			for key, value := range createPayload {
 				payload[key] = value
 			}
+			delete(payload, "request_key")
+			delete(payload, "access_token")
 			payload["coupon_no"] = tc.couponNo
 			response := customerOrderAPIRequest(t, engine, http.MethodPost, "/api/v1/customer/orders", "", payload)
 			if response.Code != http.StatusBadRequest {

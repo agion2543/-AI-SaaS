@@ -32,12 +32,57 @@ func openInitialDataSeedTestDB(t *testing.T) *gorm.DB {
 func runInitialDataSeed(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	cfg := &config.Config{
-		AppEnv:           "production",
-		InitialAdminUser: "synthetic-admin",
-		InitialAdminPass: "synthetic-initial-seed-password",
+		AppEnv:                 "production",
+		InitialAdminUser:       "synthetic-admin",
+		InitialAdminPass:       "synthetic-initial-seed-password",
+		InitialDataSeedEnabled: true,
 	}
-	if err := seedInitialData(db, cfg); err != nil {
+	if err := seedConfiguredInitialData(db, cfg); err != nil {
 		t.Fatalf("seed synthetic initial data: %v", err)
+	}
+}
+
+func TestSeedConfiguredInitialDataDisabledDoesNotMutateManagedUpgradeData(t *testing.T) {
+	db := openInitialDataSeedTestDB(t)
+	existingRole := model.AdminRole{
+		Name:        "Operator-managed role",
+		Code:        "super_admin",
+		Permissions: "custom_permissions",
+	}
+	if err := db.Create(&existingRole).Error; err != nil {
+		t.Fatalf("create synthetic existing role: %v", err)
+	}
+
+	cfg := &config.Config{
+		AppEnv:                 "production",
+		InitialAdminUser:       "synthetic-admin",
+		InitialAdminPass:       "synthetic-initial-seed-password",
+		InitialDataSeedEnabled: false,
+	}
+	if err := seedConfiguredInitialData(db, cfg); err != nil {
+		t.Fatalf("skip synthetic startup seeds: %v", err)
+	}
+
+	var savedRole model.AdminRole
+	if err := db.First(&savedRole, existingRole.ID).Error; err != nil {
+		t.Fatalf("load existing role after skipped seeds: %v", err)
+	}
+	if savedRole.Name != existingRole.Name || savedRole.Permissions != existingRole.Permissions {
+		t.Fatalf("skipped seeds changed existing role: before=%#v after=%#v", existingRole, savedRole)
+	}
+
+	for name, modelValue := range map[string]interface{}{
+		"admin users":         &model.AdminUser{},
+		"membership packages": &model.MembershipPackage{},
+		"merchant plans":      &model.MerchantPlan{},
+	} {
+		var count int64
+		if err := db.Model(modelValue).Count(&count).Error; err != nil {
+			t.Fatalf("count %s after skipped seeds: %v", name, err)
+		}
+		if count != 0 {
+			t.Errorf("skipped seeds created %d %s; want none", count, name)
+		}
 	}
 }
 

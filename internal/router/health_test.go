@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+
+	"go-web-gin-health/internal/middleware"
 )
 
 type healthResponse struct {
@@ -48,6 +51,14 @@ func requestHealth(t *testing.T, engine *gin.Engine, path string) (int, healthRe
 	return recorder.Code, response, recorder.Body.String()
 }
 
+func requestStatus(t *testing.T, engine *gin.Engine, path string) int {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	engine.ServeHTTP(recorder, request)
+	return recorder.Code
+}
+
 func TestReadinessReportsDatabaseReady(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := healthTestEngine(newHealthTestDB(t))
@@ -76,6 +87,29 @@ func TestReadinessReportsDatabaseUnavailableWithoutLeakingDetails(t *testing.T) 
 	}
 	if strings.Contains(body, "dsn") || strings.Contains(body, "password") || strings.Contains(body, "sqlite") {
 		t.Fatalf("readiness response leaked connection details: %s", body)
+	}
+}
+
+func TestHealthProbesUseIndependentRateLimitBuckets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(middleware.RateLimit(1))
+	registerHealthRoutes(engine, newHealthTestDB(t))
+	engine.GET("/synthetic", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	if status := requestStatus(t, engine, "/synthetic"); status != http.StatusNoContent {
+		t.Fatalf("first synthetic request should pass: got HTTP %d", status)
+	}
+	if status := requestStatus(t, engine, "/synthetic"); status != http.StatusTooManyRequests {
+		t.Fatalf("ordinary traffic should remain rate-limited: got HTTP %d", status)
+	}
+	for _, path := range []string{"/health", "/ready"} {
+		if status := requestStatus(t, engine, path); status != http.StatusOK {
+			t.Fatalf("probe %s should not inherit the exhausted application bucket: got HTTP %d", path, status)
+		}
+		if status := requestStatus(t, engine, path); status != http.StatusTooManyRequests {
+			t.Fatalf("probe %s should still have its own limit: got HTTP %d", path, status)
+		}
 	}
 }
 

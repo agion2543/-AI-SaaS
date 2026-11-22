@@ -51,14 +51,20 @@ func (r *EmailVerificationCodeRepository) InvalidateActive(email, scene string) 
 		Update("consumed_at", now).Error
 }
 
-func (r *EmailVerificationCodeRepository) FindActiveForUpdate(email, scene string, now time.Time) (*model.EmailVerificationCode, error) {
+func (r *EmailVerificationCodeRepository) FindActiveForUpdate(email, scene string, userID *uint, now time.Time) (*model.EmailVerificationCode, error) {
 	var record model.EmailVerificationCode
-	err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+	query := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
 		"email = ? AND scene = ? AND consumed_at IS NULL AND expires_at > ?",
 		email,
 		scene,
 		now,
-	).Order("id desc").First(&record).Error
+	)
+	if userID == nil {
+		query = query.Where("user_id IS NULL")
+	} else {
+		query = query.Where("user_id = ?", *userID)
+	}
+	err := query.Order("id desc").First(&record).Error
 	if err != nil {
 		return nil, err
 	}

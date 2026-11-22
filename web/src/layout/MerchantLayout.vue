@@ -20,6 +20,7 @@
         <el-menu-item index="/merchant/orders" :disabled="navigationLocked">{{ text.orders }}</el-menu-item>
         <el-menu-item index="/merchant/finance" :disabled="navigationLocked">{{ text.finance }}</el-menu-item>
         <el-menu-item index="/merchant/promotions" :disabled="navigationLocked">{{ text.promotions }}</el-menu-item>
+        <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
         <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
         <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionAI }}</div>
@@ -81,6 +82,7 @@ const text = {
   orders: '\u8ba2\u5355\u7ba1\u7406',
   finance: '\u8d22\u52a1\u5bf9\u8d26',
   promotions: '\u4f18\u60e0\u6d3b\u52a8',
+  promotionCalculator: '\u4fc3\u9500\u6d4b\u7b97',
   groupBuy: '\u56e2\u8d2d\u6e20\u9053',
   coupons: '\u5238\u5305/\u6838\u9500',
   ai: 'AI \u7ecf\u8425\u5206\u6790',

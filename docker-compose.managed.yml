@@ -1,0 +1,54 @@
+# Opt-in versioned migration deployment. This file deliberately has no MySQL
+# service, database volume, or legacy SQL mounts. MYSQL_DSN in .env.production
+# must target an existing empty database or an exact managed schema.
+services:
+  schema-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    env_file:
+      - .env.production
+    command: ["/app/schema-migrate"]
+    networks:
+      - managed_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      DB_AUTO_MIGRATE: "false"
+      INITIAL_DATA_SEED_ENABLED: "false"
+    depends_on:
+      schema-migrate:
+        condition: service_completed_successfully
+    networks:
+      - managed_net
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "80:80"
+    networks:
+      - managed_net
+
+networks:
+  managed_net:
+    driver: bridge

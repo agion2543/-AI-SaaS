@@ -122,6 +122,20 @@ func (ctl *OrderController) CreateCustomerOrder(c *gin.Context) {
 	utils.Success(c, gin.H{"order": publicOrder, "access_token": accessToken, "payment": payment})
 }
 
+func (ctl *OrderController) RecoverCustomerOrder(c *gin.Context) {
+	var req dto.RecoverCustomerOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := ctl.service.RecoverCustomerStoreOrder(req.RequestKey, req.AccessToken)
+	if err != nil {
+		utils.Error(c, http.StatusNotFound, "order not found")
+		return
+	}
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "access_token": req.AccessToken, "recovered": true})
+}
+
 func (ctl *OrderController) CustomerOrderDetail(c *gin.Context) {
 	order, err := ctl.service.PublicOrderDetail(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"))
 	if err != nil {
@@ -160,6 +174,20 @@ func (ctl *OrderController) AppendCustomerOrderItems(c *gin.Context) {
 	}
 	paymentConfig, _ := ctl.service.PublicPaymentConfigForOrder(order)
 	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "payment_config": serializePublicPaymentConfig(paymentConfig), "appended": true})
+}
+
+func (ctl *OrderController) RecoverCustomerOrderAppend(c *gin.Context) {
+	var req dto.RecoverCustomerOrderAppendRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order, err := ctl.service.RecoverCustomerStoreOrderAppend(c.Param("orderNo"), c.GetHeader("X-Order-Access-Token"), req.RequestKey)
+	if err != nil {
+		utils.Error(c, http.StatusNotFound, "order not found")
+		return
+	}
+	utils.Success(c, gin.H{"order": serializePublicCustomerOrder(order), "recovered": true})
 }
 
 func (ctl *OrderController) RetryCustomerOrderPayment(c *gin.Context) {
@@ -810,7 +838,7 @@ func serializeMerchantOrderDetail(order *model.Order) merchantOrderResponseDTO {
 	row.CustomerNote = order.CustomerNote
 	row.MerchantNote = order.MerchantNote
 	row.Items = serializeMerchantOrderItems(order.Items, true)
-	row.OperationLogs = parseOrderLogs(order.OperationLogs)
+	row.OperationLogs = serializeOrderOperationLogs(order.OperationLogs)
 	return row
 }
 
@@ -939,7 +967,7 @@ func serializeOrder(order *model.Order) gin.H {
 		"customer_rating":                      order.CustomerRating,
 		"customer_review":                      order.CustomerReview,
 		"reviewed_at":                          order.ReviewedAt,
-		"operation_logs":                       parseOrderLogs(order.OperationLogs),
+		"operation_logs":                       serializeOrderOperationLogs(order.OperationLogs),
 		"status":                               order.Status,
 		"payment_channel":                      order.PaymentChannel,
 		"auto_renew":                           order.AutoRenew,
@@ -1064,6 +1092,15 @@ func parseOrderLogs(raw string) []service.OrderOperationLog {
 	var logs []service.OrderOperationLog
 	if err := json.Unmarshal([]byte(raw), &logs); err != nil {
 		return []service.OrderOperationLog{}
+	}
+	return logs
+}
+
+func serializeOrderOperationLogs(raw string) []service.OrderOperationLog {
+	logs := parseOrderLogs(raw)
+	for i := range logs {
+		logs[i].AppendRequestKeyHash = ""
+		logs[i].AppendRequestFingerprint = ""
 	}
 	return logs
 }

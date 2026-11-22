@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -733,6 +735,88 @@ func (ctl *AdminController) AIUsageOverview(c *gin.Context) {
 		return
 	}
 	utils.Success(c, data)
+}
+
+func (ctl *AdminController) PlatformCostOverview(c *gin.Context) {
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+	var data interface{}
+	var err error
+	if startDate == "" && endDate == "" {
+		data, err = ctl.admin.PlatformCostOverview()
+	} else {
+		if startDate == "" || endDate == "" {
+			utils.Error(c, http.StatusBadRequest, "start_date 和 end_date 必须同时提供")
+			return
+		}
+		start, startErr := time.ParseInLocation("2006-01-02", startDate, time.Local)
+		end, endErr := time.ParseInLocation("2006-01-02", endDate, time.Local)
+		if startErr != nil || endErr != nil || start.Format("2006-01-02") != startDate || end.Format("2006-01-02") != endDate {
+			utils.Error(c, http.StatusBadRequest, "日期必须使用 YYYY-MM-DD 格式")
+			return
+		}
+		data, err = ctl.admin.PlatformCostOverviewForPeriod(start, end)
+	}
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidPlatformExpense) {
+			utils.Error(c, http.StatusBadRequest, err.Error())
+		} else {
+			utils.Error(c, http.StatusInternalServerError, "平台核算数据暂不可用")
+		}
+		return
+	}
+	utils.Success(c, data)
+}
+
+func (ctl *AdminController) CreatePlatformExpense(c *gin.Context) {
+	var request dto.CreatePlatformExpenseRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		utils.Error(c, http.StatusBadRequest, "费用字段无效，请检查分类、金额、币种、日期、备注和幂等键")
+		return
+	}
+	entry, created, err := ctl.admin.CreatePlatformExpense(request, service.AuditActorFromContext(c))
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidPlatformExpense):
+			utils.Error(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrPlatformExpenseIdempotencyConflict):
+			utils.Error(c, http.StatusConflict, "该提交编号已用于不同费用记录，请刷新后重试")
+		default:
+			utils.Error(c, http.StatusInternalServerError, "实际费用未能安全保存，请稍后重试")
+		}
+		return
+	}
+	utils.Success(c, gin.H{"expense": entry, "created": created})
+}
+
+func (ctl *AdminController) CreatePlatformExpenseReversal(c *gin.Context) {
+	expenseID, parseErr := strconv.ParseUint(c.Param("id"), 10, strconv.IntSize)
+	if parseErr != nil || expenseID == 0 {
+		utils.Error(c, http.StatusBadRequest, "原费用编号无效")
+		return
+	}
+	var request dto.CreatePlatformExpenseReversalRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		utils.Error(c, http.StatusBadRequest, "冲正字段无效，请检查冲正日期、金额、原因和幂等键")
+		return
+	}
+	entry, created, err := ctl.admin.CreatePlatformExpenseReversal(uint(expenseID), request, service.AuditActorFromContext(c))
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidPlatformExpense):
+			utils.Error(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrPlatformExpenseNotFound):
+			utils.Error(c, http.StatusNotFound, "原费用记录不存在")
+		case errors.Is(err, service.ErrPlatformExpenseReversalExceedsOriginal):
+			utils.Error(c, http.StatusConflict, "冲正金额超过原费用尚未冲正的余额")
+		case errors.Is(err, service.ErrPlatformExpenseReversalKeyConflict):
+			utils.Error(c, http.StatusConflict, "该提交编号已用于不同冲正记录，请刷新后重试")
+		default:
+			utils.Error(c, http.StatusInternalServerError, "冲正记录未能安全保存，请稍后重试")
+		}
+		return
+	}
+	utils.Success(c, gin.H{"reversal": entry, "created": created})
 }
 
 func atoi(v string) int {

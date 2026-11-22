@@ -46,13 +46,17 @@ func (r *VerificationCodeRepository) InvalidateActive(phone, scene string) error
 		Update("consumed_at", now).Error
 }
 
-func (r *VerificationCodeRepository) FindActiveForUpdate(phone, scene string, now time.Time) (*model.VerificationCode, error) {
+func (r *VerificationCodeRepository) FindActiveForUpdate(phone, scene string, userID *uint, now time.Time) (*model.VerificationCode, error) {
 	var record model.VerificationCode
-	err := r.db.
+	query := r.db.
 		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("phone = ? AND scene = ? AND consumed_at IS NULL AND expires_at > ?", phone, scene, now).
-		Order("id desc").
-		First(&record).Error
+		Where("phone = ? AND scene = ? AND consumed_at IS NULL AND expires_at > ?", phone, scene, now)
+	if userID == nil {
+		query = query.Where("user_id IS NULL")
+	} else {
+		query = query.Where("user_id = ?", *userID)
+	}
+	err := query.Order("id desc").First(&record).Error
 	if err != nil {
 		return nil, err
 	}

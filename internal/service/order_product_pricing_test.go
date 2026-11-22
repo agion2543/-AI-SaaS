@@ -169,3 +169,80 @@ func TestAppendingStoreOrderItemsKeepsOldSnapshotAndUsesCurrentPriceForNewLine(t
 		t.Fatalf("new appended line did not snapshot current product settings: %+v", items[1])
 	}
 }
+
+func TestCustomerOrderCreateIsIdempotentForSameRequestAndAccessToken(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	_, store, product := createSyntheticPricingProduct(t, db, 250, 1, nil)
+	service := NewOrderService(db)
+	request := dto.CreateCustomerOrderRequest{
+		StoreID:       store.ID,
+		CustomerPhone: "10000000000",
+		CustomerNote:  "合成幂等请求",
+		RequestKey:    strings.Repeat("a1", 32),
+		AccessToken:   strings.Repeat("b2", 32),
+		Items:         []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 2, Price: 1}},
+	}
+
+	first, err := service.CreateCustomerStoreOrder(request)
+	if err != nil {
+		t.Fatalf("create first synthetic order: %v", err)
+	}
+	retry, err := service.CreateCustomerStoreOrder(request)
+	if err != nil {
+		t.Fatalf("retry identical synthetic order: %v", err)
+	}
+	if retry.ID != first.ID || retry.OrderNo != first.OrderNo || retry.CustomerAccessToken != request.AccessToken {
+		t.Fatalf("identical retry must return the same order and recoverable access token: first=%+v retry=%+v", first, retry)
+	}
+	var count int64
+	if err := db.Model(&model.Order{}).Where("order_type = ?", "store_order").Count(&count).Error; err != nil {
+		t.Fatalf("count synthetic store orders: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("identical retry created duplicate orders: count=%d", count)
+	}
+
+	changedRequest := request
+	changedRequest.Items = []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 3}}
+	if _, err := service.CreateCustomerStoreOrder(changedRequest); err == nil {
+		t.Fatal("reusing a request key with changed quantities must be rejected")
+	}
+	wrongToken := request
+	wrongToken.AccessToken = strings.Repeat("c3", 32)
+	if _, err := service.CreateCustomerStoreOrder(wrongToken); err == nil {
+		t.Fatal("request replay must not disclose an order to a different access token")
+	}
+	if err := db.Model(&model.Order{}).Where("order_type = ?", "store_order").Count(&count).Error; err != nil {
+		t.Fatalf("recount synthetic store orders: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("conflicting retries changed the order count: count=%d", count)
+	}
+}
+
+func TestCustomerOrderIdempotentRetrySurvivesStorePause(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	_, store, product := createSyntheticPricingProduct(t, db, 250, 1, nil)
+	service := NewOrderService(db)
+	request := dto.CreateCustomerOrderRequest{
+		StoreID:     store.ID,
+		RequestKey:  strings.Repeat("d4", 32),
+		AccessToken: strings.Repeat("e5", 32),
+		Items:       []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 1}},
+	}
+	first, err := service.CreateCustomerStoreOrder(request)
+	if err != nil {
+		t.Fatalf("create synthetic order: %v", err)
+	}
+	store.IsOpen = false
+	if err := db.Save(&store).Error; err != nil {
+		t.Fatalf("pause synthetic store: %v", err)
+	}
+	retry, err := service.CreateCustomerStoreOrder(request)
+	if err != nil {
+		t.Fatalf("same-request retry should recover the order after the store pauses: %v", err)
+	}
+	if retry.ID != first.ID || retry.OrderNo != first.OrderNo {
+		t.Fatalf("paused-store retry returned a different order: first=%+v retry=%+v", first, retry)
+	}
+}

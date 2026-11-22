@@ -1,3 +1,5 @@
+# Production path: only an empty schema or an exact managed schema may pass
+# the versioned migration gate. Unknown legacy schemas keep the API stopped.
 services:
   mysql:
     image: mysql:8.0
@@ -14,9 +16,9 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     volumes:
+      # Keep this key and the prior Compose project name; volume names are
+      # project-prefixed. The versioned migrator owns schema changes.
       - mysql_prod_data:/var/lib/mysql
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
-      - ./sql/migrations:/docker-entrypoint-initdb.d/migrations:ro
     networks:
       - saas_net
     healthcheck:
@@ -24,6 +26,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  schema-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    # MYSQL_DSN in .env.production must target this project's mysql:3306.
+    # Use docker-compose.managed.yml for a separately managed database.
+    env_file:
+      - .env.production
+    command: ["/app/schema-migrate"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - saas_net
 
   backend:
     build:
@@ -33,15 +51,18 @@ services:
     restart: unless-stopped
     env_file:
       - .env.production
+    environment:
+      DB_AUTO_MIGRATE: "false"
+      INITIAL_DATA_SEED_ENABLED: "false"
     depends_on:
-      mysql:
-        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
     networks:
       - saas_net
     expose:
       - "8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
       interval: 15s
       timeout: 5s
       retries: 10

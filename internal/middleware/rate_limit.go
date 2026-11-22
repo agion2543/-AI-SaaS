@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,17 +16,42 @@ type visitor struct {
 	ExpiresAt time.Time
 }
 
+type rateLimitKey func(*gin.Context) (string, bool)
+
 func RateLimit(limit int) gin.HandlerFunc {
+	return rateLimit(limit, func(c *gin.Context) (string, bool) {
+		if isGroupBuyRedirectRequest(c) {
+			// Anonymous per-entry protection: do not retain customer IPs.
+			return "group-buy:" + c.Param("code"), true
+		}
+		if c.Request.Method == http.MethodGet && (c.Request.URL.Path == "/health" || c.Request.URL.Path == "/ready") {
+			// Keep probes bounded, but do not let business traffic exhaust their bucket.
+			return "probe:" + c.Request.URL.Path + ":" + c.ClientIP(), true
+		}
+		return c.ClientIP(), true
+	})
+}
+
+// OTPSendRateLimit shares a per-IP bucket across all POST routes ending in
+// /send-code. It is intentionally process-local, like RateLimit.
+func OTPSendRateLimit(limit int) gin.HandlerFunc {
+	return rateLimit(limit, func(c *gin.Context) (string, bool) {
+		if c.Request.Method != http.MethodPost || !strings.HasSuffix(c.Request.URL.Path, "/send-code") {
+			return "", false
+		}
+		return c.ClientIP(), true
+	})
+}
+
+func rateLimit(limit int, keyFor rateLimitKey) gin.HandlerFunc {
 	var mu sync.Mutex
 	visitors := map[string]*visitor{}
 
 	return func(c *gin.Context) {
-		key := ""
-		if isGroupBuyRedirectRequest(c) {
-			// Anonymous per-entry protection: do not retain customer IPs.
-			key = "group-buy:" + c.Param("code")
-		} else {
-			key = c.ClientIP()
+		key, limited := keyFor(c)
+		if !limited {
+			c.Next()
+			return
 		}
 		now := time.Now()
 

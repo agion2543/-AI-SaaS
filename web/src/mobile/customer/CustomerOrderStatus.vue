@@ -131,6 +131,7 @@ import { showToast, showSuccessToast, showFailToast, showConfirmDialog } from 'v
 import { fetchCustomerOrder, markCustomerOrderPaid, retryCustomerOrderPayment } from '@/api/modules'
 import { captureCustomerOrderAccessToken, getCustomerOrderAccessToken, mobileCustomerOrderAccessPath } from '@/utils/customerOrderAccess'
 import { isCustomerOrderPaid } from '@/utils/mobileCustomerOrder'
+import { customerOrderPollIntervalMs, isCustomerOrderStatusPollable } from '@/utils/customerOrderPolling'
 
 const route = useRoute()
 const router = useRouter()
@@ -145,7 +146,7 @@ const paying = ref(false)
 const paymentConfig = ref({})
 let pollTimer = null
 let pollAttempts = 0
-const pollableStatuses = ['pending', 'submitted', 'payment_confirming', 'received', 'accepted', 'preparing']
+let orderRequestInFlight = false
 
 // 计算属性
 const payableAmount = computed(() => Number(order.value?.total_amount ?? order.value?.amount ?? 0))
@@ -311,7 +312,9 @@ function onCountdownFinish() {
   loadOrderData()
 }
 
-async function loadOrderData() {
+async function loadOrderData({ silent = false } = {}) {
+  if (orderRequestInFlight) return
+  orderRequestInFlight = true
   if (!order.value) loading.value = true
   try {
     const accessToken = getCustomerOrderAccessToken(orderNo)
@@ -323,34 +326,52 @@ async function loadOrderData() {
     const res = await fetchCustomerOrder(orderNo)
     order.value = res.data.order || res.data
     paymentConfig.value = res.data.payment_config || {}
-    if (!pollableStatuses.includes(order.value?.status)) stopPolling()
+    if (!isCustomerOrderStatusPollable(order.value?.status)) stopPolling()
   } catch (e) {
     console.error('加载订单失败:', e)
-    showToast(e.response?.status === 404 ? '订单不存在或访问凭证无效' : '加载失败')
+    if (!silent) showToast(e.response?.status === 404 ? '订单不存在或访问凭证无效' : '加载失败')
   } finally {
     loading.value = false
+    orderRequestInFlight = false
   }
 }
 
-function startPolling() {
-  stopPolling()
-  pollAttempts = 0
-  pollTimer = setInterval(() => {
-    if (!order.value || !pollableStatuses.includes(order.value.status) || pollAttempts >= 40) {
+function scheduleNextPoll() {
+  if (pollTimer || document.visibilityState !== 'visible' || !isCustomerOrderStatusPollable(order.value?.status)) return
+  pollTimer = setTimeout(async () => {
+    pollTimer = null
+    if (document.visibilityState !== 'visible' || !isCustomerOrderStatusPollable(order.value?.status)) {
       stopPolling()
       return
     }
     pollAttempts += 1
-    loadOrderData()
-  }, 5000)
+    await loadOrderData({ silent: true })
+    scheduleNextPoll()
+  }, customerOrderPollIntervalMs(pollAttempts))
 }
 
-function stopPolling() {
+function startPolling(resetAttempts = true) {
+  stopPolling(false)
+  if (resetAttempts) pollAttempts = 0
+  scheduleNextPoll()
+}
+
+function stopPolling(resetAttempts = true) {
   if (pollTimer) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
   }
-  pollAttempts = 0
+  if (resetAttempts) pollAttempts = 0
+}
+
+async function onVisibilityChange() {
+  if (document.visibilityState !== 'visible') {
+    stopPolling(false)
+    return
+  }
+  if (!isCustomerOrderStatusPollable(order.value?.status)) return
+  await loadOrderData({ silent: true })
+  scheduleNextPoll()
 }
 
 async function handlePayment() {
@@ -424,6 +445,7 @@ function rateOrder() {
 }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
   const accessToken = captureCustomerOrderAccessToken(orderNo, route)
   if (!accessToken) {
     await loadOrderData()
@@ -435,6 +457,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   stopPolling()
 })
 </script>

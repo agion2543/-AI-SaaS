@@ -176,6 +176,10 @@ func auditPurposeForAction(action string) string {
 		return "更新商家跟进状态"
 	case "merchant_subscription_payment_confirm":
 		return "确认订阅收款"
+	case "platform_expense_create":
+		return "登记平台已发生运营费用"
+	case "platform_expense_reversal_create":
+		return "冲正已登记的平台运营费用"
 	case "merchant_payment_config_review":
 		return "收款配置审核"
 	case "merchant_payment_config_save":

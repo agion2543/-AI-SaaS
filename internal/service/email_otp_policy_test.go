@@ -151,6 +151,47 @@ func TestEmailOTPFailedAttemptsLockAndSuccessfulCodeIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestEmailBindingCodeIsScopedToIssuingUser(t *testing.T) {
+	db := newEmailOTPTestDB(t)
+	owner := seedEmailOTPTestUser(t, db)
+	otherUser := &model.User{
+		UUID:         uuid.NewString(),
+		Email:        newPendingEmail(),
+		Phone:        "13800138092",
+		Role:         "customer",
+		PasswordHash: "synthetic-test-hash",
+		DisplayName:  "synthetic second email OTP user",
+		Status:       "active",
+	}
+	if err := db.Create(otherUser).Error; err != nil {
+		t.Fatalf("create second synthetic user: %v", err)
+	}
+	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	targetEmail := "user-scoped@example.test"
+	if err := auth.SendBindEmailCode(owner.ID, dto.SendEmailCodeRequest{Email: targetEmail}); err != nil {
+		t.Fatalf("issue synthetic bind code: %v", err)
+	}
+
+	if _, err := auth.BindEmail(otherUser.ID, dto.BindEmailRequest{Email: targetEmail, Code: devFixedEmailCode}); !errors.Is(err, errEmailInvalidCode) {
+		t.Fatalf("another user must not consume the email binding code; got %v", err)
+	}
+	var record model.EmailVerificationCode
+	if err := db.Where("email = ? AND scene = ?", targetEmail, "bind_email").First(&record).Error; err != nil {
+		t.Fatalf("read synthetic email bind code: %v", err)
+	}
+	if record.UserID == nil || *record.UserID != owner.ID || record.ConsumedAt != nil || record.FailedAttempts != 0 {
+		t.Fatalf("cross-user attempt changed or mis-scoped email OTP record: user_id=%v consumed=%v failed=%d", record.UserID, record.ConsumedAt, record.FailedAttempts)
+	}
+
+	bound, err := auth.BindEmail(owner.ID, dto.BindEmailRequest{Email: targetEmail, Code: devFixedEmailCode})
+	if err != nil {
+		t.Fatalf("issuing user should still be able to bind email: %v", err)
+	}
+	if bound.Email != targetEmail {
+		t.Fatalf("bound email=%q, want %q", bound.Email, targetEmail)
+	}
+}
+
 func TestEmailOTPExpiredCodeCannotBind(t *testing.T) {
 	db := newEmailOTPTestDB(t)
 	user := seedEmailOTPTestUser(t, db)

@@ -113,6 +113,17 @@ func Auth(cfg *config.Config, requiredRole string, db *gorm.DB) gin.HandlerFunc 
 				c.Abort()
 				return
 			}
+			currentCredentialVersion := utils.UserCredentialVersion(cfg.JWTSecret, user)
+			currentRole := user.Role
+			if currentRole == "" {
+				currentRole = "customer"
+			}
+			if claims.Role != currentRole || claims.UserCredentialVersion == "" || subtle.ConstantTimeCompare([]byte(claims.UserCredentialVersion), []byte(currentCredentialVersion)) != 1 {
+				utils.Error(c, http.StatusUnauthorized, "invalid token")
+				c.Abort()
+				return
+			}
+			effectiveRole = currentRole
 		}
 
 		c.Set("user_id", claims.UserID)

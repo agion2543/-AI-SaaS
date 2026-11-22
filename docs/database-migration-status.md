@@ -1,12 +1,20 @@
 # 数据库迁移现状与安全边界
 
-## 原有生产 Compose 路径（保留，不作为 v1 新安装入口）
+## 默认生产 Compose：版本化迁移门禁
 
-新安装只适用于**空的 MySQL 数据卷**。生产 Compose 将 `sql/init.sql` 挂载为 MySQL 初始化目录顶层的 `001_init.sql`；MySQL 镜像只在首次初始化空数据目录时处理这些初始化文件。随后应用启动时，`internal/bootstrap/app.go` 依次连接数据库、对当前模型执行 GORM `AutoMigrate`，再运行 `seedInitialData`。
+`docker-compose.prod.yml` 保留 `mysql_prod_data` 卷键，但 Docker Compose 会按项目名给命名卷加前缀；只有沿用旧部署的同一个项目名才能复用原数据卷。它移除了 `sql/init.sql` 与历史 SQL 挂载。MySQL healthy 后，Compose 运行 `/app/schema-migrate`；只有迁移容器成功退出，backend 才启动。迁移器与 backend 读取 `.env.production`，其中 `MYSQL_DSN` 必须指向该 Compose 的 `mysql:3306/saas_billing`，密码须与 `MYSQL_APP_PASSWORD` 一致；独立 MySQL 应使用 `docker-compose.managed.yml`。backend 显式设置 `DB_AUTO_MIGRATE=false` 与 `INITIAL_DATA_SEED_ENABLED=false`，因此既不执行 GORM `AutoMigrate`，也不会在升级启动时改写初始角色、创建初始管理员或补默认套餐/计划。
 
-Compose 还把 `sql/migrations` 挂载到初始化目录下的 `migrations/` 子目录。它不是顶层初始化 SQL 文件，因此不会因此自动逐个执行；根目录的 `migrations/` 也没有挂载到生产 Compose。已有数据卷不会因容器重启而重新执行 `sql/init.sql`。
+迁移器只接受真正空 schema（按 v1→v8 安装）或精确受管 v1–v7（顺序升级至 v8）；精确受管 v8 为 no-op。未知旧结构、部分初始化、额外对象、账本/checksum/结构指纹不符均拒绝，API 保持停止且不会回退到 AutoMigrate。旧版 Compose 曾挂载 `sql/init.sql` 并由应用执行 AutoMigrate，因此保留下来的卷可能属于未知历史结构；迁移服务拒绝它是预期的 fail-closed，不会删除或重置该卷。全新安装若需要初始管理员和默认套餐，应使用带专属卷及初始种子的 `docker-compose.new-install.yml`。
 
-以上是原有 `docker-compose.prod.yml` 的行为。为避免改变未知部署和数据卷，其配置保持不变；此路径仍由 `sql/init.sql` 与 GORM AutoMigrate 管理结构，不应与下述版本化 v1 新安装流程混用。此前的隔离 MySQL 测试**不等同于**从旧版数据库升级，也不能证明旧库兼容或历史 SQL 可安全重跑。
+这条门禁不代表任意旧库升级已支持或已验证，也不证明历史 SQL 可安全重跑。部署前应备份、停掉旧应用写入，并确认现存数据卷对应的 schema 在受支持范围内；若迁移器拒绝旧库，应保持 API 停止，先取得具体版本的 schema-only 基线并在隔离副本上设计验证方案，不能清账本或套用新安装 Compose。
+
+## 独立版本化部署入口与支持状态
+
+`docker-compose.managed.yml` 是独立 MySQL 的显式版本化部署入口：它不定义 MySQL 服务、数据卷或 `sql/init.sql`/历史 SQL 挂载，而是使用 `.env.production` 中的 `MYSQL_DSN` 指向已经存在、容器可达的目标数据库。该数据库账号需具备当前迁移所需的 schema DDL 权限。后端设置 `DB_AUTO_MIGRATE=false` 和 `INITIAL_DATA_SEED_ENABLED=false`，并且只有 `/app/schema-migrate` 成功退出后才会启动；默认生产 Compose 也显式关闭这两项。种子关闭阻止启动时更新 `super_admin` 角色、创建管理员或插入默认会员套餐/商家计划。应用配置默认仍开启初始数据种子，因此全新安装仍应使用 `docker-compose.new-install.yml`；managed Compose 虽然接受空 schema，但不会创建初始管理员或默认套餐。
+
+当前只支持两种数据库状态：**空 schema**（目标数据库本身已创建，但没有用户表、视图、例程、事件等对象；迁移器会从 v1 安装至 v8），以及**精确受管的 v1–v7**（账本版本、checksum、迁移状态和 schema 指纹都精确匹配；迁移器只按顺序推进到 v8）。精确受管 v8 会作为已管理状态通过且不再改动。非空旧库、部分初始化/未完成迁移、未知账本、额外对象、checksum 或指纹漂移均不支持，并在 API 启动前 fail-closed；不会将旧库静默标成 v1，也不会回退到 GORM AutoMigrate。
+
+默认生产 Compose 不再有 GORM AutoMigrate 回退，也不因此增加未知旧库升级支持。不要让两套 Compose 同时连接同一数据库；版本化部署前应停掉旧应用写入并完成备份。若迁移在执行 DDL 中途失败，MySQL DDL 可能留下 `applying` 账本或部分对象；fail-closed 不代表自动回滚。此时不要删账本、手工补表或强行启动 API，应先停止操作并从已验证备份恢复，或在隔离副本调查。
 
 ## 旧数据库升级：目前不支持、不应猜测执行
 
@@ -28,9 +36,9 @@ Compose 还把 `sql/migrations` 挂载到初始化目录下的 `migrations/` 子
 
 ## 现在可以与不可以做什么
 
-**可以：**在一次性、隔离、无真实商家/支付数据的空测试 MySQL 上验证版本化 v1 新安装流程；运行默认 Go 测试。若专门验证保留的旧 Compose 行为，也只可在隔离合成库中进行。MySQL 专用集成测试只能按运维手册所列规则使用临时目录、Unix socket、关闭 TCP 的合成实例。
+**可以：**在一次性、隔离、无真实商家/支付数据的空测试 MySQL 上验证版本化空库安装及精确受管 v1–v7 升级；运行默认 Go 测试。生产 Compose 的 Compose 配置和迁移门禁可用离线合成输入验证；MySQL 专用集成测试只能按运维手册所列规则使用临时目录、Unix socket、关闭 TCP 的合成实例。
 
-**不可以：**把 `sql/migrations/*.sql` 或 `migrations/*.sql` 当作可执行升级批次；在生产库或任何既有业务库上试跑/重跑历史迁移；对已有库手动重放 `sql/init.sql`；把 v1 候选基线当作旧版结构或升级方案；把历史脚本的合成测试当作旧版升级验收；或擅自在保留的旧 Compose 流程中移除 `AutoMigrate`。目前不应对真实商家、支付数据或既有数据库做迁移验证。
+**不可以：**把 `sql/migrations/*.sql` 或 `migrations/*.sql` 当作可执行升级批次；在生产库或任何既有业务库上试跑/重跑历史迁移；对已有库手动重放 `sql/init.sql`；把 v1 候选基线当作旧版结构或升级方案；或把版本化迁移的合成测试当作旧库升级验收。未知历史库目前不应连接真实生产验证。
 
 ## 长期单一权威与旧库升级
 
@@ -54,7 +62,7 @@ docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build
 
 该 Compose 使用专属数据库卷，不挂载 `sql/init.sql`，等待 MySQL healthy 后执行容器内 `/app/schema-migrate`；后端依赖迁移服务成功完成，并设置 `DB_AUTO_MIGRATE=false`。应用启动后仍会写入其初始角色、管理员和套餐种子数据。
 
-v1 基线版本仍为 `schema-v1-candidate-20261113`，SHA-256 为 `d4277d6999a8c5fade3edda12e6d7d9bfbf7874c34a0b0406d03573b68609006`。最新安装入口 `/app/schema-migrate` 先在完全空库安装此 v1，再应用 v2、v3、v4、v5 与 v6 五个严格校验的增量；重复调用只有在最新账本与结构指纹全部精确匹配时才返回已管理。旧的 `ApplyCandidate` 仍只校验 v1，不会把 v2、v3、v4、v5、v6 或其他结构当作 v1。
+v1 基线版本仍为 `schema-v1-candidate-20261113`，SHA-256 为 `d4277d6999a8c5fade3edda12e6d7d9bfbf7874c34a0b0406d03573b68609006`。最新安装入口 `/app/schema-migrate` 先在完全空库安装此 v1，再应用 v2、v3、v4、v5、v6、v7 与 v8 七个严格校验的增量；重复调用只有在最新账本与结构指纹全部精确匹配时才返回已管理。旧的 `ApplyCandidate` 仍只校验 v1，不会把 v2 至 v8 或其他结构当作 v1。
 
 增量版本 `schema-v2-subscription-manual-review-20261113` 的 SHA-256 为 `48ef3ec703a314a213107af20ad415e80dc4aa27cdccaf3349cdc9ab53ea5e26`。它只可从准确的托管 v1 账本、校验和与结构指纹升级；升级后再分别验证原 v1 子结构指纹和完整 v2 指纹。v2 增加 `merchant_subscription_manual_reviews` 与 `merchant_subscription_manual_review_audits` 两张专用表、唯一订单键及四条阻止 UPDATE/DELETE 的数据库触发器，不修改 v1 快照或其他表。只有空库的新安装或完全匹配的 v1 可以推进；未知旧库、部分安装、额外对象、checksum/结构漂移或 `applying` 状态继续拒绝且不自动修复。一次中断留下的 v2 `applying` 状态需要从干净隔离库重新开始或恢复备份，不能删除账本后硬重试。
 
@@ -66,11 +74,15 @@ v1 基线版本仍为 `schema-v1-candidate-20261113`，SHA-256 为 `d4277d6999a8
 
 增量版本 `schema-v6-wholesale-retail-20261116` 的 SHA-256 为 `a925b154315d9d34475e08911fcc0abb25b7986a14c3da11d3bc251f9adc65f0`。它只从精确托管的 v5 增加商品可选销售单位、规格、最低购买量和商家自定义数量档位价 JSON 列，不改写既有订单或支付状态；升级时继续验证 v1-v5 历史结构指纹，完整 v6 账本和商品列指纹通过后才认定已管理。档位阈值与价格由商家自行配置，订单金额由服务端根据商品当前配置重算，订单行保留下单时的单位、规格、基础/实际单价及档位快照。
 
-新安装入口 `ApplyLatest` 依序安装 v1→v2→v3→v4→v5→v6；它仅接受准确托管的 v1/v2/v3/v4/v5/v6，未知旧库、部分安装或漂移结构仍 fail-closed。
+新安装入口 `ApplyLatest` 依序安装 v1→v2→v3→v4→v5→v6→v7→v8；它仅接受准确托管的 v1/v2/v3/v4/v5/v6/v7/v8，未知旧库、部分安装或漂移结构仍 fail-closed。
+
+增量版本 `schema-v7-platform-expenses-20261116` 的 SHA-256 为 `33c1ff24ae4a18f13823c28a9fd904d818fe95a57be1cdc6d1320e23add02a9e`。它只从精确托管的 v6 新增空表 `platform_expenses`，不创建或填入任何费用示例。该表记录实际已发生支出，金额保存为整数分、币种固定为 CNY、日期为 `DATE`；分类只允许云服务/主机、消息/API、人员/外包、获客/差旅、设备和其他，memo 必填且最多 120 字，另存创建人和 UUID 幂等键。数据库 CHECK 约束拒绝非正金额、非白名单分类、非 CNY 币种和空备注；唯一幂等键防止重试重复入账，数据库触发器拒绝 UPDATE/DELETE。写入仅允许 `super_admin`，费用行和不含金额/备注的用途审计在同一事务提交。迁移继续验证 v1-v6 原始结构指纹、v7 完整对象目录与校验和；v7 的 `applying` 状态或结构漂移一律 fail-closed，不自动修复。v7 发布时费用只有追加入口，没有编辑、删除或冲正/调整入口；后续冲正范围由 v8 明确。计划/估算费用与实际支出分离且不参与计算；未登记费用、AI provider/token 成本或缺失成本数据均不能视为 0，页面的“订阅净实收减已登记成本”只是部分差额，不是利润。
+
+增量版本 `schema-v8-platform-expense-reversals-20261119` 的 SHA-256 为 `54b9e6454f13a524d816ce96c04fa3cf0a4ef3325c77d1a1845b8c06b431e40f`。它只从精确托管的 v7 新增空表 `platform_expense_reversals`，不创建示例或迁移历史费用。只有 `super_admin` 可为原平台费用追加一笔或多笔部分/全额冲正；金额、原因和冲正发生日期必填，服务在事务中锁定原费用并校验累计金额不超过原金额。外键、非唯一原费用索引、唯一幂等键、正金额约束和数据库 UPDATE/DELETE 触发器保障关联与追加不可变。每条冲正及不含原因、金额的用途审计同事务提交；原费用行和原有审计均不修改。期间报告按原费用发生日列原始费用、按每笔冲正发生日列抵减，因此冲正只在其发生期间体现，不回溯重算原期间；期间费用净额为该期原费用减该期各笔冲正。迁移验证 v1-v7 历史指纹、v8 完整目录与校验和；不精确的 `applying` 状态或结构漂移均 fail-closed。v8 不增加编辑、删除能力，也不改变其他收入、成本或利润口径。
 
 历史订阅人工核验是与普通 provider 支付确认分离的流程：后台必须记录管理员对原始凭证及“外部付款确已发生”的明确断言；它把订单标成 `manually_verified`，在专用不可变复核/审计中保存原始条款、证据引用、理由和前后状态，并据所填期限授予订阅权益。它不调用支付渠道、不生成 provider `PaymentRecord`、`PaidAt` 或渠道交易号；普通 provider-confirmed 收入统计只统计原有 `paid` 状态，不把 `manually_verified` 混入。该状态依赖管理员确实核对外部原始证据，系统不会替其验证。
 
-默认 `docker-compose.prod.yml` 保持原样且仍保留 GORM AutoMigrate，避免改变既有安装行为；不要因其存在就认为旧库升级已支持。v1 新安装流程本身、真实部署和旧数据库升级均须各自验证；本地合成测试不能替代真实发布演练。MySQL 集成测试只允许使用 `/tmp/cue-schema-migrate-*` 下的临时 Unix socket，且测试数据库须以 `cue_schema_migration_it` 开头；集成用例拒绝 TCP DSN。
+默认 `docker-compose.prod.yml` 和独立 MySQL 的 `docker-compose.managed.yml` 均通过版本化迁移器门禁，只接受空 schema 或精确受管 v1–v8；未知旧库不会启动 API。不要因 Compose 存在或本地合成测试通过就认为未知旧库升级已支持。真实部署和旧数据库升级均须各自验证；本地测试不能替代真实发布演练。MySQL 集成测试只允许使用 `/tmp/cue-schema-migrate-*` 下的临时 Unix socket，且测试数据库须以 `cue_schema_migration_it` 开头；集成用例拒绝 TCP DSN。
 
 ### 可重复的本地全流程检查
-需要在本地验证批准的 v1 → v2 → v3 → v4 → v5 → v6 新安装、合成订阅人工复核、备份恢复及只读后台读数时，运行 `bash scripts/validate-schema-lifecycle.sh`。该脚本使用本次新建的临时 MySQL 8 datadir 和 socket-only 实例，不使用 Docker、`MYSQL_DSN`、`.env` 或生产备份脚本的默认 TCP 目标。完整覆盖与限制见[本地数据库生命周期验证](local-schema-lifecycle-validation.md)；它仍不验证旧库升级或生产备份配置。
+需要在本地验证批准的 v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 新安装、精确 v6→v7 与 v7→v8 升级、合成订阅人工复核、费用冲正和备份恢复时，运行 `bash scripts/validate-schema-lifecycle.sh`。该脚本使用本次新建的临时 MySQL 8 datadir 和 socket-only 实例，不使用 Docker、`MYSQL_DSN`、`.env` 或生产备份脚本的默认 TCP 目标。完整覆盖与限制见[本地数据库生命周期验证](local-schema-lifecycle-validation.md)；它仍不验证旧库升级或生产备份配置。

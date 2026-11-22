@@ -37,7 +37,7 @@ func NewApplication() (*Application, error) {
 			return nil, err
 		}
 	}
-	if err := seedInitialData(db, cfg); err != nil {
+	if err := seedConfiguredInitialData(db, cfg); err != nil {
 		return nil, err
 	}
 
@@ -88,6 +88,13 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SystemConfig{},
 		&model.UsageRecord{},
 	)
+}
+
+func seedConfiguredInitialData(db *gorm.DB, cfg *config.Config) error {
+	if !cfg.InitialDataSeedEnabled {
+		return nil
+	}
+	return seedInitialData(db, cfg)
 }
 
 func seedInitialData(db *gorm.DB, cfg *config.Config) error {

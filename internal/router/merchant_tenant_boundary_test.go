@@ -119,7 +119,7 @@ func TestMerchantCannotReadOrWriteAnotherMerchantsResources(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "test-only-secret", FrontendURL: "http://localhost:5173", RateLimitPerMinute: 100}
 	engine := gin.New()
 	Register(engine, db, cfg)
-	token, err := utils.GenerateToken(cfg.JWTSecret, userA.ID, userA.Phone, userA.Role, userA.MerchantID, 1)
+	token, err := utils.GenerateUserToken(cfg.JWTSecret, userA, 1)
 	if err != nil {
 		t.Fatalf("create synthetic merchant A token: %v", err)
 	}
@@ -135,9 +135,26 @@ func TestMerchantCannotReadOrWriteAnotherMerchantsResources(t *testing.T) {
 		return response
 	}
 
+	groupBuyFixtures := []model.MerchantGroupBuyLink{
+		{MerchantID: merchantA.ID, StoreID: storeA.ID, Channel: "douyin", DestinationURL: "https://life.douyin.com/synthetic/deal", Code: "11111111111111111111111111111111", Enabled: true, ReviewStatus: "approved"},
+		{MerchantID: merchantA.ID, StoreID: storeA.ID, Channel: "meituan", DestinationURL: "https://i.meituan.com/synthetic/deal", Code: "22222222222222222222222222222222", Enabled: true, ReviewStatus: "pending"},
+		{MerchantID: merchantA.ID, StoreID: storeA.ID, Channel: "paused", DestinationURL: "https://life.douyin.com/synthetic/paused", Code: "33333333333333333333333333333333", Enabled: true, ReviewStatus: "approved", AdminSuspended: true},
+		{MerchantID: merchantA.ID, StoreID: storeA.ID, Channel: "disabled", DestinationURL: "https://life.douyin.com/synthetic/disabled", Code: "44444444444444444444444444444444", Enabled: false, ReviewStatus: "approved"},
+		{MerchantID: merchantB.ID, StoreID: storeB.ID, Channel: "douyin", DestinationURL: "https://life.douyin.com/synthetic/other-store", Code: "55555555555555555555555555555555", Enabled: true, ReviewStatus: "approved"},
+	}
+	for _, fixture := range groupBuyFixtures {
+		if err := db.Create(&fixture).Error; err != nil {
+			t.Fatalf("create synthetic group-buy fixture: %v", err)
+		}
+	}
+
 	publicStorePath := "/api/v1/customer/stores/" + strconv.FormatUint(uint64(storeA.ID), 10)
-	if response := request(http.MethodGet, publicStorePath, ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), merchantA.ContactPhone) || strings.Contains(response.Body.String(), merchantA.ContactEmail) {
-		t.Errorf("public store must keep merchant phone and omit email: status=%d body=%s", response.Code, response.Body.String())
+	publicStoreResponse := request(http.MethodGet, publicStorePath, "")
+	if publicStoreResponse.Code != http.StatusOK || !strings.Contains(publicStoreResponse.Body.String(), merchantA.ContactPhone) || strings.Contains(publicStoreResponse.Body.String(), merchantA.ContactEmail) {
+		t.Errorf("public store must keep merchant phone and omit email: status=%d body=%s", publicStoreResponse.Code, publicStoreResponse.Body.String())
+	}
+	if body := publicStoreResponse.Body.String(); !strings.Contains(body, `"group_buy_links":[{"channel":"douyin","code":"11111111111111111111111111111111"}]`) || strings.Contains(body, "22222222222222222222222222222222") || strings.Contains(body, "33333333333333333333333333333333") || strings.Contains(body, "44444444444444444444444444444444") || strings.Contains(body, "55555555555555555555555555555555") || strings.Contains(body, "destination_url") || strings.Contains(body, "click_count") {
+		t.Errorf("public store should expose only the approved active same-store redirect code: %s", body)
 	}
 	publicLeadPath := "/api/v1/customer/stores/" + strconv.FormatUint(uint64(storeA.ID), 10) + "/leads"
 	publicLeadBody := `{"customer_name":"合成提交人","customer_phone":"17700000000","message":"synthetic public note"}`

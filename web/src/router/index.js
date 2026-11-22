@@ -20,6 +20,7 @@ import UserPayView from '../views/orders/UserPayView.vue'
 import PaymentReturnView from '../views/orders/PaymentReturnView.vue'
 import CardsView from '../views/cards/CardsView.vue'
 import SystemView from '../views/system/SystemView.vue'
+import PlatformCostView from '../views/system/PlatformCostView.vue'
 import AuditLogsView from '../views/system/AuditLogsView.vue'
 import FollowUpTodosView from '../views/system/FollowUpTodosView.vue'
 import AdminAccessView from '../views/system/AdminAccessView.vue'
@@ -33,6 +34,7 @@ import MerchantDashboardView from '../views/merchants/MerchantDashboardView.vue'
 import MerchantProfileView from '../views/merchants/MerchantProfileView.vue'
 import MerchantAIView from '../views/merchants/MerchantAIView.vue'
 import MerchantPromotionsView from '../views/merchants/MerchantPromotionsView.vue'
+import MerchantPromotionCalculatorView from '../views/merchants/MerchantPromotionCalculatorView.vue'
 import MerchantGroupBuyView from '../views/merchants/MerchantGroupBuyView.vue'
 import MerchantCouponsView from '../views/merchants/MerchantCouponsView.vue'
 import MerchantShareView from '../views/merchants/MerchantShareView.vue'
@@ -77,6 +79,7 @@ const routes = [
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView },
+      { path: 'platform-costs', component: PlatformCostView },
       { path: 'access', component: AdminAccessView },
       { path: 'limited-access', component: AdminAccessRestrictedView }
     ]
@@ -92,6 +95,7 @@ const routes = [
         children: [
           { path: 'dashboard', component: MerchantDashboardView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'promotions', component: MerchantPromotionsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'promotion-calculator', component: MerchantPromotionCalculatorView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'group-buy', component: MerchantGroupBuyView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
           { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
@@ -207,6 +211,7 @@ router.beforeEach(async (to) => {
     let allowed = false
     if (to.path === '/admin/limited-access') allowed = true
     else if (to.path === '/admin/access') allowed = isSuperAdmin
+    else if (to.path === '/admin/platform-costs') allowed = isSuperAdmin
     else if (to.path === '/admin/dashboard') allowed = hasAny('read_only')
     else if (to.path === '/admin/todos') allowed = hasAny('operations')
     else if (/^\/admin\/(merchants|group-buy-links|users)(\/|$)/.test(to.path)) allowed = hasAny('read_only', 'operations')

@@ -50,6 +50,33 @@
         </article>
       </section>
 
+      <section v-if="activeGroupBuyLinks.length" class="group-buy-section" aria-labelledby="group-buy-title">
+        <div class="group-buy-heading">
+          <div>
+            <span>EXTERNAL PLATFORM</span>
+            <h2 id="group-buy-title">平台团购</h2>
+          </div>
+          <small>外部平台入口</small>
+        </div>
+        <p class="group-buy-intro">选择下方平台查看团购；购买及后续履约由对应平台处理。</p>
+        <div class="group-buy-grid">
+          <a
+            v-for="link in activeGroupBuyLinks"
+            :key="link.channel"
+            class="group-buy-card"
+            :class="`channel-${link.channel}`"
+            :href="groupBuyRedirectUrl(link.code)"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span class="group-buy-platform">{{ groupBuyPlatformName(link.channel) }}</span>
+            <strong>前往{{ groupBuyPlatformName(link.channel) }}团购</strong>
+            <span class="group-buy-action">打开平台 <span aria-hidden="true">↗</span></span>
+          </a>
+        </div>
+        <p class="group-buy-disclaimer">本入口只记录成功跳转次数；点击不代表订单、销售、核销、退款或新增顾客。</p>
+      </section>
+
       <section v-if="activeOrderNo" class="active-order-strip">
         <div>
           <span>{{ appendableActiveOrder ? '继续追加到当前订单' : '当前订单不可追加' }}</span>
@@ -123,7 +150,17 @@
           <small>{{ visibleProducts.length }} 件</small>
         </div>
 
-        <div v-if="visibleProducts.length" class="product-list">
+        <div v-if="productLoadError" class="empty-products product-load-error" role="status">
+          <div class="empty-food" aria-hidden="true">!</div>
+          <h3>商品列表暂时加载失败</h3>
+          <p>这不代表门店没有商品。请重试加载后再浏览和下单。</p>
+          <el-button type="primary" round :loading="productLoading" @click="loadProducts">重试加载</el-button>
+        </div>
+        <div v-else-if="productLoading && !loading" class="empty-products product-loading" role="status">
+          <el-skeleton :rows="3" animated />
+          <p>正在重新加载商品…</p>
+        </div>
+        <div v-else-if="visibleProducts.length" class="product-list">
           <article
             v-for="product in visibleProducts"
             :key="product.id"
@@ -361,6 +398,8 @@ import {
   fetchCustomerStore,
   fetchCustomerStoreCoupons,
   fetchCustomerStoreProducts,
+  recoverCustomerOrderAppend,
+  recoverCustomerStoreOrder,
   trackShareScan
 } from '../../api/modules'
 import { customerOrderAccessPath, getCustomerOrderAccessToken, saveCustomerOrderAccessToken } from '../../utils/customerOrderAccess'
@@ -371,11 +410,17 @@ const defaultCategory = '默认分类'
 const allCategory = '全部商品'
 const loading = ref(true)
 const submitting = ref(false)
+const recoveryChecking = ref(false)
+const pendingCheckoutAttempt = ref(null)
+const pendingAppendAttempt = ref(null)
 const error = ref('')
 const store = ref({})
 const merchant = ref({})
 const products = ref([])
+const productLoading = ref(false)
+const productLoadError = ref(false)
 const promotions = ref([])
+const groupBuyLinks = ref([])
 const activeCategory = ref('')
 const keyword = ref('')
 const brokenImages = ref(new Set())
@@ -411,6 +456,11 @@ const cartItems = computed(() => Object.values(cart.value))
 const totalCount = computed(() => cartItems.value.reduce((sum, item) => sum + item.quantity, 0))
 const totalAmount = computed(() => cartItems.value.reduce((sum, item) => sum + item.price * item.quantity, 0))
 const activePromotions = computed(() => promotions.value.filter((item) => item.status === 'active' || !item.status))
+const activeGroupBuyLinks = computed(() => groupBuyLinks.value
+  .filter((link) => ['douyin', 'meituan'].includes(link.channel) && link.code)
+  .sort((a, b) => ['douyin', 'meituan'].indexOf(a.channel) - ['douyin', 'meituan'].indexOf(b.channel)))
+const groupBuyPlatformName = (channel) => ({ douyin: '抖音', meituan: '美团 / 大众点评' }[channel] || '团购平台')
+const groupBuyRedirectUrl = (code) => `${window.location.origin}/api/v1/group-buy/r/${encodeURIComponent(code)}`
 const activeProducts = computed(() => [...products.value]
   .filter((product) => !product.status || product.status === 'active')
   .sort((a, b) => {
@@ -573,7 +623,7 @@ const checkoutDisabled = computed(() => {
   if (!cartItems.value.length || !available.value) return true
   if (phoneInvalid.value) return true
   if (!appendableActiveOrder.value && selectedCoupon.value && !selectedCouponUsable.value) return true
-  return submitting.value
+  return submitting.value || recoveryChecking.value
 })
 const checkoutButtonText = computed(() => {
   if (!available.value) return '暂停接单'
@@ -729,24 +779,34 @@ const productBadges = (product) => {
 const load = async () => {
   loading.value = true
   error.value = ''
+  productLoadError.value = false
   try {
     const storeRes = await fetchCustomerStore(route.params.storeId)
     store.value = storeRes.data.store || {}
     merchant.value = storeRes.data.merchant || {}
     promotions.value = storeRes.data.promotions || []
-    try {
-      const productsRes = await fetchCustomerStoreProducts(route.params.storeId)
-      products.value = productsRes.data.list || []
-    } catch {
-      products.value = []
-    }
-    pruneCartByProducts()
+    groupBuyLinks.value = storeRes.data.group_buy_links || []
+    await loadProducts()
     await loadActiveOrder()
     if (shareCode.value) trackShareScan(shareCode.value).catch(() => {})
   } catch (err) {
     error.value = err.response?.data?.message || '门店信息不存在或暂不可访问'
   } finally {
     loading.value = false
+  }
+}
+
+const loadProducts = async () => {
+  productLoading.value = true
+  try {
+    const productsRes = await fetchCustomerStoreProducts(route.params.storeId)
+    products.value = Array.isArray(productsRes.data.list) ? productsRes.data.list : []
+    productLoadError.value = false
+    pruneCartByProducts()
+  } catch {
+    productLoadError.value = true
+  } finally {
+    productLoading.value = false
   }
 }
 
@@ -924,7 +984,231 @@ const submitAlipayPage = (paymentUrl) => {
   return true
 }
 
+const secureCheckoutCredential = () => {
+  const bytes = new Uint8Array(32)
+  if (!window.crypto?.getRandomValues) throw new Error('当前浏览器无法安全创建订单凭据，请更新浏览器后重试')
+  window.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+const checkoutAttemptFingerprint = async (payload) => {
+  const stablePayload = {
+    store_id: payload.store_id,
+    customer_phone: payload.customer_phone,
+    customer_note: payload.customer_note,
+    share_code: payload.share_code,
+    coupon_no: payload.coupon_no,
+    payment_channel: payload.payment_channel,
+    items: [...payload.items]
+      .map(({ product_id, quantity }) => ({ product_id, quantity }))
+      .sort((a, b) => a.product_id - b.product_id)
+  }
+  const serialized = JSON.stringify(stablePayload)
+  if (!window.crypto?.subtle || typeof TextEncoder === 'undefined') return { value: serialized, persistent: false }
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))
+  return {
+    value: Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join(''),
+    persistent: true
+  }
+}
+const getCustomerCheckoutAttempt = async (payload) => {
+  const fingerprint = await checkoutAttemptFingerprint(payload)
+  if (pendingCheckoutAttempt.value?.fingerprint === fingerprint.value) return pendingCheckoutAttempt.value
+
+  const storageKey = `customer_checkout_attempt_${payload.store_id}`
+  if (fingerprint.persistent) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+      if (saved?.store_id === payload.store_id && saved?.fingerprint === fingerprint.value && /^[a-f\d]{64}$/i.test(saved.request_key || '') && /^[a-f\d]{64}$/i.test(saved.access_token || '')) {
+        pendingCheckoutAttempt.value = saved
+        return saved
+      }
+    } catch {
+      // Session storage may be unavailable in a restricted browser.
+    }
+  }
+
+  const attempt = {
+    store_id: payload.store_id,
+    fingerprint: fingerprint.value,
+    request_key: secureCheckoutCredential(),
+    access_token: secureCheckoutCredential()
+  }
+  pendingCheckoutAttempt.value = attempt
+  if (fingerprint.persistent) {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(attempt))
+    } catch {
+      // In-page retries still reuse this request if storage is unavailable.
+    }
+  }
+  return attempt
+}
+const clearCustomerCheckoutAttempt = (attempt) => {
+  if (pendingCheckoutAttempt.value?.request_key === attempt.request_key) pendingCheckoutAttempt.value = null
+  const storageKey = `customer_checkout_attempt_${attempt.store_id}`
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+    if (saved?.request_key === attempt.request_key) sessionStorage.removeItem(storageKey)
+  } catch {
+    // Nothing to clear when session storage is unavailable.
+  }
+}
+
+const readPendingCheckoutAttempt = (storeId) => {
+  const inMemory = pendingCheckoutAttempt.value
+  if (Number(inMemory?.store_id) === Number(storeId) &&
+    /^[a-f\d]{64}$/i.test(inMemory?.request_key || '') &&
+    /^[a-f\d]{64}$/i.test(inMemory?.access_token || '')) return inMemory
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(`customer_checkout_attempt_${Number(storeId)}`) || 'null')
+    if (Number(saved?.store_id) !== Number(storeId) ||
+      !/^[a-f\d]{64}$/i.test(saved?.request_key || '') ||
+      !/^[a-f\d]{64}$/i.test(saved?.access_token || '')) return null
+    return saved
+  } catch {
+    return null
+  }
+}
+
+const recoverPendingCheckout = async (strict = false) => {
+  const attempt = readPendingCheckoutAttempt(route.params.storeId)
+  if (!attempt) return false
+  try {
+    const res = await recoverCustomerStoreOrder({ request_key: attempt.request_key, access_token: attempt.access_token })
+    const order = res.data.order
+    const orderNo = order?.order_no
+    const accessToken = res.data.access_token || attempt.access_token
+    if (!orderNo) throw new Error('订单恢复响应缺少订单号')
+    saveCustomerOrderAccessToken(orderNo, accessToken)
+    saveRecentOrder(orderNo)
+    clearCustomerCheckoutAttempt(attempt)
+    cart.value = {}
+    cartVisible.value = false
+    ElMessage.success('已找回刚才提交的订单，可在状态页查看；不会自动付款')
+    router.push(customerOrderAccessPath(orderNo, accessToken))
+    return true
+  } catch (err) {
+    if (err.response?.status === 404) return false
+    if (strict) throw new Error('订单结果暂未确认；请检查网络后重试，系统暂不发送新订单以避免重复')
+    ElMessage.warning('订单结果暂未确认，请检查网络后重试；系统暂不提交新订单以避免重复')
+    return false
+  }
+}
+
+const appendAttemptFingerprint = async (orderNo, payload) => {
+  const stablePayload = {
+    order_no: orderNo,
+    customer_note: String(payload.customer_note || '').trim(),
+    items: [...payload.items]
+      .map(({ product_id, quantity }) => ({ product_id: Number(product_id), quantity: Number(quantity) }))
+      .sort((a, b) => a.product_id - b.product_id)
+  }
+  const serialized = JSON.stringify(stablePayload)
+  if (!window.crypto?.subtle || typeof TextEncoder === 'undefined') return { value: serialized, persistent: false }
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))
+  return {
+    value: Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join(''),
+    persistent: true
+  }
+}
+const getCustomerAppendAttempt = async (orderNo, payload) => {
+  const fingerprint = await appendAttemptFingerprint(orderNo, payload)
+  if (pendingAppendAttempt.value?.fingerprint === fingerprint.value) return pendingAppendAttempt.value
+
+  const storageKey = `customer_append_attempt_${orderNo}`
+  if (fingerprint.persistent) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+      if (saved?.order_no === orderNo && saved?.fingerprint === fingerprint.value && /^[a-f\d]{64}$/i.test(saved.request_key || '')) {
+        pendingAppendAttempt.value = saved
+        return saved
+      }
+    } catch {
+      // Session storage may be unavailable in a restricted browser.
+    }
+  }
+
+  const attempt = {
+    order_no: orderNo,
+    fingerprint: fingerprint.value,
+    request_key: secureCheckoutCredential()
+  }
+  pendingAppendAttempt.value = attempt
+  if (fingerprint.persistent) {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(attempt))
+    } catch {
+      // In-page retries still reuse this request if storage is unavailable.
+    }
+  }
+  return attempt
+}
+const clearCustomerAppendAttempt = (attempt) => {
+  if (pendingAppendAttempt.value?.request_key === attempt.request_key) pendingAppendAttempt.value = null
+  const storageKey = `customer_append_attempt_${attempt.order_no}`
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+    if (saved?.request_key === attempt.request_key) sessionStorage.removeItem(storageKey)
+  } catch {
+    // Nothing to clear when session storage is unavailable.
+  }
+}
+
+const readPendingAppendAttempt = (orderNo) => {
+  const inMemory = pendingAppendAttempt.value
+  if (inMemory?.order_no === orderNo && /^[a-f\d]{64}$/i.test(inMemory?.request_key || '')) return inMemory
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(`customer_append_attempt_${orderNo}`) || 'null')
+    if (saved?.order_no !== orderNo || !/^[a-f\d]{64}$/i.test(saved?.request_key || '')) return null
+    return saved
+  } catch {
+    return null
+  }
+}
+
+const recoverPendingAppend = async (strict = false) => {
+  const orderNo = activeOrderNo.value
+  const attempt = orderNo ? readPendingAppendAttempt(orderNo) : null
+  if (!attempt) return false
+  const accessToken = getCustomerOrderAccessToken(orderNo)
+  if (!accessToken) {
+    if (strict) throw new Error('无法恢复追加结果：缺少订单访问凭据；暂不发送新的追加请求')
+    ElMessage.warning('无法确认刚才的追加结果，请检查订单访问凭据；不会自动重新追加')
+    return false
+  }
+  try {
+    const res = await recoverCustomerOrderAppend(orderNo, { request_key: attempt.request_key })
+    const order = res.data.order
+    const recoveredOrderNo = order?.order_no || orderNo
+    clearCustomerAppendAttempt(attempt)
+    saveRecentOrder(recoveredOrderNo)
+    cart.value = {}
+    cartVisible.value = false
+    ElMessage.success('已找回刚才的追加结果；未重复追加')
+    router.push(customerOrderAccessPath(recoveredOrderNo, accessToken))
+    return true
+  } catch (err) {
+    if (err.response?.status === 404) return false
+    if (strict) throw new Error('追加结果暂未确认；请检查网络后重试，系统暂不发送新的追加请求以避免重复')
+    ElMessage.warning('追加结果暂未确认，请检查网络后重试；系统暂不发送新的追加请求以避免重复')
+    return false
+  }
+}
+
 const checkout = async () => {
+  if (submitting.value) return
+  submitting.value = true
+  recoveryChecking.value = true
+  try {
+    if (await recoverPendingCheckout(true) || await recoverPendingAppend(true)) return
+  } catch (err) {
+    ElMessage.error(err.message || '订单结果暂未确认，请检查网络后重试')
+    return
+  } finally {
+    submitting.value = false
+    recoveryChecking.value = false
+  }
+
   if (!cartItems.value.length) {
     ElMessage.warning('请先选择商品')
     return
@@ -954,16 +1238,24 @@ const checkout = async () => {
   }
 
   submitting.value = true
+  let appendRequestInFlight = false
   try {
     if (appendableActiveOrder.value) {
-      const res = await appendCustomerOrderItems(activeOrderNo.value, {
+      appendRequestInFlight = true
+      const appendPayload = {
         customer_note: customerNote.value.trim(),
         items: cartItems.value.map((item) => ({
           product_id: item.product_id,
           quantity: item.quantity,
           price: item.price
         }))
+      }
+      const attempt = await getCustomerAppendAttempt(activeOrderNo.value, appendPayload)
+      const res = await appendCustomerOrderItems(activeOrderNo.value, {
+        ...appendPayload,
+        request_key: attempt.request_key
       })
+      clearCustomerAppendAttempt(attempt)
       const order = res.data.order
       ElMessage.success('已追加到当前订单')
       saveRecentOrder(order?.order_no)
@@ -973,7 +1265,7 @@ const checkout = async () => {
       return
     }
 
-    const res = await createCustomerStoreOrder({
+    const payload = {
       store_id: Number(route.params.storeId),
       customer_phone: customerPhone.value.trim(),
       customer_note: customerNote.value.trim(),
@@ -986,6 +1278,12 @@ const checkout = async () => {
         quantity: item.quantity,
         price: item.price
       }))
+    }
+    const attempt = await getCustomerCheckoutAttempt(payload)
+    const res = await createCustomerStoreOrder({
+      ...payload,
+      request_key: attempt.request_key,
+      access_token: attempt.access_token
     })
 
     const order = res.data.order
@@ -994,6 +1292,7 @@ const checkout = async () => {
       saveCustomerOrderAccessToken(order.order_no, res.data.access_token)
     }
     saveRecentOrder(order?.order_no)
+    clearCustomerCheckoutAttempt(attempt)
     if (res.data.payment_required === false && order?.order_no) {
       ElMessage.success('订单已提交')
       cartVisible.value = false
@@ -1016,13 +1315,25 @@ const checkout = async () => {
     ElMessage.success('订单已创建，等待支付结果')
     if (order?.order_no) router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
   } catch (err) {
-    ElMessage.error(err.response?.data?.message || '下单失败')
+    ElMessage.error(err.response?.data?.message || (appendRequestInFlight
+      ? '追加结果暂未确认；可直接重试，系统会复用本次请求避免重复追加'
+      : '下单结果暂未确认；可直接重试，系统会复用本次请求避免重复建单'))
   } finally {
     submitting.value = false
   }
 }
 
-onMounted(load)
+const initializeCustomerStore = async () => {
+  recoveryChecking.value = true
+  try {
+    if (await recoverPendingCheckout() || await recoverPendingAppend()) return
+  } finally {
+    recoveryChecking.value = false
+  }
+  await load()
+}
+
+onMounted(initializeCustomerStore)
 onBeforeUnmount(stopPolling)
 </script>
 
@@ -1158,9 +1469,9 @@ onBeforeUnmount(stopPolling)
 .hero-meta strong {
   display: block;
   margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .promo-scroll,
@@ -1179,6 +1490,118 @@ onBeforeUnmount(stopPolling)
 
 .promo-scroll {
   margin-top: 12px;
+}
+
+.group-buy-section {
+  margin-top: 12px;
+  padding: 15px;
+  border: 1px solid #cbdff2;
+  border-radius: 22px;
+  background: linear-gradient(145deg, #f2f8ff 0%, #ffffff 72%);
+  box-shadow: 0 12px 30px rgba(30, 64, 110, 0.08);
+}
+
+.group-buy-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.group-buy-heading span {
+  color: #64809d;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.group-buy-heading h2 {
+  margin: 3px 0 0;
+  color: #183653;
+  font-size: 18px;
+}
+
+.group-buy-heading small {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #35638b;
+  background: #e4f0fb;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.group-buy-intro,
+.group-buy-disclaimer {
+  color: #62758b;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.group-buy-intro {
+  margin: 7px 0 10px;
+}
+
+.group-buy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.group-buy-card {
+  display: flex;
+  min-width: 0;
+  min-height: 102px;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 11px;
+  border: 1px solid #d6e3ef;
+  border-radius: 16px;
+  color: #183653;
+  background: #fff;
+  text-decoration: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.group-buy-card:active {
+  transform: translateY(1px);
+}
+
+.group-buy-platform {
+  color: #637d98;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.group-buy-card strong {
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.group-buy-action {
+  color: #2870b3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.group-buy-card.channel-douyin {
+  border-color: #d5dbe5;
+  background: linear-gradient(145deg, #fff 0%, #f4f7fb 100%);
+}
+
+.group-buy-card.channel-meituan {
+  border-color: #f5d6bd;
+  background: linear-gradient(145deg, #fff 0%, #fff6ee 100%);
+}
+
+.group-buy-card.channel-meituan .group-buy-action {
+  color: #c65a19;
+}
+
+.group-buy-disclaimer {
+  margin: 10px 0 0;
+  color: #77879a;
+  font-size: 10px;
 }
 
 .active-order-strip {

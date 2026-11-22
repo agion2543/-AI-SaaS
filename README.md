@@ -79,6 +79,10 @@ npm run dev
 
 首次创建管理员时，须在本地 `.env` 中显式设置至少 12 位的 `INITIAL_ADMIN_PASSWORD`；未设置时，服务会拒绝完成新库初始化。已有数据库中已存在管理员账号时，可以不设置该变量，启动不会更改该账号的密码、角色或状态。初始用户名默认是 `admin`，也可通过 `INITIAL_ADMIN_USERNAME` 配置。
 
+## 本地离线回归
+
+运行 `bash scripts/test-local-regression.sh` 执行本地后端、前端和合成测试；默认不会连接或启动数据库。覆盖范围及可选 age/MySQL 恢复演练的安全条件见[本地回归说明](docs/local-regression.md)。
+
 ## 生产部署
 
 生产部署说明见：
@@ -91,9 +95,11 @@ npm run dev
 
 快速启动：
 
+全新安装请使用带初始管理员和默认套餐种子的独立 Compose。`docker-compose.prod.yml` 现有版本化迁移门禁：只接受空 schema 或精确受管 v1–v7，迁移成功后才启动 API，并关闭 GORM `AutoMigrate` 与启动种子写入；未知历史结构会被拒绝，API 保持停止。升级时须沿用旧部署的 Compose 项目名（命名卷名包含项目名前缀），并确认 `.env.production` 的 `MYSQL_DSN` 指向该 Compose 内的 `mysql:3306/saas_billing`；独立 MySQL 应使用 `docker-compose.managed.yml`。阅读[生产部署说明](docs/production-deploy.md)中的数据库迁移章节后，再选择适合目标库的入口。
+
 ```bash
 cp .env.production.example .env.production
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build
 ```
 
 上线前请务必修改：

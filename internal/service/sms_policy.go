@@ -106,11 +106,11 @@ func issueSMSVerificationCode(db *gorm.DB, appEnv, secret, phone, scene string, 
 	})
 }
 
-func consumeSMSVerificationCode(db *gorm.DB, secret, phone, scene, code string) error {
+func consumeSMSVerificationCode(db *gorm.DB, secret, phone, scene, code string, userID *uint) error {
 	valid := false
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var err error
-		valid, err = consumeSMSVerificationCodeInTransaction(tx, secret, phone, scene, code)
+		valid, err = consumeSMSVerificationCodeInTransaction(tx, secret, phone, scene, code, userID)
 		return err
 	})
 	if err != nil {
@@ -125,14 +125,14 @@ func consumeSMSVerificationCode(db *gorm.DB, secret, phone, scene, code string) 
 // consumeSMSVerificationCodeInTransaction commits failed-attempt updates when
 // the caller returns nil for an invalid code; successful consumption can share
 // the caller's transaction with the protected account change.
-func consumeSMSVerificationCodeInTransaction(tx *gorm.DB, secret, phone, scene, code string) (bool, error) {
+func consumeSMSVerificationCodeInTransaction(tx *gorm.DB, secret, phone, scene, code string, userID *uint) (bool, error) {
 	digest, err := hashSMSCode(secret, phone, scene, code)
 	if err != nil {
 		return false, err
 	}
 	codes := repository.NewVerificationCodeRepository(tx)
 	now := time.Now()
-	record, err := codes.FindActiveForUpdate(phone, scene, now)
+	record, err := codes.FindActiveForUpdate(phone, scene, userID, now)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}

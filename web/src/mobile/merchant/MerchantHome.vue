@@ -37,9 +37,40 @@
         <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
       </div>
 
-      <!-- 统计卡片 -->
-      <div class="stats-section">
-        <van-grid :column="4" :border="false">
+      <!-- 推广入口优先：点击统计来自现有团购链接接口，不代表交易结果 -->
+      <section class="promotion-focus" aria-labelledby="promotion-focus-title">
+        <div class="promotion-kicker"><van-icon name="fire-o" /> 团购推广</div>
+        <h1 id="promotion-focus-title">配置推广入口，查看跳转点击</h1>
+        <p class="promotion-description">按门店管理抖音生活服务、美团 / 大众点评官方团购链接，并查看专属入口累计点击。</p>
+        <div class="promotion-summary" aria-live="polite">
+          <div v-if="promotionSummary.status === 'loading'" class="promotion-summary-state">正在读取团购数据…</div>
+          <div v-else-if="promotionSummary.status === 'error'" class="promotion-summary-state">团购数据暂不可读，可进入渠道页重试</div>
+          <div v-else-if="stores.length === 0" class="promotion-summary-state">添加门店后即可配置团购入口</div>
+          <div v-else class="promotion-metrics">
+            <div class="promotion-metric">
+              <span>已配置入口</span>
+              <strong>{{ promotionSummary.configuredEntries }}<small> 个</small></strong>
+            </div>
+            <div class="promotion-metric">
+              <span>累计跳转点击</span>
+              <strong>{{ promotionSummary.totalClicks.toLocaleString('zh-CN') }}<small> 次</small></strong>
+            </div>
+          </div>
+        </div>
+        <van-button class="promotion-button" type="primary" round icon="arrow" @click="router.push('/m/merchant/group-buy')">
+          查看团购入口与点击
+        </van-button>
+        <p class="promotion-disclaimer">点击量不代表独立顾客数、订单、付款或收入。</p>
+      </section>
+
+      <!-- 订单统计卡片 -->
+      <section class="stats-section" aria-labelledby="order-stats-title">
+        <div class="stats-heading">
+          <div id="order-stats-title" class="section-title">订单与收款速览</div>
+          <span class="stats-scope">快捷参考</span>
+        </div>
+        <p class="stats-note">按首页当前读取的最多 20 笔订单记录汇总，并非全量报表；不含外部团购平台订单与核销数据。</p>
+        <van-grid :column="2" :border="false">
           <van-grid-item>
             <div class="stat-item">
               <div class="stat-value">{{ stats.todayOrders }}</div>
@@ -49,7 +80,7 @@
           <van-grid-item>
             <div class="stat-item">
               <div class="stat-value text-primary">¥{{ stats.todayRevenue }}</div>
-              <div class="stat-label">今日营收</div>
+              <div class="stat-label">今日确认收款</div>
             </div>
           </van-grid-item>
           <van-grid-item>
@@ -61,21 +92,19 @@
           <van-grid-item>
             <div class="stat-item">
               <div class="stat-value text-danger">{{ stats.refundRequests }}</div>
-              <div class="stat-label">退款申请</div>
+              <div class="stat-label">有退款记录</div>
             </div>
           </van-grid-item>
         </van-grid>
-      </div>
+      </section>
 
       <!-- 快捷入口 -->
       <div class="quick-section">
-        <div class="section-title">快捷操作</div>
-        <van-grid :column="4" :gutter="10">
+        <div class="section-title">日常管理</div>
+        <van-grid :column="3" :gutter="10">
           <van-grid-item icon="orders-o" text="订单" @click="$router.push('/m/merchant/orders')" />
           <van-grid-item icon="shop-o" text="商品" @click="$router.push('/m/merchant/products')" />
           <van-grid-item v-if="canWrite" icon="coupon-o" text="优惠券" @click="$router.push('/m/merchant/coupons')" />
-          <van-grid-item icon="qr" text="团购渠道" @click="$router.push('/m/merchant/group-buy')" />
-          <van-grid-item v-if="canWrite" icon="chat-o" text="AI未接入" @click="$router.push('/m/merchant/ai')" />
         </van-grid>
       </div>
 
@@ -84,7 +113,7 @@
         <div class="section-header">
           <span class="section-title">待处理订单</span>
           <van-tag v-if="pendingOrders.length" type="danger" size="medium">
-            {{ pendingOrders.length }}单
+            {{ stats.pendingOrders }} 单（当前读取记录）
           </van-tag>
         </div>
 
@@ -149,9 +178,9 @@
         </van-button>
       </div>
 
-      <!-- 经营概览 -->
+      <!-- 本月订单与收款概览 -->
       <div class="overview-section">
-        <div class="section-title">经营概览</div>
+        <div class="section-title">本月订单与收款</div>
         <van-grid :column="2" :gutter="10">
           <van-grid-item>
             <div class="overview-card">
@@ -162,19 +191,7 @@
           <van-grid-item>
             <div class="overview-card">
               <div class="overview-value text-primary">¥{{ stats.monthRevenue }}</div>
-              <div class="overview-label">本月营收</div>
-            </div>
-          </van-grid-item>
-          <van-grid-item>
-            <div class="overview-card">
-              <div class="overview-value">{{ stats.totalProducts }}</div>
-              <div class="overview-label">在售商品</div>
-            </div>
-          </van-grid-item>
-          <van-grid-item>
-            <div class="overview-card">
-              <div class="overview-value">{{ stats.totalStores }}</div>
-              <div class="overview-label">门店数量</div>
+              <div class="overview-label">本月确认收款</div>
             </div>
           </van-grid-item>
         </van-grid>
@@ -209,7 +226,8 @@ import {
   acceptMerchantOrder,
   confirmMerchantOrderPayment,
   closeMerchantOrder,
-  fetchMerchantStores
+  fetchMerchantStores,
+  fetchMerchantGroupBuyLinks
 } from '@/api/modules'
 import { mobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
@@ -220,6 +238,8 @@ const merchantInfo = ref({})
 const subscription = ref(null)
 const orders = ref([])
 const stores = ref([])
+const storeListLoadFailed = ref(false)
+const promotionSummary = ref({ status: 'loading', configuredEntries: 0, totalClicks: 0 })
 const stats = ref({
   todayOrders: 0,
   todayRevenue: '0.00',
@@ -346,7 +366,10 @@ async function loadMerchantInfo() {
   try {
     const [infoRes, storesRes] = await Promise.all([
       fetchMerchantInfo().catch(() => ({ data: {} })),
-      fetchMerchantStores().catch(() => ({ data: { list: [] } }))
+      fetchMerchantStores({ page: 1, page_size: 100 }).catch(() => {
+        storeListLoadFailed.value = true
+        return { data: { list: [] } }
+      })
     ])
     merchantInfo.value = infoRes.data?.merchant || infoRes.data || {}
     stores.value = storesRes.data?.list || (Array.isArray(storesRes.data) ? storesRes.data : [])
@@ -355,6 +378,46 @@ async function loadMerchantInfo() {
     console.error('加载商家信息失败:', e)
   }
   return true
+}
+
+async function loadPromotionSummary() {
+  if (storeListLoadFailed.value) {
+    promotionSummary.value = { status: 'error', configuredEntries: 0, totalClicks: 0 }
+    return
+  }
+  const storeIds = stores.value
+    .map((store) => Number(store.id))
+    .filter((storeId) => Number.isSafeInteger(storeId) && storeId > 0)
+  if (storeIds.length !== stores.value.length) {
+    promotionSummary.value = { status: 'error', configuredEntries: 0, totalClicks: 0 }
+    return
+  }
+  if (storeIds.length === 0) {
+    promotionSummary.value = { status: 'ready', configuredEntries: 0, totalClicks: 0 }
+    return
+  }
+
+  try {
+    const responses = await Promise.all(storeIds.map((storeId) => fetchMerchantGroupBuyLinks(storeId)))
+    const links = responses.flatMap((response) => {
+      const list = response.data?.links
+      if (list == null) return []
+      if (!Array.isArray(list)) throw new Error('团购接口未返回有效的链接列表')
+      return list
+    })
+    const configuredEntries = links.filter((link) => Boolean(link.code)).length
+    const totalClicks = links.reduce((sum, link) => {
+      const count = Number(link.click_count)
+      if (!Number.isSafeInteger(count) || count < 0 || !Number.isSafeInteger(sum + count)) {
+        throw new Error('团购点击计数超出安全范围')
+      }
+      return sum + count
+    }, 0)
+    promotionSummary.value = { status: 'ready', configuredEntries, totalClicks }
+  } catch (error) {
+    console.error('加载团购点击摘要失败:', error)
+    promotionSummary.value = { status: 'error', configuredEntries: 0, totalClicks: 0 }
+  }
 }
 
 async function loadOrders() {
@@ -409,7 +472,7 @@ async function loadOrders() {
 onMounted(async () => {
   loading.value = true
   const canLoadBusinessData = await loadMerchantInfo()
-  if (canLoadBusinessData) await loadOrders()
+  if (canLoadBusinessData) await Promise.all([loadOrders(), loadPromotionSummary()])
   loading.value = false
 })
 </script>
@@ -435,6 +498,31 @@ onMounted(async () => {
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .readonly-banner { display: grid; gap: 8px; margin: 12px 16px; padding: 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
+.promotion-focus {
+  position: relative;
+  overflow: hidden;
+  margin: 14px 16px 12px;
+  padding: 18px;
+  border-radius: 18px;
+  color: #fff;
+  background: linear-gradient(140deg, #153447 0%, #17646a 62%, #168e83 100%);
+  box-shadow: 0 8px 22px rgba(19, 70, 82, .16);
+}
+.promotion-focus::after { position: absolute; right: -48px; top: 82px; width: 150px; height: 150px; border: 1px solid rgba(231, 255, 250, .16); border-radius: 50%; content: ''; pointer-events: none; }
+.promotion-kicker { position: relative; z-index: 1; display: flex; align-items: center; gap: 5px; color: #b9e9df; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.promotion-focus h1 { position: relative; z-index: 1; margin: 9px 0 6px; font-size: 20px; line-height: 1.35; }
+.promotion-description { position: relative; z-index: 1; margin: 0; color: #d8ecea; font-size: 12px; line-height: 1.6; }
+.promotion-summary { position: relative; z-index: 1; margin-top: 13px; padding: 11px 12px; border: 1px solid rgba(223, 255, 247, .16); border-radius: 12px; background: rgba(255, 255, 255, .08); }
+.promotion-summary-state { color: #e2f2ef; font-size: 12px; line-height: 1.5; }
+.promotion-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.promotion-metric { display: grid; gap: 4px; min-width: 0; }
+.promotion-metric + .promotion-metric { padding-left: 12px; border-left: 1px solid rgba(223, 255, 247, .18); }
+.promotion-metric span { color: #c1dfdc; font-size: 10px; }
+.promotion-metric strong { color: #fff; font-size: 20px; line-height: 1.2; }
+.promotion-metric small { color: #d7ece9; font-size: 11px; font-weight: 500; }
+.promotion-button { position: relative; z-index: 1; width: 100%; margin-top: 12px; color: #165c5d; background: #effff9; border-color: #effff9; font-weight: 700; }
+.promotion-disclaimer { position: relative; z-index: 1; margin: 9px 0 0; color: #c7e2df; font-size: 10px; line-height: 1.5; }
+
 .user-info {
   display: flex;
   align-items: center;
@@ -456,11 +544,15 @@ onMounted(async () => {
 
 .stats-section {
   background: white;
-  margin: -20px 16px 12px;
+  margin: 12px 16px;
   border-radius: 12px;
-  padding: 16px 0;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
 }
+.stats-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.stats-heading .section-title { margin-bottom: 0; }
+.stats-scope { flex: 0 0 auto; color: #85939a; font-size: 10px; }
+.stats-note { margin: 7px 0 10px; color: #7e8d94; font-size: 11px; line-height: 1.5; }
 
 .stat-item {
   text-align: center;

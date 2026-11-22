@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"go-web-gin-health/internal/model"
 )
 
 type Claims struct {
@@ -15,6 +17,7 @@ type Claims struct {
 	MerchantID             *uint  `json:"merchant_id,omitempty"`
 	Identity               string `json:"identity"`
 	Role                   string `json:"role"`
+	UserCredentialVersion  string `json:"user_credential_version,omitempty"`
 	AdminCredentialVersion string `json:"admin_credential_version,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -44,20 +47,61 @@ func AdminCredentialVersion(secret string, authVersion uint64, passwordHash, sta
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// UserCredentialVersion binds a user token to the user's current credentials,
+// status, role, and tenant. The keyed digest avoids exposing the password hash
+// while making existing tokens stale as soon as that state changes.
+func UserCredentialVersion(secret string, user model.User) string {
+	role := user.Role
+	if role == "" {
+		role = "customer"
+	}
+	state, _ := json.Marshal(struct {
+		UserID       uint   `json:"user_id"`
+		Email        string `json:"email"`
+		Phone        string `json:"phone"`
+		PasswordHash string `json:"password_hash"`
+		Status       string `json:"status"`
+		Role         string `json:"role"`
+		MerchantID   *uint  `json:"merchant_id"`
+	}{
+		UserID:       user.ID,
+		Email:        user.Email,
+		Phone:        user.Phone,
+		PasswordHash: user.PasswordHash,
+		Status:       user.Status,
+		Role:         role,
+		MerchantID:   user.MerchantID,
+	})
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte("user-credential-v1\x00"))
+	_, _ = mac.Write(state)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func GenerateToken(secret string, userID uint, identity, role string, merchantID *uint, expireHours int) (string, error) {
-	return generateToken(secret, userID, identity, role, merchantID, "", expireHours)
+	return generateToken(secret, userID, identity, role, merchantID, "", "", expireHours)
+}
+
+func GenerateUserToken(secret string, user model.User, expireHours int) (string, error) {
+	role := user.Role
+	if role == "" {
+		role = "customer"
+	}
+	credentialVersion := UserCredentialVersion(secret, user)
+	return generateToken(secret, user.ID, user.Phone, role, user.MerchantID, credentialVersion, "", expireHours)
 }
 
 func GenerateAdminToken(secret string, userID uint, identity, role string, credentialVersion string, expireHours int) (string, error) {
-	return generateToken(secret, userID, identity, role, nil, credentialVersion, expireHours)
+	return generateToken(secret, userID, identity, role, nil, "", credentialVersion, expireHours)
 }
 
-func generateToken(secret string, userID uint, identity, role string, merchantID *uint, adminCredentialVersion string, expireHours int) (string, error) {
+func generateToken(secret string, userID uint, identity, role string, merchantID *uint, userCredentialVersion, adminCredentialVersion string, expireHours int) (string, error) {
 	claims := Claims{
 		UserID:                 userID,
 		MerchantID:             merchantID,
 		Identity:               identity,
 		Role:                   role,
+		UserCredentialVersion:  userCredentialVersion,
 		AdminCredentialVersion: adminCredentialVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expireHours) * time.Hour)),

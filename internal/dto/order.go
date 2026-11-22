@@ -21,12 +21,25 @@ type CreateCustomerOrderRequest struct {
 	CouponNo       string                     `json:"coupon_no"`
 	PaymentChannel string                     `json:"payment_channel"`
 	PayMode        string                     `json:"pay_mode"`
+	RequestKey     string                     `json:"request_key,omitempty"`
+	AccessToken    string                     `json:"access_token,omitempty"`
 	Items          []CustomerOrderItemRequest `json:"items" binding:"required"`
 }
 
 type AppendCustomerOrderItemsRequest struct {
-	CustomerNote string                     `json:"customer_note"`
-	Items        []CustomerOrderItemRequest `json:"items" binding:"required"`
+	CustomerNote       string                     `json:"customer_note"`
+	RequestKey         string                     `json:"request_key,omitempty"`
+	RequestFingerprint string                     `json:"-"`
+	Items              []CustomerOrderItemRequest `json:"items" binding:"required"`
+}
+
+type RecoverCustomerOrderRequest struct {
+	RequestKey  string `json:"request_key" binding:"required"`
+	AccessToken string `json:"access_token" binding:"required"`
+}
+
+type RecoverCustomerOrderAppendRequest struct {
+	RequestKey string `json:"request_key" binding:"required"`
 }
 
 type RetryCustomerOrderPaymentRequest struct {

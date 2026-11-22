@@ -32,9 +32,11 @@ type StoreOrderItemSnapshot struct {
 }
 
 type OrderOperationLog struct {
-	Action string `json:"action"`
-	Text   string `json:"text"`
-	Time   string `json:"time"`
+	Action                   string `json:"action"`
+	Text                     string `json:"text"`
+	Time                     string `json:"time"`
+	AppendRequestKeyHash     string `json:"append_request_key_hash,omitempty"`
+	AppendRequestFingerprint string `json:"append_request_fingerprint,omitempty"`
 }
 
 type MerchantSettlementSummary struct {
@@ -130,6 +132,17 @@ func (s *OrderService) CreateOrder(userID uint, req dto.CreateOrderRequest) (*mo
 }
 
 func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderRequest) (*model.Order, error) {
+	if err := validateCustomerOrderRequestCredentials(req.RequestKey, req.AccessToken); err != nil {
+		return nil, err
+	}
+	if req.RequestKey != "" {
+		if existing, found, err := s.findIdempotentCustomerOrder(req); err != nil {
+			return nil, err
+		} else if found {
+			return existing, nil
+		}
+	}
+
 	store, err := s.stores.FindByIDWithMerchant(req.StoreID)
 	if err != nil {
 		return nil, errors.New("store not found")
@@ -234,6 +247,9 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		PaymentChannel: channel,
 		ShareCode:      strings.TrimSpace(req.ShareCode),
 	}
+	if req.RequestKey != "" {
+		order.OrderNo = customerOrderNoForRequestKey(req.RequestKey)
+	}
 	if store.OrderMode == "submit_later" {
 		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "submitted", "顾客已提交订单，稍后结算")
 		if store.AutoAccept {
@@ -251,14 +267,27 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		order.PromotionID = &promotion.ID
 		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "promotion_applied", fmt.Sprintf("已自动匹配优惠：%s，优惠 %s 元", promotion.Title, formatFen(promotionDiscount)))
 	}
-	accessToken, tokenHash, err := newCustomerOrderAccessToken()
-	if err != nil {
-		return nil, errors.New("could not generate customer order access token")
+	accessToken := req.AccessToken
+	var tokenHash string
+	if req.RequestKey != "" {
+		tokenHash = hashCustomerOrderAccessToken(accessToken)
+	} else {
+		accessToken, tokenHash, err = newCustomerOrderAccessToken()
+		if err != nil {
+			return nil, errors.New("could not generate customer order access token")
+		}
 	}
 	order.CustomerAccessTokenHash = tokenHash
 	order.CustomerAccessToken = accessToken
 
 	if err := s.orders.Create(order); err != nil {
+		if req.RequestKey != "" {
+			if existing, found, lookupErr := s.findIdempotentCustomerOrder(req); lookupErr != nil {
+				return nil, lookupErr
+			} else if found {
+				return existing, nil
+			}
+		}
 		return nil, err
 	}
 
@@ -347,7 +376,7 @@ func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo, accessToken string) (
 	return s.orders.FindByOrderNo(orderNo)
 }
 
-func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string, req dto.AppendCustomerOrderItemsRequest) (*model.Order, error) {
+func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken string, req dto.AppendCustomerOrderItemsRequest) (*model.Order, error) {
 	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
 	if err != nil || order.StoreID == nil {
 		return nil, errors.New("order not found")
@@ -452,7 +481,10 @@ func (s *OrderService) AppendCustomerStoreOrderItems(orderNo, accessToken string
 			order.CustomerNote = string([]rune(order.CustomerNote)[:500])
 		}
 	}
-	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "items_appended", fmt.Sprintf("顾客追加商品：%s，新增 %d 件，新增金额 %s 元", strings.Join(appendedNames, "、"), appendedQuantity, formatFen(appendedAmount)))
+	order.OperationLogs, err = appendCustomerOrderItemsLog(order.OperationLogs, fmt.Sprintf("顾客追加商品：%s，新增 %d 件，新增金额 %s 元", strings.Join(appendedNames, "、"), appendedQuantity, formatFen(appendedAmount)), req.RequestKey, req.RequestFingerprint)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.orders.Save(order); err != nil {
 		return nil, err
 	}
@@ -1057,8 +1089,8 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*m
 		if order.TotalAmount <= 0 {
 			return errors.New("this order does not require payment")
 		}
-		if order.Status != "payment_confirming" && order.Status != "submitted" && order.Status != "preparing" {
-			return errors.New("only unpaid submitted orders can be confirmed")
+		if order.Status != "payment_confirming" && order.Status != "submitted" && order.Status != "preparing" && order.Status != "accepted" {
+			return errors.New("only unpaid submitted, processing or accepted orders can be confirmed")
 		}
 		paidAt := time.Now()
 		transactionNo := fmt.Sprintf("manual-%s-%d", order.OrderNo, paidAt.Unix())
@@ -1076,7 +1108,7 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*m
 		order.PaidAt = &paidAt
 		order.TransactionNo = transactionNo
 		order.PaymentChannel = "merchant_qr"
-		if orderHasAction(order.OperationLogs, "auto_accepted") {
+		if order.Status == "accepted" || orderHasAction(order.OperationLogs, "auto_accepted") {
 			order.Status = "accepted"
 		} else {
 			order.Status = "received"
@@ -1116,7 +1148,7 @@ func (s *OrderService) CompleteMerchantOrder(merchantID, orderID uint) error {
 	if order.Status != "accepted" && order.Status != "preparing" {
 		return errors.New("only accepted or preparing orders can be completed")
 	}
-	if !orderCanProceedToFulfillment(*order) {
+	if !orderPaymentSatisfied(*order) {
 		return errors.New("payment must be confirmed before completing this order")
 	}
 	order.Status = "completed"

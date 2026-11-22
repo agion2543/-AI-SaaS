@@ -35,27 +35,18 @@
         <div v-for="store in stores" :key="store.id" class="store-item">
           <van-cell
             :title="store.name"
-            :label="store.address || store.description || '暂无地址'"
+            :label="store.address || '暂无地址'"
             :is-link="canWrite"
             @click="canWrite && editStore(store)"
           >
-            <template #icon>
-              <van-image
-                round
-                width="48"
-                height="48"
-                :src="store.image || defaultStoreImg"
-                style="margin-right: 12px;"
-              />
-            </template>
             <template #value>
               <div class="store-status">
-                <van-tag :type="store.is_active ? 'success' : 'default'">
-                  {{ store.is_active ? '营业中' : '休息中' }}
+                <van-tag :type="store.is_open ? 'success' : 'default'">
+                  {{ store.is_open ? '营业中' : '休息中' }}
                 </van-tag>
                 <div class="store-actions">
                   <van-switch
-                    :model-value="store.is_active"
+                    :model-value="store.is_open"
                     size="20"
                     :disabled="!canWrite"
                     @change="toggleStoreStatus(store)"
@@ -113,42 +104,24 @@
               placeholder="请输入门店地址"
             />
             <van-field
-              v-model="storeForm.phone"
+              v-model="storeForm.contact_phone"
+              type="tel"
+              maxlength="11"
               label="联系电话"
-              placeholder="请输入联系电话"
+              placeholder="请输入 11 位手机号"
+              :rules="[
+                { required: true, message: '请输入联系电话' },
+                { pattern: /^1\d{10}$/, message: '请输入有效的 11 位手机号' }
+              ]"
             />
             <van-field
-              v-model="storeForm.description"
+              v-model="storeForm.business_hours"
               type="textarea"
-              label="门店简介"
-              placeholder="请输入门店简介"
+              label="营业时间"
+              placeholder="例如：周一至周日 09:00-21:00"
+              maxlength="120"
               rows="2"
             />
-            <van-field
-              v-model="storeForm.notice"
-              type="textarea"
-              label="公告"
-              placeholder="门店公告，如营业时间、优惠信息等"
-              rows="2"
-            />
-            <van-field label="门店图标">
-              <template #input>
-                <van-uploader
-                  v-model="storeForm.image"
-                  :max-count="1"
-                  :after-read="afterImageRead"
-                >
-                  <van-image
-                    v-if="storeForm.imageUrl"
-                    :src="storeForm.imageUrl"
-                    width="80"
-                    height="80"
-                    round
-                  />
-                  <van-button v-else size="small" type="primary">上传图标</van-button>
-                </van-uploader>
-              </template>
-            </van-field>
           </van-cell-group>
 
           <div class="form-actions">
@@ -165,8 +138,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
+import { showToast, showSuccessToast, showFailToast } from 'vant'
 import { fetchMerchantStores, createMerchantStore, updateMerchantStore } from '@/api/modules'
+import { buildMerchantStorePayload, isValidMerchantStorePhone } from '@/utils/merchantStoreContract'
 import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const router = useRouter()
@@ -183,14 +157,10 @@ const currentStoreId = ref(null)
 const storeForm = ref({
   name: '',
   address: '',
-  phone: '',
-  description: '',
-  notice: '',
-  image: [],
-  imageUrl: ''
+  contact_phone: '',
+  is_open: true,
+  business_hours: ''
 })
-
-const defaultStoreImg = 'https://via.placeholder.com/48x48?text=门店'
 
 async function loadStores() {
   loading.value = true
@@ -211,11 +181,9 @@ function showAddStore() {
   storeForm.value = {
     name: '',
     address: '',
-    phone: '',
-    description: '',
-    notice: '',
-    image: [],
-    imageUrl: ''
+    contact_phone: '',
+    is_open: true,
+    business_hours: ''
   }
   showStorePopup.value = true
 }
@@ -226,21 +194,18 @@ function editStore(store) {
   storeForm.value = {
     name: store.name,
     address: store.address || '',
-    phone: store.phone || '',
-    description: store.description || '',
-    notice: store.notice || '',
-    image: [],
-    imageUrl: store.image || ''
+    contact_phone: store.contact_phone || '',
+    is_open: store.is_open !== false,
+    business_hours: store.business_hours || ''
   }
   showStorePopup.value = true
 }
 
 async function toggleStoreStatus(store) {
   try {
-    await updateMerchantStore(store.id, {
-      is_active: !store.is_active
-    })
-    showSuccessToast(store.is_active ? '已休息' : '已营业')
+    const payload = buildMerchantStorePayload(store, { is_open: !store.is_open })
+    await updateMerchantStore(store.id, payload)
+    showSuccessToast(store.is_open ? '已休息' : '已营业')
     loadStores()
   } catch (e) {
     showFailToast(e.response?.data?.message || '操作失败')
@@ -251,21 +216,15 @@ function viewProducts(store) {
   router.push(`/m/merchant/products?storeId=${store.id}`)
 }
 
-function afterImageRead(file) {
-  storeForm.value.imageUrl = file.content
-}
-
 async function saveStore() {
   saving.value = true
   try {
-    const data = {
-      name: storeForm.value.name,
-      address: storeForm.value.address,
-      phone: storeForm.value.phone,
-      description: storeForm.value.description,
-      notice: storeForm.value.notice,
-      image: storeForm.value.imageUrl
+    if (!isValidMerchantStorePhone(storeForm.value.contact_phone)) {
+      showToast('请输入有效的 11 位手机号')
+      return
     }
+
+    const data = buildMerchantStorePayload(storeForm.value)
 
     if (isEditing.value) {
       await updateMerchantStore(currentStoreId.value, data)

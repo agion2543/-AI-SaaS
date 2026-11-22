@@ -237,6 +237,10 @@ WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND (
 }
 
 func verifyWholesaleRetailHistoricalFingerprints(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition) error {
+	return verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx, conn, base, v2, v3, v4, v5, nil, nil)
+}
+
+func verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, additionalTables, additionalTriggers []string) error {
 	otpColumns := []schemaColumn{
 		{table: "verification_codes", column: "code_hash"},
 		{table: "verification_codes", column: "failed_attempts"},
@@ -255,11 +259,11 @@ func verifyWholesaleRetailHistoricalFingerprints(ctx context.Context, conn *sql.
 		excludedTriggers         []string
 		excludedColumns          []schemaColumn
 	}{
-		{version: BaselineVersion, checksum: base.checksum, label: "v1", excludedTables: manualReviewV2TableNames(), excludedTriggers: manualReviewV2TriggerNames(), excludedColumns: append(append([]schemaColumn{{table: "admin_users", column: "auth_version"}}, otpColumns...), v6Columns...)},
-		{version: v2.version, checksum: v2.checksum, label: "v2", excludedColumns: append(append([]schemaColumn{{table: "admin_users", column: "auth_version"}}, otpColumns...), v6Columns...)},
-		{version: v3.version, checksum: v3.checksum, label: "v3", excludedColumns: append(append([]schemaColumn(nil), otpColumns...), v6Columns...)},
-		{version: v4.version, checksum: v4.checksum, label: "v4", excludedColumns: append([]schemaColumn{{table: "email_verification_codes", column: "code_hash"}, {table: "email_verification_codes", column: "failed_attempts"}}, v6Columns...)},
-		{version: v5.version, checksum: v5.checksum, label: "v5", excludedColumns: v6Columns},
+		{version: BaselineVersion, checksum: base.checksum, label: "v1", excludedTables: append(manualReviewV2TableNames(), additionalTables...), excludedTriggers: append(manualReviewV2TriggerNames(), additionalTriggers...), excludedColumns: append(append([]schemaColumn{{table: "admin_users", column: "auth_version"}}, otpColumns...), v6Columns...)},
+		{version: v2.version, checksum: v2.checksum, label: "v2", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: append(append([]schemaColumn{{table: "admin_users", column: "auth_version"}}, otpColumns...), v6Columns...)},
+		{version: v3.version, checksum: v3.checksum, label: "v3", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: append(append([]schemaColumn(nil), otpColumns...), v6Columns...)},
+		{version: v4.version, checksum: v4.checksum, label: "v4", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: append([]schemaColumn{{table: "email_verification_codes", column: "code_hash"}, {table: "email_verification_codes", column: "failed_attempts"}}, v6Columns...)},
+		{version: v5.version, checksum: v5.checksum, label: "v5", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: v6Columns},
 	} {
 		actual, err := schemaFingerprintExcludingColumns(ctx, conn, check.excludedTables, check.excludedTriggers, check.excludedColumns)
 		if err != nil {

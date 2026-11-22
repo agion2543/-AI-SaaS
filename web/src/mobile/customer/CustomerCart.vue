@@ -134,14 +134,16 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
-import { fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder } from '@/api/modules'
+import { fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder, recoverCustomerStoreOrder } from '@/api/modules'
 import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
+import { clearCustomerOrderAttempt, getOrCreateCustomerOrderAttempt, readCustomerOrderAttempt } from '@/utils/customerOrderAttempt'
 import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
 import { describeProductPricing, getMinimumOrderQuantity, getProductUnitPrice } from '@/utils/productPricing'
 
 const route = useRoute()
 const router = useRouter()
 const storeId = route.params.storeId
+const pendingCheckoutAttempt = ref(null)
 
 // 状态
 const loading = ref(true)
@@ -309,34 +311,69 @@ async function loadCoupons() {
   }
 }
 
-async function submitOrder() {
-  if (hasMOQViolation.value) {
-    showToast(minimumOrderIssue.value)
-    return
+async function recoverPendingOrder(strict = false) {
+  const attempt = readCustomerOrderAttempt(storeId)
+  if (!attempt) return false
+  try {
+    const res = await recoverCustomerStoreOrder({ request_key: attempt.request_key, access_token: attempt.access_token })
+    const orderNo = res.data.order?.order_no
+    const accessToken = res.data.access_token || attempt.access_token
+    if (!orderNo) throw new Error('订单恢复响应缺少订单号')
+    saveCustomerOrderAccessToken(orderNo, accessToken)
+    clearCustomerOrderAttempt(attempt)
+    pendingCheckoutAttempt.value = null
+    cart.value = {}
+    localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
+    showSuccessToast('已找回刚才提交的订单')
+    router.replace(mobileCustomerOrderAccessPath(orderNo, accessToken))
+    return true
+  } catch (e) {
+    if (e.response?.status === 404) return false
+    if (strict) throw new Error('订单结果暂未确认，请检查网络后重试；为避免重复下单，系统暂不发送新订单')
+    showFailToast('订单结果暂未确认，请检查网络后再试；系统暂不发送新订单以避免重复')
+    return false
   }
-  if (cartItems.value.length === 0) {
-    showToast('购物车是空的')
-    return
-  }
-  if (customerPhone.value.trim() && !isValidCustomerPhone(customerPhone.value)) {
-    showToast('手机号需要是 11 位数字')
-    return
-  }
+}
 
+async function submitOrder() {
+  if (submitting.value) return
   submitting.value = true
   try {
-    const res = await createCustomerStoreOrder(buildCustomerOrderPayload({
+    if (await recoverPendingOrder(true)) return
+    if (hasMOQViolation.value) {
+      showToast(minimumOrderIssue.value)
+      return
+    }
+    if (cartItems.value.length === 0) {
+      showToast('购物车是空的')
+      return
+    }
+    if (customerPhone.value.trim() && !isValidCustomerPhone(customerPhone.value)) {
+      showToast('手机号需要是 11 位数字')
+      return
+    }
+
+    const payload = buildCustomerOrderPayload({
       storeId,
       customerPhone: customerPhone.value,
       customerNote: remark.value,
       couponNo: selectedCoupon.value?.coupon_no,
       items: cartItems.value.map(item => ({ id: item.id, count: item.count, price: getProductUnitPrice(item, item.count) }))
-    }))
+    })
+    const attempt = await getOrCreateCustomerOrderAttempt(payload, pendingCheckoutAttempt.value)
+    pendingCheckoutAttempt.value = attempt
+    const res = await createCustomerStoreOrder({
+      ...payload,
+      request_key: attempt.request_key,
+      access_token: attempt.access_token
+    })
     const order = res.data.order || res.data
     const orderNo = order.order_no
     const accessToken = res.data.access_token
     if (!orderNo || !accessToken) throw new Error('订单安全凭证未返回，请勿使用订单号单独查询')
     saveCustomerOrderAccessToken(orderNo, accessToken)
+    clearCustomerOrderAttempt(attempt)
+    pendingCheckoutAttempt.value = null
 
     // 清除购物车
     cart.value = {}
@@ -373,7 +410,7 @@ async function submitOrder() {
     router.replace(mobileCustomerOrderAccessPath(orderNo, accessToken))
   } catch (e) {
     console.error('创建订单失败:', e)
-    showFailToast(e.response?.data?.message || '创建订单失败')
+    showFailToast(e.response?.data?.message || e.message || '创建订单失败')
   } finally {
     submitting.value = false
   }
@@ -401,7 +438,8 @@ watch(customerPhone, () => {
   chosenCouponIndex.value = -1
 })
 
-onMounted(() => {
+onMounted(async () => {
+  if (await recoverPendingOrder()) return
   loadData()
 })
 </script>

@@ -13,20 +13,14 @@
       <van-tabbar-item to="/m/merchant/home" icon="home-o">
         首页
       </van-tabbar-item>
-      <van-tabbar-item to="/m/merchant/orders" icon="orders-o">
-        订单
+      <van-tabbar-item to="/m/merchant/group-buy" icon="qr">
+        团购
       </van-tabbar-item>
       <van-tabbar-item to="/m/merchant/products" icon="shop-o">
         商品
       </van-tabbar-item>
-      <van-tabbar-item to="/m/merchant/finance" icon="balance-o">
-        财务
-      </van-tabbar-item>
-      <van-tabbar-item to="/m/merchant/group-buy" icon="qr">
-        团购
-      </van-tabbar-item>
-      <van-tabbar-item to="/m/merchant/subscription" icon="gold-coin-o">
-        订阅
+      <van-tabbar-item to="/m/merchant/orders" icon="orders-o">
+        订单
       </van-tabbar-item>
     </van-tabbar>
   </div>
@@ -44,11 +38,9 @@ const activeTab = ref(0)
 // 根据路由更新 TabBar
 const tabRoutes = {
   '/m/merchant/home': 0,
-  '/m/merchant/orders': 1,
+  '/m/merchant/group-buy': 1,
   '/m/merchant/products': 2,
-  '/m/merchant/finance': 3,
-  '/m/merchant/group-buy': 4,
-  '/m/merchant/subscription': 5
+  '/m/merchant/orders': 3
 }
 
 watch(
@@ -56,6 +48,8 @@ watch(
   (path) => {
     if (tabRoutes[path] !== undefined) {
       activeTab.value = tabRoutes[path]
+    } else if (path.startsWith('/m/merchant/orders/')) {
+      activeTab.value = tabRoutes['/m/merchant/orders']
     }
   },
   { immediate: true }

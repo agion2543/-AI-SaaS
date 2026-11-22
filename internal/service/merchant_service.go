@@ -87,7 +87,7 @@ func (s *MerchantService) Register(req dto.MerchantRegisterRequest) (*model.Merc
 	if req.Password != req.ConfirmPassword {
 		return nil, nil, "", errors.New("\u4e24\u6b21\u8f93\u5165\u7684\u5bc6\u7801\u4e0d\u4e00\u81f4")
 	}
-	if err := s.consumeMerchantVerificationCode(req.ContactPhone, "merchant_register", req.SMSCode); err != nil {
+	if err := s.consumeMerchantVerificationCode(req.ContactPhone, "merchant_register", req.SMSCode, nil); err != nil {
 		return nil, nil, "", err
 	}
 
@@ -145,7 +145,7 @@ func (s *MerchantService) Register(req dto.MerchantRegisterRequest) (*model.Merc
 		return nil, nil, "", err
 	}
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
+	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return merchant, user, token, err
 }
 
@@ -180,7 +180,7 @@ func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, 
 		return nil, nil, "", errors.New("\u5546\u5bb6\u5df2\u88ab\u7981\u7528")
 	}
 
-	token, err := utils.GenerateToken(s.cfg.JWTSecret, user.ID, user.Phone, user.Role, user.MerchantID, 72)
+	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return merchant, user, token, err
 }
 
@@ -208,12 +208,12 @@ func (s *MerchantService) ResetPassword(req dto.MerchantResetPasswordRequest) er
 	if req.NewPassword != req.ConfirmPassword {
 		return errors.New("两次输入的新密码不一致")
 	}
-	if err := s.consumeMerchantVerificationCode(phone, "merchant_reset_password", req.SMSCode); err != nil {
-		return err
-	}
 	user, err := s.users.FindByPhone(phone)
 	if err != nil || user.Role != "merchant_admin" {
 		return errors.New("商家账号不存在")
+	}
+	if err := s.consumeMerchantVerificationCode(phone, "merchant_reset_password", req.SMSCode, &user.ID); err != nil {
+		return err
 	}
 	hash, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
@@ -1107,6 +1107,19 @@ func (s *MerchantService) ListPublicPromotions(storeID uint) ([]model.Promotion,
 		return nil, errors.New("\u95e8\u5e97\u4e0d\u5b58\u5728")
 	}
 	return s.promotions.ListActiveForStore(store.MerchantID, store.ID)
+}
+
+func (s *MerchantService) ListPublicGroupBuyLinks(storeID uint) ([]dto.PublicGroupBuyLink, error) {
+	links := make([]dto.PublicGroupBuyLink, 0)
+	err := s.db.Model(&model.MerchantGroupBuyLink{}).
+		Select("merchant_group_buy_links.channel, merchant_group_buy_links.code").
+		Joins("JOIN stores ON stores.id = merchant_group_buy_links.store_id AND stores.merchant_id = merchant_group_buy_links.merchant_id").
+		Joins("JOIN merchants ON merchants.id = stores.merchant_id").
+		Where("merchant_group_buy_links.store_id = ? AND merchant_group_buy_links.enabled = ? AND merchant_group_buy_links.review_status = ? AND merchant_group_buy_links.admin_suspended = ?", storeID, true, "approved", false).
+		Where("stores.status = ? AND merchants.status = ? AND COALESCE(merchants.subscription_status, '') <> ?", "active", "active", "paused").
+		Order("merchant_group_buy_links.channel ASC").
+		Find(&links).Error
+	return links, err
 }
 
 func (s *MerchantService) CreateCustomerLead(storeID uint, req dto.CreateCustomerLeadRequest) (*model.CustomerLead, error) {
@@ -2168,8 +2181,8 @@ func (s *MerchantService) issueMerchantVerificationCode(phone, scene string, use
 	return issueSMSVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, phone, scene, userID)
 }
 
-func (s *MerchantService) consumeMerchantVerificationCode(phone, scene, code string) error {
-	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code)
+func (s *MerchantService) consumeMerchantVerificationCode(phone, scene, code string, userID *uint) error {
+	return consumeSMSVerificationCode(s.db, s.cfg.JWTSecret, phone, scene, code, userID)
 }
 
 func ptrUint(v uint) *uint {

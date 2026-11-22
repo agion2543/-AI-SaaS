@@ -1767,6 +1767,9 @@ func (s *AdminService) ListCards() ([]model.CardCode, error) {
 }
 
 func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
+	if s == nil || s.cfg == nil {
+		return nil, errors.New("system config encryption is not configured")
+	}
 	list, err := s.systems.List()
 	if err != nil {
 		return nil, err
@@ -1775,9 +1778,10 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 	for idx := range list {
 		if list[idx].IsEncrypted && list[idx].ConfigValue != "" {
 			decrypted, decryptErr := utils.DecryptString(s.cfg.AESSecret, list[idx].ConfigValue)
-			if decryptErr == nil {
-				list[idx].ConfigValue = decrypted
+			if decryptErr != nil {
+				return nil, fmt.Errorf("decrypt encrypted system config %q: %w", list[idx].ConfigKey, decryptErr)
 			}
+			list[idx].ConfigValue = decrypted
 		}
 	}
 

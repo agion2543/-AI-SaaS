@@ -21,23 +21,35 @@
 7. 打开“运营健康中心”，优先处理危险项。
 8. 用测试商家跑通：商家入驻、商品上架、顾客下单、支付状态页、商家接单、小票打印、退款记录。
 
+`AES_SECRET` 必须恰好为 32 字节，程序将其 UTF-8 字节原样用作 AES-256 密钥；不要填入 64 个十六进制字符并期待程序解码。该密钥必须跨重启和升级保持不变：系统配置密文依赖当前密钥，直接更换会使已有密文无法读取。当前项目没有密钥环或自动轮换流程；轮换前必须另行设计并在隔离副本验证“旧密钥解密、用新密钥重加密、核验后切换”的迁移。密钥不匹配时，后台加密配置读取会失败并返回错误，不会把无法解密的密文当明文返回。
+
+`OTP_SEND_RATE_LIMIT_PER_IP_PER_MINUTE` 控制所有 `POST .../send-code` 路由共享的单 IP 发码上限，默认每分钟 10 次；它与手机号/邮箱自身的冷却和滚动小时限额叠加。该计数器是进程内固定窗口：同一实例上的各发码路由共享，多个 API 副本之间不共享；多副本部署不能把它视作全局 IP 配额，且客户端 IP 识别须与受信任代理配置一致。
+
+`TRUSTED_PROXIES` 默认为空，应用会忽略未经信任的 `X-Forwarded-For` / `X-Real-IP`，并以 TCP 对端地址作为客户端 IP；直接访问时这最安全。若 API 位于反向代理之后，未配置时限流和审计会看到代理地址，多个客户可能共享一个 IP 桶。只有在代理会正确维护转发头、且后端网络禁止绕过代理直连时，才将 `TRUSTED_PROXIES` 设置为该部署实际使用的代理 IP/CIDR 逗号列表；不存在可通用复制的网段，不要设置 `0.0.0.0/0` 或 `::/0`。多级代理应按实际链路配置可信代理范围。
+
 ## 3. 每次升级发布前
 
 1. 记录当前版本或提交号。
-2. 手动备份 MySQL，并确认备份文件大小正常。
-3. 明确本次是空库首次安装还是既有数据库升级；旧库升级前先满足本节的 schema 基线要求，不按文件名猜测 SQL 顺序。
-4. 本地执行 `go build -o saas-server.exe ./cmd/server`。
-5. 本地执行 `cd web && npm.cmd run build`。
-6. 确认 `.env.production`、私钥、数据库密码没有进入 GitHub。
-7. 在业务低峰期发布。
+2. 配置 `AGE_RECIPIENTS_FILE` 公钥清单及 `age`，再运行 Bash 或 Windows PowerShell 备份脚本；确认生成非空 `.sql.age`。数据库密码只通过受控环境变量提供，不要放在命令参数中；对应私钥 identity 必须另行安全保管并留有离线副本。
+3. 将 `scripts/backup-integrity.py` 的 SHA-256 清单保存到独立目录，创建后再运行 `verify`。清单可校验密文变化，但不是加密或签名，也不证明备份可恢复。
+4. 运行 `scripts/backup-retention.py --backup-dir <明确目录>` 预览 30 天以上的过期密文候选；只有逐项核对并确认后，才使用该预览令牌运行 `--apply --confirm-token`。工具不自动运行、不删明文 `.sql`，且会保留最后一份密文。
+5. 明确本次是空库首次安装还是既有数据库升级；旧库升级前先满足本节的 schema 基线要求，不按文件名猜测 SQL 顺序。
+6. 本地执行 `go build -o saas-server.exe ./cmd/server`。
+7. 本地执行 `cd web && npm.cmd run build`。
+8. 确认 `.env.production`、私钥、数据库密码没有进入 GitHub。
+9. 在业务低峰期发布。
+
+如需本地复跑 Bash 加密备份的合成恢复演练，在 Linux 非 root 环境执行 `bash scripts/test-backup-restore-age.sh`。它要求本地已有 `age`、`age-keygen`、MySQL 8.x（`mysqld`、`mysql`、`mysqladmin`）、`ss`、`ps` 及常见 Linux 命令行工具，不会联网、下载或安装工具；流程使用 mock `mysqldump`、合成 SQL、临时 age 密钥和仅 Unix socket 的临时 MySQL。该测试不读取现有/生产备份，也不证明生产密钥、异地副本或 Windows PowerShell 恢复可用，不能替代生产恢复验证。
 
 ## 4. 数据库迁移规则
 
-原有 `docker-compose.prod.yml` 首装路径仍会处理 `sql/init.sql` 并由应用执行 GORM `AutoMigrate`；该文件保持不变，避免改变不确定的既有安装行为。今后的空库 v1 首装请改用 `docker-compose.new-install.yml`，不要同时运行两条路径：它不挂载 `sql/init.sql`，先运行版本化 `schema-v1-candidate-20261113`，并将应用 `DB_AUTO_MIGRATE=false`。候选来源为 HEAD `15274c8` 加 2026-11-13 生成时的本地未提交模型改动，仅批准用于全新安装，不适用于历史库。
+`docker-compose.prod.yml` 保留现有 `mysql_prod_data` 卷键，但命名卷带项目名前缀；切换时沿用旧部署相同的 `-p` 项目名，若旧命令未指定 `-p`，则从同一项目目录执行。不再挂载 `sql/init.sql` 或历史 SQL；Compose 先等待 MySQL healthy，再运行 `/app/schema-migrate`，只有迁移成功后才启动 API，并显式关闭 `DB_AUTO_MIGRATE` 与 `INITIAL_DATA_SEED_ENABLED`。运行前确认 `.env.production` 的 `MYSQL_DSN` 指向此 Compose 的 `mysql:3306/saas_billing`，密码与 `MYSQL_APP_PASSWORD` 相同；独立 MySQL 使用 `docker-compose.managed.yml`。迁移器只接受真正空 schema 或精确受管 v1–v7；未知历史库、部分初始化或结构漂移会拒绝，backend 不会启动，也不会回退到 GORM `AutoMigrate`。全新安装请使用 `docker-compose.new-install.yml`，不要同时运行两条路径：它使用独立专用卷，从版本化 v1 基线安装，并保留初始管理员和默认套餐种子。v1 候选来源为 HEAD `15274c8` 加 2026-11-13 生成时的本地未提交模型改动，仅批准用于全新安装，不适用于历史库。
+
+若数据库已独立创建，可选择 `docker-compose.managed.yml` 版本化入口：它不带 MySQL 服务/数据卷，按 `.env.production` 的 `MYSQL_DSN` 连接目标库，并且只在迁移成功后启动 API。后端设置 `DB_AUTO_MIGRATE=false` 和 `INITIAL_DATA_SEED_ENABLED=false`，所以升级启动不会执行初始角色、管理员、会员套餐或商家计划种子写入；生产 Compose 和 managed Compose 都显式关闭这类启动写入。虽然该迁移器接受空 schema，但这条路径不初始化应用种子；真正新装且需要初始管理员、默认套餐/计划时，仍用上面的 `docker-compose.new-install.yml`。支持目标仅为真正空 schema（安装 v1→v8）或 checksum、账本及 schema 指纹精确匹配的受管 v1–v7（升级至 v8）；精确 v8 为 no-op。所有未知旧结构、部分迁移、额外对象或结构漂移均拒绝。切换前先备份、停止旧应用写入，并确认 DSN 指向预期数据库；不要让两套 Compose 同时连接同一库。
 
 历史 SQL 分散在 `sql/migrations/` 和 `migrations/`，当前没有可信旧版 schema 基线或迁移版本表，按文件名顺序并不可靠。**不要**把任一目录或两个目录当作可直接批量执行的升级清单，也不要对生产库/既有业务库手动重放 `sql/init.sql`。旧库升级目前未支持、未验证；先取得对应旧版本的 schema-only 基线，再在隔离副本上设计并验证变更。详细依赖、重跑与数据副作用风险见[数据库迁移现状与安全边界](database-migration-status.md)。
 
-迁移容器成功退出才会启动 API；迁移器拒绝未知非空库、旧版结构、部分初始化和任何版本/校验和/结构指纹不匹配，不会静默把旧库标记为 v1。默认生产 Compose 与 GORM AutoMigrate 仍保持不变。具体账本行为、来源和安全限制见[数据库迁移现状与安全边界](database-migration-status.md)。旧库升级仍未支持、未验证，不要按历史 SQL 文件名猜测执行顺序。
+迁移容器成功退出才会启动 API；迁移器拒绝未知非空库、旧版结构、部分初始化和任何版本/校验和/结构指纹不匹配，不会静默把旧库标记为 v1。生产 Compose 不再运行应用侧 GORM AutoMigrate；目标库若未精确受管，就必须保持停止并先完成基线识别和隔离副本验证。迁移 DDL 中途失败可能留下 `applying` 账本或部分对象；不要删账本或强行启动 API，应停止并从经验证备份恢复，或只在隔离副本排查。具体账本行为、来源和安全限制见[数据库迁移现状与安全边界](database-migration-status.md)。不要按历史 SQL 文件名猜测执行顺序。
 
 ### MySQL 专用集成测试
 
@@ -51,6 +63,8 @@ MYSQL_REFUND_IT_DSN='root@unix(/tmp/cue-refund-mysql-<id>/mysql.sock)/cue_refund
 ```
 
 该测试会为迁移顺序用例新建并清理一个同前缀临时数据库；不得指向业务库或外部主机。
+
+本地可用 `bash scripts/test-otp-mysql-concurrency.sh` 验证 OTP 首次发码与消费并发。脚本要求非 root 环境和本机 MySQL 8.x；会新建仅 Unix socket、禁用 TCP 的临时 MySQL，确认默认隔离级别为 `REPEATABLE-READ`，使用合成手机号/邮箱/验证码并清理本次临时目录。它不连接业务库，也不能证明多副本限流或生产数据库配置。
 
 ### 退款预留逾期与人工核对
 
@@ -95,7 +109,7 @@ MYSQL_REFUND_IT_DSN='root@unix(/tmp/cue-refund-mysql-<id>/mysql.sock)/cue_refund
 - `APP_ENV=production`。
 - `JWT_SECRET` 和 `AES_SECRET` 已替换为强随机值。
 - MySQL 不暴露公网，业务连接不使用 root。
-- 至少有一套可恢复的数据库备份。
+- 至少有一套已验证可恢复的数据库备份；本地合成演练不满足此项。
 - 至少一个真实商家可完成商品上架和接单。
 - 顾客端能完成扫码浏览、下单、支付状态查看和失败重试。
 - 小票包含订单号、取餐码、商品、客户备注、商家备注和金额。

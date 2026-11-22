@@ -904,6 +904,11 @@ func (ctl *MerchantController) PublicStore(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	groupBuyLinks, err := ctl.merchant.ListPublicGroupBuyLinks(storeID)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	utils.Success(c, gin.H{
 		"store": gin.H{
@@ -927,7 +932,8 @@ func (ctl *MerchantController) PublicStore(c *gin.Context) {
 			"contact_phone": store.Merchant.ContactPhone,
 			"status":        store.Merchant.Status,
 		},
-		"promotions": promotions,
+		"promotions":      promotions,
+		"group_buy_links": groupBuyLinks,
 	})
 }
 

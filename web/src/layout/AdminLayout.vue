@@ -101,6 +101,7 @@ const visibleSections = computed(() => {
       item('/admin/audit-logs', '操作审计', '审核、退款与配置变更留痕'),
       item('/admin/system', '系统配置', '安全检查、站点和策略配置')
     ]
+    if (isSuperAdmin) items.push(item('/admin/platform-costs', '平台成本核算', '确认订阅实收与成本状态'))
     if (isSuperAdmin) items.push(item('/admin/access', '账号与权限', '管理员账号、角色与权限组'))
     sections.push({ title: '系统管理', items })
   } else if (isSuperAdmin) {

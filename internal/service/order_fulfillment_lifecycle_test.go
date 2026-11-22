@@ -30,7 +30,7 @@ func TestPaymentCallbackDoesNotAcceptOrCompleteStoreOrder(t *testing.T) {
 	}
 }
 
-func TestDeferredSettlementOrderCanCompleteWithoutInferringPayment(t *testing.T) {
+func TestDeferredSettlementOrderCannotCompleteBeforePaymentConfirmation(t *testing.T) {
 	db := newOrderBoundaryTestDB(t)
 	merchant, store, product, _ := createSyntheticStoreOrder(t, db, "SYNTHETIC-LIFECYCLE-DEFER-001", "submitted", 2600, nil)
 	store.OrderMode = "submit_later"
@@ -53,15 +53,15 @@ func TestDeferredSettlementOrderCanCompleteWithoutInferringPayment(t *testing.T)
 	if err := service.AcceptMerchantOrder(merchant.ID, order.ID); err != nil {
 		t.Fatalf("deferred-settlement order should be accepted without upfront payment: %v", err)
 	}
-	if err := service.CompleteMerchantOrder(merchant.ID, order.ID); err != nil {
-		t.Fatalf("deferred-settlement order should be completable without upfront payment: %v", err)
+	if err := service.CompleteMerchantOrder(merchant.ID, order.ID); err == nil {
+		t.Fatal("unpaid deferred-settlement order must not be marked complete")
 	}
-	var completed model.Order
-	if err := db.First(&completed, order.ID).Error; err != nil {
+	var awaitingPayment model.Order
+	if err := db.First(&awaitingPayment, order.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if completed.Status != "completed" || completed.PaidAt != nil {
-		t.Fatalf("fulfillment completion must not imply payment: status=%q paid_at=%v", completed.Status, completed.PaidAt)
+	if awaitingPayment.Status != "accepted" || awaitingPayment.PaidAt != nil {
+		t.Fatalf("rejected completion must preserve unpaid accepted state: status=%q paid_at=%v", awaitingPayment.Status, awaitingPayment.PaidAt)
 	}
 	var paymentCount int64
 	if err := db.Model(&model.PaymentRecord{}).Where("order_id = ?", order.ID).Count(&paymentCount).Error; err != nil {
@@ -112,6 +112,71 @@ func TestDeferredSettlementOrderCanCompleteWithoutInferringPayment(t *testing.T)
 	}
 	if settlementCount != 0 {
 		t.Fatalf("unpaid orders must not create settlement records, got %d", settlementCount)
+	}
+}
+
+func TestDeferredSettlementCanCompleteAfterMerchantConfirmsPayment(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	merchant, store, product, _ := createSyntheticStoreOrder(t, db, "SYNTHETIC-LIFECYCLE-CONFIRMED-001", "submitted", 2600, nil)
+	store.OrderMode = "submit_later"
+	if err := db.Save(&store).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewOrderService(db)
+	order, err := service.CreateCustomerStoreOrder(dto.CreateCustomerOrderRequest{
+		StoreID: store.ID,
+		Items:   []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("create synthetic deferred-settlement order: %v", err)
+	}
+	if err := service.AcceptMerchantOrder(merchant.ID, order.ID); err != nil {
+		t.Fatalf("accept deferred-settlement order: %v", err)
+	}
+	if err := service.CompleteMerchantOrder(merchant.ID, order.ID); err == nil {
+		t.Fatal("accepted but unpaid order must remain incomplete")
+	}
+
+	confirmed, err := service.ConfirmMerchantOrderPayment(merchant.ID, order.ID)
+	if err != nil {
+		t.Fatalf("merchant-confirmed receipt on accepted order: %v", err)
+	}
+	if confirmed.Status != "accepted" || confirmed.PaidAt == nil || confirmed.PaymentChannel != "merchant_qr" {
+		t.Fatalf("merchant confirmation must record receipt without regressing fulfillment: status=%q paid_at=%v channel=%q", confirmed.Status, confirmed.PaidAt, confirmed.PaymentChannel)
+	}
+	if err := service.CompleteMerchantOrder(merchant.ID, order.ID); err != nil {
+		t.Fatalf("confirmed order should be completable: %v", err)
+	}
+	var completed model.Order
+	if err := db.First(&completed, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "completed" || completed.PaidAt == nil || !orderHasAction(completed.OperationLogs, "merchant_payment_confirmed") {
+		t.Fatalf("completed order must retain confirmed-payment evidence: status=%q paid_at=%v logs=%s", completed.Status, completed.PaidAt, completed.OperationLogs)
+	}
+}
+
+func TestCustomerPaymentReportDoesNotSetConfirmedReceipt(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	_, store, product, _ := createSyntheticStoreOrder(t, db, "SYNTHETIC-LIFECYCLE-REPORT-001", "submitted", 1200, nil)
+	store.OrderMode = "submit_later"
+	if err := db.Save(&store).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewOrderService(db)
+	order, err := service.CreateCustomerStoreOrder(dto.CreateCustomerOrderRequest{
+		StoreID: store.ID,
+		Items:   []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("create synthetic deferred-settlement order: %v", err)
+	}
+	marked, err := service.MarkCustomerStoreOrderPaid(order.OrderNo, order.CustomerAccessToken)
+	if err != nil {
+		t.Fatalf("mark customer-reported payment: %v", err)
+	}
+	if marked.Status != "payment_confirming" || marked.PaidAt != nil || orderPaymentSatisfied(*marked) {
+		t.Fatalf("customer report must remain distinct from confirmed receipt: status=%q paid_at=%v", marked.Status, marked.PaidAt)
 	}
 }
 

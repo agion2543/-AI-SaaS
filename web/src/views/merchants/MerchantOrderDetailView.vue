@@ -39,9 +39,9 @@
         </div>
       </div>
       <div class="brief-actions">
-        <el-button v-if="order.status === 'payment_confirming'" type="warning" @click="confirmPayment">确认收款</el-button>
+        <el-button v-if="canConfirmReceipt" type="warning" @click="confirmPayment">已核对到账，确认收款</el-button>
         <el-button v-if="['submitted', 'received'].includes(order.status)" type="primary" @click="acceptAndPrint">接单并打印</el-button>
-        <el-button v-if="['accepted', 'preparing'].includes(order.status)" type="success" @click="complete">完成订单</el-button>
+        <el-button v-if="['accepted', 'preparing'].includes(order.status) && canCompleteOrder" type="success" @click="complete">完成订单</el-button>
         <el-button v-if="canRefund(order)" type="warning" plain @click="openRefund">记录退款</el-button>
         <el-button plain @click="printOrder">打印小票</el-button>
       </div>
@@ -207,7 +207,8 @@
             <span>推荐主动作</span>
             <el-button v-if="order.status === 'payment_confirming'" type="warning" size="large" @click="confirmPayment">已核对到账，确认收款</el-button>
             <el-button v-else-if="['submitted', 'received'].includes(order.status)" type="primary" size="large" @click="acceptAndPrint">接单并打印小票</el-button>
-            <el-button v-else-if="['accepted', 'preparing'].includes(order.status)" type="success" size="large" @click="complete">履约完成，标记完成</el-button>
+            <el-button v-else-if="['accepted', 'preparing'].includes(order.status) && canConfirmReceipt" type="warning" size="large" @click="confirmPayment">先核对到账，再完成履约</el-button>
+            <el-button v-else-if="['accepted', 'preparing'].includes(order.status) && canCompleteOrder" type="success" size="large" @click="complete">履约完成，标记完成</el-button>
             <strong v-else>{{ primaryActionFallback }}</strong>
           </div>
           <div class="secondary-action-group">
@@ -420,6 +421,7 @@ import {
 import DataPanel from '../../components/design/DataPanel.vue'
 import PageHero from '../../components/design/PageHero.vue'
 import { printStoreOrderReceipt } from '../../utils/orderReceipt'
+import { merchantPaymentTimelineStage } from '../../utils/merchantPaymentTimeline'
 import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '../../utils/refundIdempotency'
 
 const route = useRoute()
@@ -436,6 +438,8 @@ const refundForm = reactive({ full: true, amount_yuan: 0, reason: '' })
 const receivableAmount = computed(() => Number(order.value.total_amount ?? order.value.amount ?? 0))
 const paidAmount = computed(() => Number(order.value.paid_amount ?? order.value.total_amount ?? order.value.amount ?? 0))
 const isConfirmedPaid = computed(() => Boolean(order.value.paid_at) && paidAmount.value > 0)
+const canCompleteOrder = computed(() => receivableAmount.value <= 0 || isConfirmedPaid.value)
+const canConfirmReceipt = computed(() => receivableAmount.value > 0 && !isConfirmedPaid.value && ['payment_confirming', 'submitted', 'preparing', 'accepted'].includes(order.value.status))
 const refundableAmount = computed(() => {
   if (!isConfirmedPaid.value) return 0
   return Math.max(paidAmount.value - Number(order.value.refunded_amount || 0), 0)
@@ -493,8 +497,11 @@ const paymentState = computed(() => {
   if (order.value.status === 'payment_confirming') {
     return { title: '待确认收款', hint: '顾客已标记付款，请核对商家收款账户到账后再确认。' }
   }
-  if (['submitted', 'preparing'].includes(order.value.status)) {
-    return { title: '稍后结算', hint: '该订单已提交给商家，当前不按已付款处理。' }
+  if (order.value.status === 'submitted') {
+    return { title: '稍后结算', hint: '该订单已提交给商家，当前不按已付款处理；标记履约完成前仍须确认实际到账。' }
+  }
+  if (['preparing', 'accepted'].includes(order.value.status) && !isConfirmedPaid.value) {
+    return { title: '待确认收款', hint: '顾客付款声明或返回订单页不代表到账；请核对实际收款后确认，系统才允许标记履约完成。' }
   }
   if (isConfirmedPaid.value) {
     return { title: '付款已确认', hint: '付款成功后订单直接进入商家处理，不需要商家审核付款。' }
@@ -559,6 +566,13 @@ const nextStep = computed(() => {
     }
   }
   if (order.value.status === 'accepted' || order.value.status === 'preparing') {
+    if (receivableAmount.value > 0 && !isConfirmedPaid.value) {
+      return {
+        label: '完成前需确认收款',
+        title: '先核对到账，再完成履约',
+        text: '订单可以继续处理，但只有确认实际收到款项后才能标记完成。顾客点击“我已付款”或从微信返回订单页都不等于到账。'
+      }
+    }
     return {
       label: '建议动作',
       title: '完成履约后标记完成',
@@ -655,10 +669,10 @@ const paymentChecklistText = computed(() => {
   if (receivableAmount.value <= 0) return '无需付款，可按门店流程处理订单'
   if (order.value.status === 'payment_confirming') return '顾客已标记付款：等待商家确认到账'
   if (isConfirmedPaid.value) return '付款已确认，无需商家二次审核付款'
-  if (['submitted', 'preparing'].includes(order.value.status)) return '先提交后结算订单：可先处理，后续再完成结算'
+  if (['submitted', 'preparing', 'accepted'].includes(order.value.status)) return '先处理后结算订单：标记履约完成前，商家须核对并确认实际到账'
   return '等待顾客完成支付后再履约'
 })
-const paymentChecklistDone = computed(() => receivableAmount.value <= 0 || isConfirmedPaid.value || ['submitted', 'preparing'].includes(order.value.status))
+const paymentChecklistDone = computed(() => receivableAmount.value <= 0 || isConfirmedPaid.value)
 const primaryActionFallback = computed(() => {
   if (['pending', 'failed'].includes(order.value.status)) return '等待顾客完成支付，商家暂不处理履约'
   if (order.value.status === 'completed') return '订单已完成，可继续核对售后或打印小票'
@@ -668,7 +682,7 @@ const primaryActionFallback = computed(() => {
 
 const timeline = computed(() => [
   { status: 'pending', title: '订单创建', description: '顾客已提交订单，等待支付。', time: formatTime(order.value.created_at) },
-  { status: 'received', title: ['submitted', 'preparing', 'payment_confirming'].includes(order.value.status) ? '订单提交' : '支付完成', description: order.value.status === 'payment_confirming' ? '顾客已标记付款，等待商家确认收款。' : ['submitted', 'preparing'].includes(order.value.status) ? '订单已提交给商家，后续再结算。' : '支付成功后直接进入商家处理，无需商家审核付款。', time: formatTime(order.value.paid_at || logTime('submitted') || logTime('customer_paid') || logTime('paid') || order.value.updated_at) },
+  { status: 'received', ...merchantPaymentTimelineStage(order.value.status, isConfirmedPaid.value), time: formatTime(order.value.paid_at || logTime('submitted') || logTime('customer_paid') || logTime('paid') || order.value.created_at) },
   { status: 'accepted', title: order.value.status === 'payment_confirming' ? '确认收款' : order.value.status === 'preparing' ? '商家处理中' : '商家接单', description: order.value.status === 'payment_confirming' ? '请核对到账后点击确认收款。' : order.value.status === 'preparing' ? '门店已开启自动接单，订单进入处理流程。' : '商家接单后开始处理或履约。', time: logTime('accepted') || logTime('auto_accepted') || logTime('merchant_payment_confirmed') || (['accepted', 'preparing', 'completed'].includes(order.value.status) ? formatTime(order.value.updated_at) : '-') },
   { status: 'completed', title: order.value.status === 'closed' ? '订单关闭' : '订单完成', description: order.value.status === 'closed' ? '订单已关闭或取消。' : '服务或商品已完成交付。', time: logTime(order.value.status === 'closed' ? 'closed' : 'completed') || (order.value.status === 'completed' ? formatTime(order.value.updated_at) : '-') }
 ])
@@ -823,7 +837,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => 
 }[char]))
 const confirmPaymentHtml = () => `
   <div class="confirm-payment-card">
-    <p>请先打开商家的支付宝/微信收款账户，确认该笔款项已经到账，再点击确认。</p>
+    <p>请先打开商家的收款账户核对实际到账。顾客点击“我已付款”或从微信返回订单页都不代表收款成功；只有核实到账后再确认。</p>
     <div><span>应收金额</span><strong>${escapeHtml(formatMoney(order.value.total_amount ?? order.value.amount ?? 0))}</strong></div>
     <div><span>订单号</span><strong>${escapeHtml(order.value.order_no || '-')}</strong></div>
     <div><span>核对码</span><strong>${escapeHtml(pickupCode.value)}</strong></div>
