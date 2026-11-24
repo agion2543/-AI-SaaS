@@ -499,7 +499,7 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 	}
 
 	// Repeating the server confirmation is idempotent in the current service:
-	// no second payment row, no second stock deduction, and no coupon re-use.
+	// no second payment row, no legacy stock change, and no coupon re-use.
 	if _, err := orderService.ConfirmMerchantOrderPayment(merchant.ID, stored.ID); err != nil {
 		t.Fatalf("repeat synthetic server confirmation: %v", err)
 	}
@@ -513,8 +513,8 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 	if err := db.First(&currentProduct, product.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if currentProduct.Stock == nil || *currentProduct.Stock != 9 {
-		t.Fatalf("repeated confirmation must not deduct stock twice, stock=%v", currentProduct.Stock)
+	if currentProduct.Stock == nil || *currentProduct.Stock != 10 {
+		t.Fatalf("payment confirmation must preserve legacy stock, stock=%v", currentProduct.Stock)
 	}
 
 	orderCountBeforeInvalidCoupons := countCustomerStoreOrders(t, db)

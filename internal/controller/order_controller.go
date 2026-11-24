@@ -776,6 +776,8 @@ type merchantOrderResponseDTO struct {
 	OrderType       string                        `json:"order_type"`
 	SettlementID    *uint                         `json:"settlement_id,omitempty"`
 	StoreID         *uint                         `json:"store_id,omitempty"`
+	TableNo         int                           `json:"table_no"`
+	TableLabel      string                        `json:"table_label,omitempty"`
 	Store           *merchantOrderStoreSummaryDTO `json:"store,omitempty"`
 	CustomerPhone   string                        `json:"customer_phone"`
 	Amount          int64                         `json:"amount"`
@@ -807,6 +809,8 @@ func serializeMerchantOrderSummary(order *model.Order) merchantOrderResponseDTO 
 		OrderType:       order.OrderType,
 		SettlementID:    order.SettlementID,
 		StoreID:         order.StoreID,
+		TableNo:         order.TableNo,
+		TableLabel:      order.TableLabel,
 		CustomerPhone:   utils.MaskPhone(order.CustomerPhone),
 		Amount:          order.Amount,
 		TotalAmount:     order.TotalAmount,
@@ -947,6 +951,8 @@ func serializeOrder(order *model.Order) gin.H {
 		"merchant_id":                          order.MerchantID,
 		"settlement_id":                        order.SettlementID,
 		"store_id":                             order.StoreID,
+		"table_no":                             order.TableNo,
+		"table_label":                          order.TableLabel,
 		"customer_phone":                       order.CustomerPhone,
 		"package_id":                           order.PackageID,
 		"merchant_plan_id":                     order.MerchantPlanID,
@@ -969,6 +975,9 @@ func serializeOrder(order *model.Order) gin.H {
 		"reviewed_at":                          order.ReviewedAt,
 		"operation_logs":                       serializeOrderOperationLogs(order.OperationLogs),
 		"status":                               order.Status,
+		"expired_unpaid":                       orderIsExpiredUnpaid(order),
+		"payment_review_required":              orderRequiresManualPaymentReview(order),
+		"payment_review_status":                paymentReviewStatus(order),
 		"payment_channel":                      order.PaymentChannel,
 		"auto_renew":                           order.AutoRenew,
 		"paid_at":                              order.PaidAt,
@@ -985,6 +994,37 @@ func serializeOrder(order *model.Order) gin.H {
 		"manual_review":                        order.ManualReview,
 		"manual_review_audit":                  order.ManualReviewAudit,
 	}
+}
+
+func orderRequiresManualPaymentReview(order *model.Order) bool {
+	if order == nil {
+		return false
+	}
+	for _, entry := range parseOrderLogs(order.OperationLogs) {
+		if entry.Action == "late_payment_exception" {
+			return true
+		}
+	}
+	return false
+}
+
+func orderIsExpiredUnpaid(order *model.Order) bool {
+	if order == nil || order.Status != "closed" || order.PaidAt != nil {
+		return false
+	}
+	for _, entry := range parseOrderLogs(order.OperationLogs) {
+		if entry.Action == "checkout_expired" {
+			return true
+		}
+	}
+	return false
+}
+
+func paymentReviewStatus(order *model.Order) string {
+	if orderRequiresManualPaymentReview(order) {
+		return model.PaymentStatusPaidReviewRequired
+	}
+	return ""
 }
 
 func serializePublicCustomerOrder(order *model.Order) gin.H {
@@ -1026,36 +1066,42 @@ func serializePublicCustomerOrder(order *model.Order) gin.H {
 		}
 	}
 	return gin.H{
-		"id":         order.ID,
-		"order_no":   order.OrderNo,
-		"order_type": order.OrderType,
-		"store_id":   order.StoreID,
+		"id":          order.ID,
+		"order_no":    order.OrderNo,
+		"order_type":  order.OrderType,
+		"store_id":    order.StoreID,
+		"table_no":    order.TableNo,
+		"table_label": order.TableLabel,
 		"store_name": func() string {
 			if order.Store != nil {
 				return order.Store.Name
 			}
 			return ""
 		}(),
-		"store":           store,
-		"amount":          order.TotalAmount,
-		"subtotal_amount": order.Amount,
-		"total_amount":    order.TotalAmount,
-		"discount_amount": order.DiscountAmount,
-		"refunded_amount": order.RefundedAmount,
-		"refund_status":   order.RefundStatus,
-		"items":           items,
-		"customer_note":   order.CustomerNote,
-		"remark":          order.CustomerNote,
-		"customer_rating": order.CustomerRating,
-		"customer_review": order.CustomerReview,
-		"reviewed_at":     order.ReviewedAt,
-		"operation_logs":  logs,
-		"status":          order.Status,
-		"payment_channel": order.PaymentChannel,
-		"pay_type":        order.PaymentChannel,
-		"paid_at":         order.PaidAt,
-		"created_at":      order.CreatedAt,
-		"updated_at":      order.UpdatedAt,
+		"store":                   store,
+		"amount":                  order.TotalAmount,
+		"subtotal_amount":         order.Amount,
+		"total_amount":            order.TotalAmount,
+		"discount_amount":         order.DiscountAmount,
+		"refunded_amount":         order.RefundedAmount,
+		"refund_status":           order.RefundStatus,
+		"items":                   items,
+		"customer_note":           order.CustomerNote,
+		"remark":                  order.CustomerNote,
+		"customer_rating":         order.CustomerRating,
+		"customer_review":         order.CustomerReview,
+		"reviewed_at":             order.ReviewedAt,
+		"operation_logs":          logs,
+		"status":                  order.Status,
+		"expire_time":             service.CheckoutOrderExpireTime(order),
+		"expired_unpaid":          orderIsExpiredUnpaid(order),
+		"payment_review_required": orderRequiresManualPaymentReview(order),
+		"payment_review_status":   paymentReviewStatus(order),
+		"payment_channel":         order.PaymentChannel,
+		"pay_type":                order.PaymentChannel,
+		"paid_at":                 order.PaidAt,
+		"created_at":              order.CreatedAt,
+		"updated_at":              order.UpdatedAt,
 	}
 }
 

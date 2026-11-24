@@ -7,7 +7,11 @@
       fixed
       placeholder
       @click-left="router.back()"
-    />
+    >
+      <template #right>
+        <van-button size="small" plain type="primary" @click="router.push('/m/merchant/finance')">订单汇总</van-button>
+      </template>
+    </van-nav-bar>
 
     <div v-if="!canWrite" class="readonly-banner" role="status">
       订阅已到期：订单仅可只读查看，处理订单和退款的操作已关闭。
@@ -27,12 +31,14 @@
     <!-- 订单列表 -->
     <van-list
       v-model:loading="loading"
+      v-model:error="orderLoadError"
       :finished="finished"
       finished-text="没有更多了"
+      error-text="加载失败，点击重试"
       @load="loadOrders"
     >
-      <div v-if="visibleOrders.length === 0 && !loading" class="empty-orders">
-        <van-empty description="暂无订单" />
+      <div v-if="visibleOrders.length === 0 && !loading && (finished || orderLoadError)" class="empty-orders">
+        <van-empty :description="emptyOrdersDescription" />
       </div>
 
       <div v-for="order in visibleOrders" :key="order.id" class="order-item">
@@ -41,6 +47,7 @@
             <template #title>
               <div class="order-header">
                 <span class="order-no">订单号: {{ order.order_no }}</span>
+                <van-tag v-if="Number(order.table_no) > 0" type="warning">{{ order.table_label || `${order.table_no}号桌` }}</van-tag>
                 <van-tag :type="getOrderType(order.status)">
                   {{ getStatusText(order.status) }}
                 </van-tag>
@@ -57,14 +64,17 @@
                 <div v-for="item in order.items" :key="item.id" class="product-item">
                   <span>{{ item.product_name || item.name }}</span>
                   <span>x{{ item.quantity }}</span>
-                  <span>¥{{ formatPrice(item.price) }}</span>
+                  <span>{{ formatCents(item.price) }}</span>
                 </div>
               </div>
             </template>
             <template #value>
               <div class="order-price">
                 <span>应付</span>
-                <span class="price">¥{{ formatPrice(order.total_amount ?? order.amount ?? 0) }}</span>
+                <span class="price">{{ formatCents(order.total_amount ?? order.amount ?? 0) }}</span>
+                <span v-if="Number(order.refunded_amount || 0) > 0" class="refund-price">
+                  退款 {{ formatCents(order.refunded_amount) }}
+                </span>
               </div>
             </template>
           </van-cell>
@@ -159,7 +169,7 @@
       @confirm="confirmRefund"
     >
       <div class="refund-content">
-        <p>订单金额: ¥{{ formatPrice(currentOrder?.total_amount ?? currentOrder?.amount ?? 0) }}</p>
+        <p>订单金额: {{ formatCents(currentOrder?.total_amount ?? currentOrder?.amount ?? 0) }}</p>
         <van-radio-group v-model="refundAction">
           <van-radio name="approve">同意退款</van-radio>
           <van-radio name="reject">拒绝退款</van-radio>
@@ -177,7 +187,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast } from 'vant'
 import {
@@ -188,18 +198,22 @@ import {
   closeMerchantOrder,
   refundMerchantOrder
 } from '@/api/modules'
+import { formatCents } from '@/utils/productPricing'
 import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '@/utils/refundIdempotency'
 import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
+import { createMerchantOrderRequestCoordinator } from '@/utils/merchantOrderRequestCoordinator'
 
 const router = useRouter()
 const canWrite = computed(() => mobileSubscriptionActions(cachedMobileMerchantSubscriptionState()).canWriteBusiness)
 
 const loading = ref(false)
+const orderLoadError = ref(false)
 const finished = ref(false)
 const orders = ref([])
 const activeTab = ref('all')
 const page = ref(1)
 const pageSize = 10
+const orderRequestCoordinator = createMerchantOrderRequestCoordinator()
 
 const rejectDialogVisible = ref(false)
 const currentRejectOrderId = ref(null)
@@ -220,12 +234,20 @@ const visibleOrders = computed(() => orders.value.filter((order) => {
   if (activeTab.value === 'refunded') return Number(order.refunded_amount || 0) > 0
   return true
 }))
+const emptyOrdersDescription = computed(() => {
+  if (orderLoadError.value) return '订单加载失败'
+  const tabLabels = {
+    pending_payment: '待付款',
+    pending: '待处理',
+    paid: '进行中',
+    completed: '已完成',
+    refunded: '已退款'
+  }
+  const selectedTab = tabLabels[activeTab.value]
+  return selectedTab ? `暂无${selectedTab}订单` : '暂无订单'
+})
 const isConfirmedPaid = (order) => Boolean(order?.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0
 const canRefund = (order) => Boolean(order?.can_refund)
-
-function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
-}
 
 function formatTime(time) {
   if (!time) return '-'
@@ -268,34 +290,47 @@ function getStatusText(status) {
 }
 
 async function loadOrders() {
+  const { request, isNew } = orderRequestCoordinator.begin(page.value)
+  if (!isNew) return request.promise
+
   loading.value = true
-  try {
-    const res = await fetchMerchantOrders({
-      status: '',
-      page: page.value,
-      page_size: pageSize
-    })
+  orderLoadError.value = false
+  request.promise = (async () => {
+    try {
+      const res = await fetchMerchantOrders({
+        status: '',
+        page: request.page,
+        page_size: pageSize
+      })
+      if (!orderRequestCoordinator.isCurrent(request)) return
 
-    const data = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []))
+      const data = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []))
 
-    if (page.value === 1) {
-      orders.value = data
-    } else {
-      orders.value.push(...data)
+      if (request.page === 1) {
+        orders.value = data
+      } else {
+        orders.value.push(...data)
+      }
+
+      // 页码来自本次请求快照，旧请求不能推进或覆盖新列表的页码。
+      if (data.length < pageSize) {
+        finished.value = true
+      } else {
+        page.value = request.page + 1
+      }
+    } catch (e) {
+      if (orderRequestCoordinator.isCurrent(request)) {
+        console.error('加载订单失败:', e)
+        orderLoadError.value = true
+        showToast('加载失败')
+      }
+    } finally {
+      if (orderRequestCoordinator.finish(request)) {
+        loading.value = false
+      }
     }
-
-    // 如果数据少于一页，说明没有更多了
-    if (data.length < pageSize) {
-      finished.value = true
-    } else {
-      page.value++
-    }
-  } catch (e) {
-    console.error('加载订单失败:', e)
-    showToast('加载失败')
-  } finally {
-    loading.value = false
-  }
+  })()
+  return request.promise
 }
 
 function viewOrderDetail(id) {
@@ -395,20 +430,26 @@ async function confirmRefund() {
 }
 
 function refreshOrders() {
+  orderRequestCoordinator.invalidate()
   page.value = 1
   finished.value = false
   orders.value = []
+  loading.value = false
+  orderLoadError.value = false
   loadOrders()
 }
 
 // 监听 Tab 切换
-import { watch } from 'vue'
 watch(activeTab, () => {
   refreshOrders()
 })
 
 onMounted(() => {
   loadOrders()
+})
+
+onBeforeUnmount(() => {
+  orderRequestCoordinator.invalidate()
 })
 </script>
 
@@ -466,6 +507,7 @@ onMounted(() => {
   font-weight: bold;
   color: #ee0a24;
 }
+.order-price .refund-price { font-size: 12px; color: #ee0a24; }
 
 .order-remark {
   display: flex;

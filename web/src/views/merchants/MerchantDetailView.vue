@@ -528,7 +528,7 @@ const riskTasks = computed(() => {
     tasks.push({ title: '核对退款异常', desc: '查看退款记录里的原因、操作方和关联订单，必要时暂停该商家营销活动。', tone: 'danger' })
   }
   if (cancelRate.value >= 0.15) {
-    tasks.push({ title: '检查履约能力', desc: '重点看商品库存、营业时间、商家接单速度，减少顾客下单后关闭。', tone: 'warning' })
+    tasks.push({ title: '检查履约能力', desc: '重点看商品上下架状态、营业时间和商家接单速度，减少顾客下单后关闭。', tone: 'warning' })
   }
   if (waitingAcceptCount.value > 0) {
     tasks.push({ title: '催办待接单', desc: '顾客已完成支付，建议联系商家尽快接单或主动退款。', tone: 'warning' })

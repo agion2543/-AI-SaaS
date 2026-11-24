@@ -81,13 +81,16 @@ func TestMySQLPlatformExpenseReversalsV8Migration(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(amount_cents),0) FROM platform_expense_reversals WHERE expense_id=?`, expenseID).Scan(&rows, &reversalTotal); err != nil || rows != 2 || reversalTotal != 12345 {
 			t.Fatalf("failed constraint/update/delete changed synthetic v8 partial reversal ledger: rows=%d total=%d err=%v", rows, reversalTotal, err)
 		}
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
-			t.Fatalf("v8 exact rerun: result=%q err=%v", result, err)
+		if result, err := ApplyPlatformExpenseReversalsV8(ctx, db); err != nil || result != ResultAlready {
+			t.Fatalf("v8 exact rerun before v9: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("latest v10 upgrade from exact v8: result=%q err=%v", result, err)
 		}
 		assertLatestInventory(t, db)
 	})
 
-	t.Run("fresh install reaches v8 with no reversal seed rows", func(t *testing.T) {
+	t.Run("fresh install reaches v10 with no reversal seed rows", func(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("fresh latest install: result=%q err=%v", result, err)

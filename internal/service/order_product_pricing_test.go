@@ -64,6 +64,46 @@ func TestStoreOrderPricingKeepsLegacySinglePriceAndIgnoresForgedClientPrice(t *t
 	}
 }
 
+func TestStoreOrdersIgnoreLegacyStockButStillRequireProductToBeActive(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	_, store, product := createSyntheticPricingProduct(t, db, 250, 1, nil)
+	if err := db.Model(&model.StoreProduct{}).Where("id = ?", product.ID).Update("stock", 0).Error; err != nil {
+		t.Fatalf("set synthetic legacy stock to zero: %v", err)
+	}
+	service := NewOrderService(db)
+
+	order := createSyntheticPricingOrder(t, db, store, dto.CustomerOrderItemRequest{ProductID: product.ID, Quantity: 2})
+	if order.Amount != 500 {
+		t.Fatalf("active product with zero legacy stock should remain orderable, amount=%d", order.Amount)
+	}
+	appended, err := service.AppendCustomerStoreOrderItems(order.OrderNo, order.CustomerAccessToken, dto.AppendCustomerOrderItemsRequest{
+		Items: []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("active product with zero legacy stock should remain appendable: %v", err)
+	}
+	if appended.Amount != 750 {
+		t.Fatalf("appending a zero-stock active product should update order amount, amount=%d", appended.Amount)
+	}
+	var unchanged model.StoreProduct
+	if err := db.First(&unchanged, product.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Stock == nil || *unchanged.Stock != 0 {
+		t.Fatalf("ordering and appending must preserve the legacy stock value, stock=%v", unchanged.Stock)
+	}
+
+	if err := db.Model(&model.StoreProduct{}).Where("id = ?", product.ID).Update("status", "inactive").Error; err != nil {
+		t.Fatalf("take synthetic product off shelf: %v", err)
+	}
+	if _, err := service.CreateCustomerStoreOrder(dto.CreateCustomerOrderRequest{
+		StoreID: store.ID,
+		Items:   []dto.CustomerOrderItemRequest{{ProductID: product.ID, Quantity: 1}},
+	}); err == nil {
+		t.Fatal("off-shelf product must remain unavailable for new orders")
+	}
+}
+
 func TestStoreOrderTierPricingUsesMerchantThresholdsAtExactBoundaries(t *testing.T) {
 	db := newOrderBoundaryTestDB(t)
 	_, store, product := createSyntheticPricingProduct(t, db, 100, 1, []model.ProductPriceTier{

@@ -2,7 +2,7 @@
   <div class="merchant-ai">
     <!-- 顶部导航 -->
     <van-nav-bar
-      title="AI 运营助手（未接入）"
+      title="商擎 AI 运营助手（未接入）"
       left-arrow
       fixed
       placeholder

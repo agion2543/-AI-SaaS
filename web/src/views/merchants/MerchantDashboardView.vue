@@ -25,7 +25,7 @@
         <div>
           <span>CASHIER TODAY</span>
           <strong>今日收银口径</strong>
-          <p>首页与财务对账页使用同一套口径：未付款不进收入，已标记付款先核对，确认收款后才算实收。</p>
+          <p>订单数和金额仅基于接口返回的最新 100 笔扫码订单；超过 100 笔时可能漏计，不代表全量日合计。未付款不进收入，已标记付款先核对，确认收款后才算实收。</p>
         </div>
         <el-button plain type="primary" @click="router.push('/merchant/finance')">看财务对账</el-button>
       </div>
@@ -206,7 +206,7 @@
     </section>
 
     <section class="main-grid">
-      <DataPanel eyebrow="PRODUCTS" title="热销商品" description="优先保证热销商品图片、库存和套餐搭配，适合放在扫码页更靠前的位置。">
+      <DataPanel eyebrow="PRODUCTS" title="热销商品" description="优先完善热销商品图片、上下架状态和套餐搭配，适合放在扫码页更靠前的位置。">
         <template #actions>
           <el-button text type="primary" @click="router.push('/merchant/stores')">管理商品</el-button>
         </template>
@@ -285,6 +285,7 @@ import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
 import { useMerchantAuthStore } from '../../stores/merchantAuth'
+import { successfulRefundsOnDate } from '../../utils/merchantDashboardMoney'
 import { exportRowsToXlsx } from '../../utils/xlsx'
 
 const router = useRouter()
@@ -329,7 +330,7 @@ const paidTodayOrders = computed(() => orders.value.filter((item) => (
 )))
 const todayPendingPayOrders = computed(() => todayOrders.value.filter((item) => ['pending', 'failed'].includes(item.status)))
 const todayUnconfirmedOrders = computed(() => todayOrders.value.filter((item) => item.status === 'payment_confirming'))
-const todayRefunds = computed(() => refunds.value.filter((item) => String(item.created_at || '').slice(0, 10) === today.value))
+const todayRefunds = computed(() => successfulRefundsOnDate(refunds.value, today.value))
 const todayReceivableAmount = computed(() => todayOrders.value.reduce((sum, item) => sum + orderAmount(item), 0))
 const todayPendingPayAmount = computed(() => todayPendingPayOrders.value.reduce((sum, item) => sum + orderAmount(item), 0))
 const todayUnconfirmedAmount = computed(() => todayUnconfirmedOrders.value.reduce((sum, item) => sum + orderAmount(item), 0))

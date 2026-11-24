@@ -36,7 +36,7 @@
           title="手机号"
           :value="merchantInfo.phone || '未绑定'"
           is-link
-          @click="showEditPhone = true"
+          @click="showNotImplemented('手机号修改')"
         />
       </van-cell-group>
     </div>
@@ -53,7 +53,7 @@
           title="绑定邮箱"
           is-link
           :value="merchantInfo.email || '未绑定'"
-          @click="showBindEmail = true"
+          @click="showNotImplemented('邮箱绑定')"
         />
       </van-cell-group>
     </div>
@@ -64,34 +64,22 @@
         <van-cell
           title="微信支付配置"
           is-link
-          @click="showPaymentConfig = true"
+          @click="showNotImplemented('微信支付配置')"
         />
         <van-cell
           title="支付二维码"
           is-link
-          @click="showQRCode = true"
+          @click="showNotImplemented('支付二维码管理')"
         />
       </van-cell-group>
     </div>
 
     <!-- 通知设置 -->
     <div class="section">
-      <van-cell-group inset title="通知设置">
-        <van-cell title="订单提醒">
-          <template #value>
-            <van-switch v-model="notifications.order" size="20" />
-          </template>
-        </van-cell>
-        <van-cell title="退款提醒">
-          <template #value>
-            <van-switch v-model="notifications.refund" size="20" />
-          </template>
-        </van-cell>
-        <van-cell title="系统通知">
-          <template #value>
-            <van-switch v-model="notifications.system" size="20" />
-          </template>
-        </van-cell>
+      <van-cell-group inset title="通知设置（暂未接入）">
+        <van-cell title="订单提醒" value="暂未接入" />
+        <van-cell title="退款提醒" value="暂未接入" />
+        <van-cell title="系统通知" value="暂未接入" />
       </van-cell-group>
     </div>
 
@@ -106,13 +94,13 @@
         <van-cell
           title="帮助与反馈"
           is-link
-          @click="showHelp = true"
+          @click="showNotImplemented('帮助与反馈')"
         />
         <van-cell
           title="清除缓存"
           is-link
           :value="cacheSize"
-          @click="clearCache"
+          @click="showNotImplemented('清除缓存')"
         />
       </van-cell-group>
     </div>
@@ -142,38 +130,6 @@
       @confirm="saveName"
     >
       <van-field v-model="editName" placeholder="请输入商家名称" />
-    </van-dialog>
-
-    <!-- 修改手机号弹窗 -->
-    <van-dialog
-      v-model:show="showEditPhone"
-      title="修改手机号"
-      show-cancel-button
-      @confirm="savePhone"
-    >
-      <div style="padding: 16px;">
-        <van-field
-          v-model="editPhone"
-          placeholder="请输入新手机号"
-          style="margin-bottom: 12px;"
-        />
-        <van-field
-          v-model="editCode"
-          center
-          placeholder="请输入验证码"
-        >
-          <template #button>
-            <van-button
-              size="small"
-              type="primary"
-              :loading="sendingCode"
-              @click="sendCode"
-            >
-              {{ codeText }}
-            </van-button>
-          </template>
-        </van-field>
-      </div>
     </van-dialog>
 
     <!-- 修改密码弹窗 -->
@@ -230,7 +186,7 @@
             <li>智能点单系统</li>
             <li>订单管理</li>
             <li>营销工具</li>
-            <li>AI 运营助手</li>
+            <li>商擎 AI 运营助手</li>
             <li>数据分析</li>
           </ul>
         </div>
@@ -240,7 +196,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
 import { fetchMerchantInfo, updateMerchantInfo, changeMerchantPassword } from '@/api/modules'
@@ -249,24 +205,11 @@ const router = useRouter()
 
 const merchantInfo = ref({})
 const defaultAvatar = 'https://via.placeholder.com/48x48?text=商家'
-const cacheSize = ref('2.5 MB')
-
-const notifications = ref({
-  order: true,
-  refund: true,
-  system: true
-})
+const cacheSize = '未统计'
 
 // 修改名称
 const showEditName = ref(false)
 const editName = ref('')
-
-// 修改手机号
-const showEditPhone = ref(false)
-const editPhone = ref('')
-const editCode = ref('')
-const sendingCode = ref(false)
-const codeCountdown = ref(0)
 
 // 修改密码
 const showChangePassword = ref(false)
@@ -278,17 +221,6 @@ const passwordForm = ref({
 
 // 其他
 const showAbout = ref(false)
-const showHelp = ref(false)
-const showPaymentConfig = ref(false)
-const showQRCode = ref(false)
-const showBindEmail = ref(false)
-
-const codeText = computed(() => {
-  if (codeCountdown.value > 0) {
-    return `${codeCountdown.value}s`
-  }
-  return '发送验证码'
-})
 
 async function loadMerchantInfo() {
   try {
@@ -300,7 +232,11 @@ async function loadMerchantInfo() {
 }
 
 function changeAvatar() {
-  showToast('头像上传功能开发中')
+  showNotImplemented('头像上传')
+}
+
+function showNotImplemented(feature) {
+  showToast(`${feature}功能暂未接入，未执行任何操作`)
 }
 
 function saveName() {
@@ -318,54 +254,6 @@ async function doSaveName() {
     merchantInfo.value.name = editName.value
   } catch (e) {
     showFailToast(e.response?.data?.message || '修改失败')
-  }
-}
-
-function savePhone() {
-  if (!editPhone.value || !/^1[3-9]\d{9}$/.test(editPhone.value)) {
-    showToast('请输入正确的手机号')
-    return
-  }
-  if (!editCode.value) {
-    showToast('请输入验证码')
-    return
-  }
-  doSavePhone()
-}
-
-async function doSavePhone() {
-  try {
-    await updateMerchantInfo({ phone: editPhone.value })
-    showSuccessToast('修改成功')
-    merchantInfo.value.phone = editPhone.value
-    editPhone.value = ''
-    editCode.value = ''
-  } catch (e) {
-    showFailToast(e.response?.data?.message || '修改失败')
-  }
-}
-
-async function sendCode() {
-  if (!editPhone.value || !/^1[3-9]\d{9}$/.test(editPhone.value)) {
-    showToast('请输入正确的手机号')
-    return
-  }
-
-  sendingCode.value = true
-  try {
-    await new Promise(resolve => setTimeout(resolve, 500))
-    showSuccessToast('验证码已发送')
-    codeCountdown.value = 60
-    const timer = setInterval(() => {
-      codeCountdown.value--
-      if (codeCountdown.value <= 0) {
-        clearInterval(timer)
-      }
-    }, 1000)
-  } catch (e) {
-    showFailToast('发送失败')
-  } finally {
-    sendingCode.value = false
   }
 }
 
@@ -400,18 +288,6 @@ async function doChangePassword() {
   } catch (e) {
     showFailToast(e.response?.data?.message || '修改失败')
   }
-}
-
-function clearCache() {
-  showDialog({
-    title: '清除缓存',
-    message: '确定要清除缓存吗？',
-    showCancelButton: true,
-  }).then(() => {
-    // 模拟清除缓存
-    cacheSize.value = '0 KB'
-    showSuccessToast('缓存已清除')
-  }).catch(() => {})
 }
 
 function logout() {

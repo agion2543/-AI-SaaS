@@ -399,8 +399,8 @@ func TestMySQLConcurrentDistinctPaymentTransactionsRecordOneDuplicateWithoutSeco
 	if current.PaidAt == nil || current.Status != "received" || !orderHasAction(current.OperationLogs, "duplicate_payment_exception") {
 		t.Fatalf("order fulfillment/duplicate exception mismatch: status=%q paid_at=%v logs=%s", current.Status, current.PaidAt, current.OperationLogs)
 	}
-	if updatedProduct.Stock == nil || *updatedProduct.Stock != 8 {
-		t.Fatalf("duplicate transaction must not fulfill/deduct stock twice; stock=%v", updatedProduct.Stock)
+	if updatedProduct.Stock == nil || *updatedProduct.Stock != 10 {
+		t.Fatalf("payment callbacks must preserve legacy stock; stock=%v", updatedProduct.Stock)
 	}
 	observed := sqlCapture.String()
 	if !strings.Contains(strings.ToUpper(observed), "FOR UPDATE") {
@@ -414,7 +414,7 @@ func TestMySQLConcurrentDistinctPaymentTransactionsRecordOneDuplicateWithoutSeco
 		}
 	}
 	t.Logf("MySQL/InnoDB lock verified; generated query: %s", lockQuery)
-	t.Logf("payment_records statuses=%v; order.status=%s; stock=%d", paymentStatuses, current.Status, *updatedProduct.Stock)
+	t.Logf("payment_records statuses=%v; order.status=%s; legacy_stock=%d", paymentStatuses, current.Status, *updatedProduct.Stock)
 }
 
 func TestMySQLConcurrentPartialRefundsNeverReserveMoreThanRemaining(t *testing.T) {

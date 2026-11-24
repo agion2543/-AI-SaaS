@@ -30,6 +30,20 @@
         </div>
       </header>
 
+      <div v-if="showCheckoutCountdown" class="checkout-countdown" role="status">
+        <div>
+          <strong>剩余支付时间</strong>
+          <p>请在倒计时结束前完成支付；页面回跳本身不代表付款成功。</p>
+        </div>
+        <el-countdown :value="checkoutExpireAt" format="HH:mm:ss" @finish="onCheckoutCountdownFinish" />
+      </div>
+      <div v-else-if="order.expired_unpaid" class="checkout-countdown-expired" role="status">
+        支付期限已过，订单已关闭且未付款；如仍需购买，请重新下单。
+      </div>
+      <div v-else-if="checkoutDeadlineReached && isUnpaidCheckout" class="checkout-countdown-expired" role="status">
+        支付时间已到，正在同步服务器订单状态；请勿再次发起付款。
+      </div>
+
       <section v-if="loading && !order.order_no" class="panel">
         <el-skeleton :rows="8" animated />
       </section>
@@ -43,6 +57,7 @@
             </div>
             <el-button text type="primary" @click="copyOrderNo">复制安全链接</el-button>
           </div>
+          <div v-if="isTableOrder" class="table-order-label">桌位：{{ order.table_label || `${order.table_no}号桌` }}</div>
           <div class="next-action">
             <span>{{ nextAction.label }}</span>
             <strong>{{ nextAction.title }}</strong>
@@ -52,6 +67,11 @@
             <span>PAYMENT DONE</span>
             <strong>付款已确认，不需要商家审核付款</strong>
             <p>你只需要等待门店接单、处理或履约；到店核对时出示本页订单号和订单核对码即可。</p>
+          </div>
+          <div v-if="paymentReviewRequired" class="payment-review-notice">
+            <span>PAYMENT RECEIVED · MANUAL REVIEW</span>
+            <strong>已付款，暂不自动履约，等待人工核对</strong>
+            <p>支付渠道已确认付款成功，但此笔付款到达时订单已不能自动继续支付或履约。款项已保留记录；人工核对前订单不会自动进入履约、开通订阅权益或退款。请勿重复付款。</p>
           </div>
           <div v-if="payReturnNotice" class="pay-return-notice">
             <span>PAYMENT CHECK</span>
@@ -232,8 +252,10 @@
             </el-button>
           </div>
           <div v-else-if="showMerchantQrMissing" class="merchant-pay-missing">
-            <strong>门店暂未启用线上收款码</strong>
-            <p>当前订单已提交。请按门店现场指引付款，或联系门店确认付款方式。</p>
+            <strong>{{ isTableOrder ? '桌位订单收款方式待核实' : '门店暂未启用线上收款码' }}</strong>
+            <p v-if="isTableOrder && !isPendingMerchantQrTableOrder">此桌位订单未绑定商家收款码，请先联系门店核实；请勿使用平台支付入口。</p>
+            <p v-else-if="isTableOrder">商家收款码暂不可用，请联系门店核实；订单未确认收款前请勿重复付款。</p>
+            <p v-else>当前订单已提交。请按门店现场指引付款，或联系门店确认付款方式。</p>
             <el-button plain :disabled="!contactPhone" @click="callStore">联系门店</el-button>
           </div>
         </section>
@@ -400,6 +422,7 @@ import {
   reviewCustomerOrder
 } from '../../api/modules'
 import { captureCustomerOrderAccessToken, customerOrderAccessLink, getCustomerOrderAccessToken, stripCustomerOrderAccessTokenFromUrl } from '../../utils/customerOrderAccess'
+import { checkoutExpiryTimestamp, isCheckoutDeadlineReached, isUnpaidCheckoutOrder } from '../../utils/customerOrderExpiry.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -414,6 +437,7 @@ const paymentConfig = ref({})
 const brokenMerchantQrs = ref({})
 const lastLoadedAt = ref('')
 const previousStatus = ref('')
+const checkoutExpiredLocally = ref(false)
 const payMode = ref('page')
 const qrDialogVisible = ref(false)
 const qrImageUrl = ref('')
@@ -427,11 +451,18 @@ const isPayReturn = computed(() => route.query.from === 'pay_return')
 const status = computed(() => order.value.status || 'pending')
 const items = computed(() => Array.isArray(order.value.items) ? order.value.items : [])
 const storeId = computed(() => order.value.store_id || order.value.store?.id)
+const isTableOrder = computed(() => Number(order.value.table_no || 0) > 0)
+const isPendingMerchantQrTableOrder = computed(() => isTableOrder.value && order.value.payment_channel === 'merchant_qr' && status.value === 'pending')
 const contactPhone = computed(() => order.value.store?.contact_phone || order.value.merchant?.contact_phone || '')
 const isRefunded = computed(() => Number(order.value.refunded_amount || 0) > 0)
 const receivableAmount = computed(() => Number(order.value.total_amount ?? order.value.amount ?? 0))
+const isUnpaidCheckout = computed(() => isUnpaidCheckoutOrder(order.value))
+const checkoutExpireAt = computed(() => checkoutExpiryTimestamp(order.value))
+const checkoutDeadlineReached = computed(() => isUnpaidCheckout.value && (checkoutExpiredLocally.value || isCheckoutDeadlineReached(order.value)))
+const showCheckoutCountdown = computed(() => isUnpaidCheckout.value && checkoutExpireAt.value !== null && !checkoutDeadlineReached.value)
 const paidAmount = computed(() => Number(order.value.paid_amount ?? order.value.total_amount ?? order.value.amount ?? 0))
 const isConfirmedPaid = computed(() => Boolean(order.value.paid_at) && paidAmount.value > 0)
+const paymentReviewRequired = computed(() => Boolean(order.value.payment_review_required))
 const confirmedNetAmount = computed(() => {
   if (!isConfirmedPaid.value) return 0
   return Math.max(paidAmount.value - Number(order.value.refunded_amount || 0), 0)
@@ -441,15 +472,27 @@ const pickupCode = computed(() => {
   const text = String(order.value.order_no || '')
   return text ? text.slice(-4).toUpperCase() : '-'
 })
-const canRetry = computed(() => ['pending', 'failed'].includes(status.value) && receivableAmount.value > 0)
+const canRetry = computed(() => isUnpaidCheckout.value && !checkoutDeadlineReached.value && !isTableOrder.value)
 const canAppendItems = computed(() => ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && Boolean(storeId.value))
 const canRequestShare = computed(() => ['received', 'accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at))
 const canSharePoster = computed(() => canRequestShare.value && Boolean(shareCampaign.value.share_code))
 const canReview = computed(() => ['accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at))
-const showPaidNotice = computed(() => ['received', 'accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at) && !isRefunded.value)
+const showPaidNotice = computed(() => !paymentReviewRequired.value && ['received', 'accepted', 'completed'].includes(status.value) && Boolean(order.value.paid_at) && !isRefunded.value)
 const paymentSummary = computed(() => {
+  if (paymentReviewRequired.value) {
+    return { title: '已付款，待人工核对', hint: '暂不自动履约；请勿重复付款' }
+  }
+  if (checkoutDeadlineReached.value) {
+    return { title: '支付时间已到', hint: '正在同步订单关闭状态；请勿重复付款' }
+  }
+  if (order.value.expired_unpaid) {
+    return { title: '已过期 · 未付款', hint: '订单已关闭，如仍需购买请重新下单' }
+  }
   if (receivableAmount.value <= 0) {
     return { title: '无需付款', hint: '本单应付金额为 0 元，不计入实收' }
+  }
+  if (isPendingMerchantQrTableOrder.value) {
+    return { title: '待支付 · 商家收款码', hint: '款项直接进入商家账户，门店核对到账后才确认收款' }
   }
   if (['pending', 'failed'].includes(status.value)) {
     return { title: '待支付', hint: '未付款，不计入已收款' }
@@ -471,8 +514,12 @@ const merchantPayOptions = computed(() => {
   if (paymentConfig.value.wechat_qr_code) options.push({ key: 'wechat', label: '微信收款码', value: paymentConfig.value.wechat_qr_code })
   return options
 })
-const canUseMerchantQr = computed(() => receivableAmount.value > 0 && ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length > 0)
-const showMerchantQrMissing = computed(() => receivableAmount.value > 0 && ['submitted', 'preparing'].includes(status.value) && !order.value.paid_at && merchantPayOptions.value.length === 0)
+const canUseMerchantQr = computed(() => receivableAmount.value > 0 && (['submitted', 'preparing'].includes(status.value) || isPendingMerchantQrTableOrder.value) && !order.value.paid_at && merchantPayOptions.value.length > 0)
+const showMerchantQrMissing = computed(() => {
+  if (receivableAmount.value <= 0 || order.value.paid_at) return false
+  if (['submitted', 'preparing'].includes(status.value)) return merchantPayOptions.value.length === 0
+  return isTableOrder.value && status.value === 'pending' && (!isPendingMerchantQrTableOrder.value || merchantPayOptions.value.length === 0)
+})
 const payReturnNotice = computed(() => {
   if (!isPayReturn.value || !canRetry.value) return null
   if (status.value === 'failed') {
@@ -483,10 +530,28 @@ const payReturnNotice = computed(() => {
   }
   return {
     title: '正在同步付款结果',
-    tip: '如果你已经完成付款，请稍等几秒，页面会自动进入商家处理；不需要商家审核付款。'
+    tip: '支付页回跳本身不代表付款成功。只有收款渠道确认到账后，订单状态才会更新；请稍等片刻，不要重复付款。'
   }
 })
 const actionFocus = computed(() => {
+  if (paymentReviewRequired.value) {
+    return {
+      label: 'MANUAL PAYMENT REVIEW',
+      title: '付款已记录，订单暂不履约',
+      text: '请保留订单号并等待人工核对；核对前不要重复付款，也不会自动退款。',
+      primary: 'store',
+      tone: 'warning'
+    }
+  }
+  if (checkoutDeadlineReached.value && isUnpaidCheckout.value) {
+    return {
+      label: 'PAYMENT WINDOW EXPIRED',
+      title: '支付时间已到，正在同步订单关闭状态',
+      text: '请勿再次发起付款；本页正在刷新服务器订单状态。',
+      primary: 'refresh',
+      tone: 'warning'
+    }
+  }
   if (canRetry.value) {
     return {
       label: status.value === 'failed' ? 'PAYMENT RETRY' : 'PAYMENT',
@@ -557,18 +622,41 @@ const statusMeta = computed(() => {
   if (isRefunded.value && order.value.refund_status === 'full') {
     return { title: '订单已退款', tip: '退款已记录，请以实际支付渠道到账为准。', icon: '退', tag: 'warning' }
   }
+  if (paymentReviewRequired.value) {
+    return { title: '已付款，待人工核对', tip: '渠道付款已记录；人工核对前不会自动进入履约或开通订阅权益。', icon: '核', tag: 'warning' }
+  }
+  if (checkoutDeadlineReached.value && isUnpaidCheckout.value) {
+    return { title: '支付时间已到', tip: '正在同步服务器订单关闭状态；请勿再次发起付款。', icon: '×', tag: 'info' }
+  }
+  if (order.value.expired_unpaid) {
+    return { title: '订单已过期', tip: '超过30分钟未确认付款，订单已关闭且尚未确认收款；如仍需购买请重新下单。', icon: '×', tag: 'info' }
+  }
   return statusMap[status.value] || statusMap.received
 })
 const statusLabel = computed(() => statusMeta.value.title)
 const statusTagType = computed(() => statusMeta.value.tag)
 const heroClass = computed(() => ({
-  waiting: status.value === 'pending',
-  failed: status.value === 'failed' || status.value === 'closed',
+  waiting: (status.value === 'pending' && !checkoutDeadlineReached.value) || paymentReviewRequired.value,
+  failed: ((status.value === 'failed' || status.value === 'closed') && !paymentReviewRequired.value) || checkoutDeadlineReached.value,
   done: status.value === 'completed',
   refunded: isRefunded.value
 }))
 
 const nextAction = computed(() => {
+  if (paymentReviewRequired.value) {
+    return {
+      label: '当前进度',
+      title: '渠道已确认付款，等待人工核对',
+      tip: '订单未自动进入履约；核对前不会自动处理退款或启用权益。请不要重复付款。'
+    }
+  }
+  if (checkoutDeadlineReached.value && isUnpaidCheckout.value) {
+    return {
+      label: '当前进度',
+      title: '支付时间已到，正在同步订单关闭状态',
+      tip: '请勿再次发起付款；刷新后会显示服务器确认的订单结果。'
+    }
+  }
   if (canRetry.value) {
     return {
       label: '下一步',
@@ -732,6 +820,11 @@ const load = async () => {
   }
 }
 
+const onCheckoutCountdownFinish = () => {
+  checkoutExpiredLocally.value = true
+  load()
+}
+
 const markPaid = async () => {
   if (!orderNo.value || !canUseMerchantQr.value || markingPaid.value) return
   try {
@@ -763,7 +856,7 @@ const markPaid = async () => {
 }
 
 const retryPay = async () => {
-  if (!orderNo.value) return
+  if (!orderNo.value || !canRetry.value || retrying.value) return
   retrying.value = true
   try {
     const res = await retryCustomerOrderPayment(orderNo.value, { pay_mode: payMode.value })
@@ -926,6 +1019,44 @@ onBeforeUnmount(stopPolling)
   gap: 12px;
 }
 
+.checkout-countdown,
+.checkout-countdown-expired {
+  padding: 14px 18px;
+  border: 1px solid #f3dfb8;
+  border-radius: 18px;
+  background: #fff7e8;
+  color: #8a5b13;
+}
+
+.checkout-countdown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.checkout-countdown strong {
+  display: block;
+  font-size: 15px;
+}
+
+.checkout-countdown p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.checkout-countdown :deep(.el-countdown__number) {
+  color: #b45309;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.checkout-countdown-expired {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 .status-hero,
 .panel {
   border: 1px solid rgba(203, 213, 225, 0.74);
@@ -1064,6 +1195,34 @@ onBeforeUnmount(stopPolling)
   border: 1px solid #fde68a;
   border-radius: 20px;
   background: linear-gradient(135deg, #fffbeb, #ffffff);
+}
+
+.payment-review-notice {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid #fcd34d;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #fffbeb, #fff7ed);
+}
+
+.payment-review-notice span {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.payment-review-notice strong {
+  display: block;
+  margin-top: 5px;
+  color: #78350f;
+  font-size: 16px;
+}
+
+.payment-review-notice p {
+  margin: 6px 0 0;
+  color: #92400e;
+  line-height: 1.55;
 }
 
 .next-action span {

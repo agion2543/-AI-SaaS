@@ -425,12 +425,13 @@ func removeSchemaName(values []string, remove string) []string {
 	return filtered
 }
 
-func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, v6 wholesaleRetailV6Definition, v7 platformExpensesV7Definition, v8 platformExpenseReversalsV8Definition) error {
+func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, v6 wholesaleRetailV6Definition, v7 platformExpensesV7Definition, v8 platformExpenseReversalsV8Definition, futureTables ...string) error {
 	v7Tables := []string{"platform_expenses"}
 	v7Triggers := []string{"trg_platform_expenses_no_delete", "trg_platform_expenses_no_update"}
 	v8Tables := []string{"platform_expense_reversals"}
 	v8Triggers := []string{"trg_platform_expense_reversals_no_delete", "trg_platform_expense_reversals_no_update"}
-	allNewTables := append(append([]string(nil), v7Tables...), v8Tables...)
+	v7ExcludedTables := append(append([]string(nil), v8Tables...), futureTables...)
+	allNewTables := append(append(append([]string(nil), v7Tables...), v8Tables...), futureTables...)
 	allNewTriggers := append(append([]string(nil), v7Triggers...), v8Triggers...)
 	if err := verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx, conn, base, v2, v3, v4, v5, allNewTables, allNewTriggers); err != nil {
 		return err
@@ -441,7 +442,7 @@ func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context,
 		excludedTriggers         []string
 	}{
 		{version: v6.version, checksum: v6.checksum, label: "v6", excludedTables: allNewTables, excludedTriggers: allNewTriggers},
-		{version: v7.version, checksum: v7.checksum, label: "v7", excludedTables: v8Tables, excludedTriggers: v8Triggers},
+		{version: v7.version, checksum: v7.checksum, label: "v7", excludedTables: v7ExcludedTables, excludedTriggers: v8Triggers},
 	} {
 		actual, err := schemaFingerprintExcluding(ctx, conn, check.excludedTables, check.excludedTriggers)
 		if err != nil {

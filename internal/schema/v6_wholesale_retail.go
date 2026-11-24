@@ -271,7 +271,7 @@ func verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx context.Context, c
 		}
 		var stored string
 		if err := conn.QueryRowContext(ctx, "SELECT schema_fingerprint FROM "+ledgerTable+" WHERE version=? AND checksum=? AND state='applied'", check.version, check.checksum).Scan(&stored); err != nil {
-			return fmt.Errorf("read immutable %s fingerprint: %w", check.label, err)
+			return fmt.Errorf("read immutable %s ledger entry fingerprint: %w", check.label, err)
 		}
 		if stored != actual {
 			return fmt.Errorf("refusing %s schema drift: stored fingerprint %s, actual %s", check.label, stored, actual)

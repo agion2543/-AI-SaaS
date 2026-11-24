@@ -79,6 +79,9 @@ func serializeAdminOrderFinanceSummary(order model.Order) gin.H {
 		"refunded_amount": order.RefundedAmount, "refund_status": order.RefundStatus,
 		"status": order.Status, "payment_channel": order.PaymentChannel,
 		"paid_at": order.PaidAt, "transaction_no": order.TransactionNo,
+		"expired_unpaid":          orderIsExpiredUnpaid(&order),
+		"payment_review_required": orderRequiresManualPaymentReview(&order),
+		"payment_review_status":   paymentReviewStatus(&order),
 	}
 	if order.Merchant != nil {
 		row["merchant"] = gin.H{"id": order.Merchant.ID, "name": order.Merchant.Name}

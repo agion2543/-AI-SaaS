@@ -110,6 +110,12 @@ export const printStoreOrderReceipt = (order, existingPrintWindow) => {
             font-weight: 900;
             letter-spacing: 0.12em;
           }
+          .table-number {
+            margin: 8px auto 4px;
+            color: #92400e;
+            font-size: 20px;
+            font-weight: 900;
+          }
           .divider { border-top: 1px dashed #9ca3af; margin: 8px 0; }
           .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
           .row span:first-child { color: #6b7280; white-space: nowrap; }
@@ -158,6 +164,7 @@ export const printStoreOrderReceipt = (order, existingPrintWindow) => {
             <h1>${escapeHtml(current.store?.name || '门店小票')}</h1>
             <div class="subtitle">出餐小票 / 取餐核对</div>
             <div class="pickup">${escapeHtml(pickupCode(current))}</div>
+            ${Number(current.table_no) > 0 ? `<div class="table-number">桌号 ${escapeHtml(current.table_label || `${current.table_no}号桌`)}</div>` : ''}
           </div>
 
           <div class="divider"></div>

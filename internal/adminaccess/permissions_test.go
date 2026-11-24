@@ -53,6 +53,8 @@ func TestAdminRouteMapIsExplicitByMethodAndPattern(t *testing.T) {
 		{method: "GET", path: "/api/v1/admin/customers/export", want: []string{PermissionReadOnly, PermissionOperations}, wantAll: []string{PermissionExportCustomerOrder}, wantOK: true},
 		{method: "GET", path: "/api/admin/orders/export", want: []string{PermissionFinance}, wantAll: []string{PermissionExportCustomerOrder}, wantOK: true},
 		{method: "GET", path: "/api/v1/admin/audit-logs", want: []string{PermissionSystem}, wantOK: true},
+		{method: "GET", path: "/api/v1/admin/maintenance-notice", want: []string{PermissionSystem}, wantOK: true},
+		{method: "PUT", path: "/api/admin/maintenance-notice", want: []string{PermissionSystem}, wantOK: true},
 		{method: "GET", path: "/api/v1/admin/access/admins", wantOK: true, super: true},
 		{method: "GET", path: "/api/v1/admin/auth/me", wantOK: true, session: true},
 		{method: "POST", path: "/api/v1/admin/merchants/:id/status", wantOK: false},

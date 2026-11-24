@@ -59,11 +59,11 @@
           <div class="store-info">
             <div class="store-stats">
               <div class="stat-item">
-                <span class="stat-value">{{ store.today_orders || 0 }}</span>
+                <span class="stat-value">{{ store.today_orders ?? '暂无统计' }}</span>
                 <span class="stat-label">今日订单</span>
               </div>
               <div class="stat-item">
-                <span class="stat-value">¥{{ store.today_revenue || '0.00' }}</span>
+                <span class="stat-value">{{ store.today_revenue == null ? '暂无统计' : `¥${store.today_revenue}` }}</span>
                 <span class="stat-label">今日营收</span>
               </div>
             </div>

@@ -41,8 +41,6 @@
           <van-stepper
             v-model="item.count"
             :min="getMinimumOrderQuantity(item)"
-            :max="item.stock"
-            :disabled="item.stock !== null && item.stock !== undefined && item.stock < getMinimumOrderQuantity(item)"
             @change="(val) => updateCount(item, val)"
           />
         </template>
@@ -177,20 +175,13 @@ const originalPrice = computed(() => {
   return cartItems.value.reduce((sum, item) => sum + getProductUnitPrice(item, item.count) * item.count, 0)
 })
 
-const isMOQInvalid = (item) => {
-  const minimum = getMinimumOrderQuantity(item)
-  const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
-  return item.count < minimum || (stock !== undefined && stock < minimum)
-}
+const isMOQInvalid = (item) => item.count < getMinimumOrderQuantity(item)
 const hasMOQViolation = computed(() => cartItems.value.some(isMOQInvalid))
 const minimumOrderIssue = computed(() => {
   const invalid = cartItems.value.find(isMOQInvalid)
   if (!invalid) return ''
   const minimum = getMinimumOrderQuantity(invalid)
-  const stock = invalid.stock === undefined || invalid.stock === null ? undefined : Number(invalid.stock)
-  return stock !== undefined && stock < minimum
-    ? `${invalid.name} 库存不足最低起订量，请移除该商品后再提交`
-    : `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}`
+  return `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}`
 })
 
 const discountAmount = computed(() => {
@@ -244,8 +235,7 @@ function loadCart() {
 function updateCount(item, value) {
   if (value > 0) {
     const minimum = getMinimumOrderQuantity(item)
-    const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
-    if (value < minimum && (stock === undefined || stock >= minimum)) {
+    if (value < minimum) {
       cart.value[item.id] = minimum
       showToast(`最低起订量为 ${minimum}${item.sales_unit || '件'}`)
     } else {

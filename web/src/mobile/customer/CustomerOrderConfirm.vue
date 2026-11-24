@@ -15,6 +15,9 @@
     </div>
 
     <template v-else>
+      <van-notice-bar v-if="isTableMode" :type="tableLocked ? 'warning' : 'primary'" :scrollable="false">
+        {{ tableLabel || `${tableNo}号桌` }} · {{ tableLocked ? '该桌已有顾客结算，不能重复提交' : '共享购物车结算' }}
+      </van-notice-bar>
       <!-- 订单商品 -->
       <van-cell-group inset title="订单信息">
         <van-cell title="订单门店">
@@ -92,7 +95,7 @@
         label="订单金额"
         button-text="提交订单"
         :loading="submitting"
-        :disabled="submitting || hasMOQViolation"
+        :disabled="submitting || hasMOQViolation || (isTableMode && tableLocked)"
         @submit="submitOrder"
       />
     </template>
@@ -118,7 +121,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast } from 'vant'
-import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder, recoverCustomerStoreOrder } from '@/api/modules'
+import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder, recoverCustomerStoreOrder, fetchCustomerTableSession, checkoutCustomerTableSession } from '@/api/modules'
 import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
 import { clearCustomerOrderAttempt, getOrCreateCustomerOrderAttempt, readCustomerOrderAttempt } from '@/utils/customerOrderAttempt'
 import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isDevMockPaymentFlagEnabled, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
@@ -127,6 +130,12 @@ import { describeProductPricing, getMinimumOrderQuantity, getProductUnitPrice } 
 const route = useRoute()
 const router = useRouter()
 const storeId = route.query.storeId
+const tableSessionId = Number(route.query.session_id || 0)
+const tableNo = Number(route.query.table_no || 0)
+const tableCode = String(route.query.table_code || '')
+const isTableMode = Number.isInteger(tableSessionId) && tableSessionId > 0 && Number.isInteger(tableNo) && tableNo > 0 && /^[a-zA-Z0-9_-]{32,64}$/.test(tableCode)
+const tableLocked = ref(false)
+const tableLabel = ref("")
 const pendingCheckoutAttempt = ref(null)
 
 // 状态
@@ -167,20 +176,13 @@ const totalCount = computed(() => {
 const originalPrice = computed(() => {
   return cartItems.value.reduce((sum, item) => sum + getProductUnitPrice(item, item.count) * item.count, 0)
 })
-const isMOQInvalid = (item) => {
-  const minimum = getMinimumOrderQuantity(item)
-  const stock = item.stock === undefined || item.stock === null ? undefined : Number(item.stock)
-  return item.count < minimum || (stock !== undefined && stock < minimum)
-}
+const isMOQInvalid = (item) => item.count < getMinimumOrderQuantity(item)
 const hasMOQViolation = computed(() => cartItems.value.some(isMOQInvalid))
 const minimumOrderIssue = computed(() => {
   const invalid = cartItems.value.find(isMOQInvalid)
   if (!invalid) return ''
   const minimum = getMinimumOrderQuantity(invalid)
-  const stock = invalid.stock === undefined || invalid.stock === null ? undefined : Number(invalid.stock)
-  return stock !== undefined && stock < minimum
-    ? `${invalid.name} 库存不足最低起订量，请返回购物车调整`
-    : `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}，请返回购物车调整`
+  return `${invalid.name} 最低起订量为 ${minimum}${invalid.sales_unit || '件'}，请返回购物车调整`
 })
 
 const discountAmount = computed(() => {
@@ -221,10 +223,9 @@ function orderItemLabel(item) {
 
 function loadCart() {
   try {
+    if (isTableMode) return
     const saved = localStorage.getItem(`cart_${storeId}`)
-    if (saved) {
-      cart.value = JSON.parse(saved)
-    }
+    if (saved) { cart.value = JSON.parse(saved) }
   } catch (e) {
     cart.value = {}
   }
@@ -268,7 +269,7 @@ async function recoverPendingOrder(strict = false) {
     clearCustomerOrderAttempt(attempt)
     pendingCheckoutAttempt.value = null
     cart.value = {}
-    localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
+    if (!isTableMode) localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
     showSuccessToast('已找回刚才提交的订单')
     router.replace({
       path: `/m/order/${encodeURIComponent(orderNo)}`,
@@ -287,7 +288,7 @@ async function submitOrder() {
   if (submitting.value) return
   submitting.value = true
   try {
-    if (await recoverPendingOrder(true)) return
+    if (!isTableMode && await recoverPendingOrder(true)) return
     if (hasMOQViolation.value) {
       showToast(minimumOrderIssue.value)
       return
@@ -310,11 +311,9 @@ async function submitOrder() {
     })
     const attempt = await getOrCreateCustomerOrderAttempt(payload, pendingCheckoutAttempt.value)
     pendingCheckoutAttempt.value = attempt
-    const res = await createCustomerStoreOrder({
-      ...payload,
-      request_key: attempt.request_key,
-      access_token: attempt.access_token
-    })
+    const res = isTableMode
+      ? await checkoutCustomerTableSession(tableSessionId, tableCode, { request_key: attempt.request_key, access_token: attempt.access_token, customer_phone: customerPhone.value.trim(), customer_note: remark.value, coupon_no: selectedCoupon.value?.coupon_no || '' })
+      : await createCustomerStoreOrder({ ...payload, request_key: attempt.request_key, access_token: attempt.access_token })
     const order = res.data.order || res.data
     const orderNo = order.order_no
     const accessToken = res.data.access_token
@@ -325,7 +324,7 @@ async function submitOrder() {
 
     // 清除购物车
     cart.value = {}
-    localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
+    if (!isTableMode) localStorage.setItem(`cart_${storeId}`, JSON.stringify({}))
 
     if (res.data.payment_error) {
       showFailToast('订单已创建，但支付宝付款入口暂不可用；订单仍未确认收款')
@@ -337,6 +336,12 @@ async function submitOrder() {
           ...(isSyntheticPreview ? { synthetic: '1' } : {})
         }
       })
+      return
+    }
+
+    if (res.data.payment_config_error) {
+      showFailToast(res.data.payment_config_error)
+      router.replace(mobileCustomerOrderAccessPath(orderNo, accessToken))
       return
     }
 
@@ -354,7 +359,9 @@ async function submitOrder() {
       return
     }
 
-    if (res.data.payment_required === false || ['submitted', 'preparing'].includes(order.status)) {
+    if (res.data.payment_method === 'merchant_qr' && res.data.payment_required) {
+      showToast('订单已创建，请在状态页扫描商家收款码；付款后还需门店人工核对到账')
+    } else if (res.data.payment_required === false || ['submitted', 'preparing'].includes(order.status)) {
       showSuccessToast('订单已提交；如需预付请按状态页提示完成付款')
     } else {
       showToast('订单已创建，尚未确认收款；可在状态页继续付款')
@@ -371,15 +378,19 @@ async function submitOrder() {
 async function loadData() {
   loading.value = true
   try {
-    const [storeRes, productsRes] = await Promise.all([
-      fetchCustomerStore(storeId),
-      fetchCustomerStoreProducts(storeId)
-    ])
+    const requests = [fetchCustomerStore(storeId), fetchCustomerStoreProducts(storeId)]
+    if (isTableMode) requests.push(fetchCustomerTableSession(tableSessionId, tableCode))
+    const [storeRes, productsRes, sessionRes] = await Promise.all(requests)
 
     storeInfo.value = storeRes.data?.store || storeRes.data || {}
     products.value = customerResponseList(productsRes)
     coupons.value = []
-    loadCart()
+    if (isTableMode) {
+      const snapshot = sessionRes?.data?.session
+      tableLocked.value = Boolean(snapshot?.locked)
+      tableLabel.value = String(snapshot?.table_label || "")
+      cart.value = Object.fromEntries((snapshot?.items || []).map(item => [String(item.product_id), Number(item.quantity)]))
+    } else loadCart()
   } catch (e) {
     console.error('加载数据失败:', e)
     showToast('加载失败')
@@ -395,12 +406,12 @@ watch(customerPhone, () => {
 })
 
 onMounted(async () => {
-  if (!storeId) {
+  if (!storeId || (route.query.table_code && !isTableMode)) {
     showToast('参数错误')
     router.back()
     return
   }
-  if (await recoverPendingOrder()) return
+  if (!isTableMode && await recoverPendingOrder()) return
   loadData()
 })
 </script>

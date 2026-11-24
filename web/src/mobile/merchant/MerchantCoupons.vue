@@ -39,7 +39,7 @@
             <div class="coupon-header">
               <div class="coupon-value">
                 <span class="currency">¥</span>
-                <span class="amount">{{ coupon.value }}</span>
+                <span class="amount">{{ couponAmountYuan(coupon) }}</span>
                 <span class="desc">优惠券</span>
               </div>
               <div class="coupon-status">
@@ -52,7 +52,7 @@
           <template #desc>
             <div class="coupon-info">
               <div class="coupon-name">{{ coupon.name || '满减优惠券' }}</div>
-              <div class="coupon-condition">满{{ coupon.min_amount }}元可用</div>
+              <div class="coupon-condition">满{{ couponThresholdYuan(coupon) }}元可用</div>
               <div class="coupon-time">
                 {{ formatTime(coupon.start_time) }} - {{ formatTime(coupon.end_time) }}
               </div>
@@ -151,7 +151,7 @@
           </van-cell-group>
 
           <div class="form-actions">
-            <van-button block type="primary" native-type="submit" :loading="saving">
+            <van-button block type="primary" native-type="submit">
               保存
             </van-button>
           </div>
@@ -185,6 +185,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
 import { fetchMerchantCoupons, voidMerchantCoupon, redeemMerchantCoupon } from '@/api/modules'
+import { couponAmountYuan, couponThresholdYuan } from '@/utils/merchantCouponMoney'
 
 const router = useRouter()
 
@@ -195,8 +196,6 @@ const coupons = ref([])
 
 const showCouponPopup = ref(false)
 const isEditing = ref(false)
-const saving = ref(false)
-const currentCouponId = ref(null)
 const couponForm = ref({
   name: '',
   value: '',
@@ -265,7 +264,6 @@ function onTabChange() {
 
 function showAddCoupon() {
   isEditing.value = false
-  currentCouponId.value = null
   couponForm.value = {
     name: '',
     value: '',
@@ -285,11 +283,10 @@ function showAddCoupon() {
 
 function editCoupon(coupon) {
   isEditing.value = true
-  currentCouponId.value = coupon.id
   couponForm.value = {
     name: coupon.name || '',
-    value: coupon.value?.toString() || '',
-    min_amount: coupon.min_amount?.toString() || '',
+    value: coupon.amount == null ? '' : couponAmountYuan(coupon),
+    min_amount: coupon.threshold == null ? '' : couponThresholdYuan(coupon),
     stock: coupon.stock?.toString() || '',
     start_time: formatDate(new Date(coupon.start_time).toISOString().split('T')[0].split('-')),
     end_time: formatDate(new Date(coupon.end_time).toISOString().split('T')[0].split('-'))
@@ -315,18 +312,8 @@ function onEndConfirm({ selectedValues }) {
   showEndPicker.value = false
 }
 
-async function saveCoupon() {
-  saving.value = true
-  try {
-    // TODO: 调用 API 创建/更新优惠券
-    showSuccessToast(isEditing.value ? '修改成功' : '创建成功')
-    showCouponPopup.value = false
-    loadCoupons()
-  } catch (e) {
-    showFailToast(e.response?.data?.message || '保存失败')
-  } finally {
-    saving.value = false
-  }
+function saveCoupon() {
+  showFailToast('优惠券创建/编辑功能暂未接入，所填内容未保存')
 }
 
 async function disableCoupon(coupon) {

@@ -32,12 +32,20 @@ func TestSaveStoreProductNormalizesTiersAndPreservesOmittedLegacyFields(t *testi
 	if product.SalesUnit != unit || product.Specification != specification || product.MinimumOrderQuantity != minimum || len(product.PriceTiers) != 2 || product.PriceTiers[0].MinQuantity != 3 || product.PriceTiers[1].MinQuantity != 5 {
 		t.Fatalf("product pricing configuration was not normalized: %+v", product)
 	}
+	legacyStock := 37
+	if err := db.Model(&model.StoreProduct{}).Where("id = ?", product.ID).Update("stock", legacyStock).Error; err != nil {
+		t.Fatalf("seed legacy stock value: %v", err)
+	}
+	legacyClientStock := 0
 
 	updated, err := service.SaveStoreProduct(merchant.ID, product.ID, dto.SaveStoreProductRequest{
-		StoreID: store.ID, Name: product.Name, Price: 1100,
+		StoreID: store.ID, Name: product.Name, Price: 1100, Stock: &legacyClientStock,
 	})
 	if err != nil {
 		t.Fatalf("legacy update with omitted optional fields should remain compatible: %v", err)
+	}
+	if updated.Stock == nil || *updated.Stock != legacyStock {
+		t.Fatalf("editing a menu product must preserve its legacy stock value, stock=%v", updated.Stock)
 	}
 	if updated.SalesUnit != unit || updated.Specification != specification || updated.MinimumOrderQuantity != minimum || len(updated.PriceTiers) != 2 || updated.PriceTiers[0].Price != 900 {
 		t.Fatalf("legacy update unexpectedly cleared tier configuration: %+v", updated)

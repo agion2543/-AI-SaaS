@@ -212,6 +212,8 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"POST /admin/payment-qrcode/upload",
 		"GET /admin/configs",
 		"POST /admin/configs",
+		"GET /admin/maintenance-notice",
+		"PUT /admin/maintenance-notice",
 	)
 	setSuper(
 		"GET /admin/access/permissions",

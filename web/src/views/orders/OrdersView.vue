@@ -67,6 +67,7 @@
           <el-option label="待接单" value="received" />
           <el-option label="退款售后" value="refund" />
           <el-option label="待结算" value="settlement" />
+          <el-option label="迟到付款待核对" value="payment_review" />
           <el-option label="关闭订单" value="closed" />
         </el-select>
         <el-button @click="resetFilters">重置</el-button>
@@ -203,9 +204,10 @@
                 <el-tag :type="refundType(row.refund_status)">{{ refundLabel(row.refund_status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="120">
+            <el-table-column label="状态" width="190">
               <template #default="{ row }">
                 <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                <el-tag v-if="row.payment_review_required" type="warning" class="payment-review-tag">已付款·待人工核对</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="payment_channel" label="支付方式" width="120" />
@@ -370,12 +372,17 @@ const filteredPayments = computed(() => payments.value.filter((item) => {
   const text = `${item.transaction_no || ''} ${item.order?.order_no || ''} ${item.order?.merchant?.name || ''}`.toLowerCase()
   return !filters.keyword || text.includes(filters.keyword.toLowerCase())
 }))
-const paymentExceptionRows = computed(() => filteredPayments.value.filter((item) => ['duplicate_success', 'late_success_exception'].includes(item.status)))
-const paymentExceptionSummary = computed(() => paymentExceptionRows.value.slice(0, 3).map((item) => {
-  const status = item.status === 'duplicate_success' ? '重复收款异常' : '迟到成功待核查'
+const paymentExceptionRows = computed(() => filteredPayments.value.filter((item) => ['duplicate_success', 'late_success_exception', 'paid_review_required'].includes(item.status)))
+const paymentExceptionSummary = computed(() => {
+  const summary = paymentExceptionRows.value.slice(0, 3).map((item) => {
+  const status = item.status === 'duplicate_success' ? '重复收款异常' : '已付款，待人工核对'
   const amount = `¥${(Number(item.amount || 0) / 100).toFixed(2)}`
   return `订单 ${item.order?.order_no || item.order_id}｜交易 ${item.transaction_no}｜${amount}｜${status}，待人工对账`
-}).join('；'))
+  }).join('；')
+  const hasLatePayment = paymentExceptionRows.value.some((item) => ['late_success_exception', 'paid_review_required'].includes(item.status))
+  if (!hasLatePayment) return summary
+  return `${summary}。订单不会自动进入履约；人工核对前不自动退款或开通权益。`
+})
 const filteredRefunds = computed(() => refunds.value.filter((item) => {
   if (!matchDate(item.created_at)) return false
   const text = `${item.refund_no || ''} ${item.order?.order_no || ''} ${item.order?.merchant?.name || ''}`.toLowerCase()
@@ -398,15 +405,16 @@ const customerTradeIncome = computed(() => filteredOrders.value
 const totalRefunded = computed(() => filteredRefunds.value.filter((item) => item.status === 'success').reduce((sum, item) => sum + Number(item.amount || 0), 0))
 const customerTradeNet = computed(() => Math.max(customerTradeIncome.value - totalRefunded.value, 0))
 const allExceptionOrders = computed(() => orders.value
-  .filter((item) => item.order_type === 'store_order' && exceptionTags(item).length)
+  .filter((item) => (item.order_type === 'store_order' || item.payment_review_required) && exceptionTags(item).length)
   .sort((a, b) => exceptionLevel(b).score - exceptionLevel(a).score || dateValue(b.created_at) - dateValue(a.created_at)))
 const exceptionOrders = computed(() => filteredOrders.value
-  .filter((item) => item.order_type === 'store_order' && exceptionTags(item).length)
+  .filter((item) => (item.order_type === 'store_order' || item.payment_review_required) && exceptionTags(item).length)
   .sort((a, b) => exceptionLevel(b).score - exceptionLevel(a).score || dateValue(b.created_at) - dateValue(a.created_at)))
 const exceptionQuickFilters = computed(() => [
   { label: '全部异常', value: '', count: allExceptionOrders.value.length, hint: '按风险优先展示' },
   { label: '订阅待确认', value: 'subscription_pending', count: orders.value.filter((item) => item.order_type === 'merchant_subscription' && item.status === 'pending').length, hint: '平台收款码待核对' },
   { label: '支付异常', value: 'payment', count: orders.value.filter((item) => item.order_type === 'store_order' && ['pending', 'failed'].includes(item.status)).length, hint: '待支付或支付失败' },
+  { label: '付款待核对', value: 'payment_review', count: orders.value.filter((item) => item.payment_review_required).length, hint: '渠道已确认付款，订单关闭待人工核对' },
   { label: '待接单', value: 'received', count: orders.value.filter((item) => item.order_type === 'store_order' && item.status === 'received' && isConfirmedPaid(item)).length, hint: '已确认收款，商家未处理' },
   { label: '退款售后', value: 'refund', count: orders.value.filter((item) => Number(item.refunded_amount || 0) > 0 || ['partial', 'full', 'processing'].includes(item.refund_status)).length, hint: '含待核查的退款预占' },
   { label: '待结算', value: 'settlement', count: orders.value.filter((item) => isUnsettledOrder(item)).length, hint: '已形成实收，未入结算' }
@@ -461,6 +469,7 @@ const matchOrderFilters = (item) => {
 const matchExceptionFilter = (item, value) => {
   if (value === 'subscription_pending') return item.order_type === 'merchant_subscription' && item.status === 'pending'
   if (value === 'payment') return ['pending', 'failed'].includes(item.status)
+  if (value === 'payment_review') return Boolean(item.payment_review_required)
   if (value === 'received') return item.status === 'received' && isConfirmedPaid(item)
   if (value === 'refund') return Number(item.refunded_amount || 0) > 0 || ['partial', 'full', 'processing'].includes(item.refund_status)
   if (value === 'settlement') return isUnsettledOrder(item)
@@ -477,6 +486,7 @@ const matchDate = (value) => {
 const isUnsettledOrder = (row) => row?.order_type === 'store_order' && isConfirmedPaid(row) && !row.settlement_id && ['accepted', 'completed'].includes(row.status)
 const exceptionTags = (row) => {
   const tags = []
+  if (row.payment_review_required) tags.push('已付款待核对')
   if (row.status === 'failed') tags.push('支付失败')
   if (row.status === 'pending') tags.push('待支付')
   if (row.status === 'received' && isConfirmedPaid(row)) tags.push('待接单')
@@ -489,6 +499,7 @@ const exceptionTags = (row) => {
 }
 const exceptionLevel = (row) => {
   const paymentMismatch = ['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at
+  if (row.payment_review_required) return { label: '高风险', type: 'danger', score: 3 }
   if (row.status === 'failed' || paymentMismatch || (row.status === 'received' && orderAgeHours(row) >= 2) || Number(row.refunded_amount || 0) >= Number(row.total_amount ?? row.amount ?? 0)) {
     return { label: '高风险', type: 'danger', score: 3 }
   }
@@ -501,6 +512,7 @@ const exceptionLevel = (row) => {
   return { label: '正常', type: 'success', score: 0 }
 }
 const exceptionAdvice = (row) => {
+  if (row.payment_review_required) return '渠道已确认付款，但订单已关闭且未履约；保持已付款记录，人工核对前不要自动退款或开通权益。'
   if (row.refund_status === 'processing') return '退款渠道结果尚未确认，额度仍被预占；先核对渠道结果，不要再次发起退款。'
   if (['received', 'accepted', 'completed'].includes(row.status) && Number(row.total_amount ?? row.amount ?? 0) > 0 && !row.paid_at) return '订单履约状态与收款记录不一致；请核对真实到账，当前不计入实收或结算。'
   if (row.status === 'failed') return '引导顾客回订单页重新支付；核对支付回调和交易号，避免重复付款。'
@@ -515,6 +527,7 @@ const exceptionAdvice = (row) => {
 const tagType = (tag) => ({
   支付失败: 'danger',
   待支付: 'warning',
+  已付款待核对: 'warning',
   待接单: 'primary',
   收款信息异常: 'danger',
   已关闭: 'info',
@@ -671,10 +684,11 @@ const statusType = (status) => ({
 const paymentStatusLabel = (status) => ({
   success: '已到账',
   duplicate_success: '重复收款异常（待人工对账）',
-  late_success_exception: '迟到收款（待人工核查）',
+  late_success_exception: '已付款·迟到异常（待人工核对）',
+  paid_review_required: '已付款·待人工核对',
   failed: '支付失败'
 }[status] || status || '-')
-const paymentStatusType = (status) => ({ success: 'success', duplicate_success: 'danger', late_success_exception: 'warning', failed: 'info' }[status] || 'info')
+const paymentStatusType = (status) => ({ success: 'success', duplicate_success: 'danger', late_success_exception: 'warning', paid_review_required: 'warning', failed: 'info' }[status] || 'info')
 const refundRecordStatusLabel = (status) => ({ success: '渠道已确认', processing: '处理中', unknown: '结果待核查', failed: '渠道明确拒绝' }[status] || status || '-')
 const refundRecordStatusType = (status) => ({ success: 'success', processing: 'warning', unknown: 'danger', failed: 'info' }[status] || 'info')
 const paymentChannelLabel = (channel) => ({

@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/mysql"
@@ -12,6 +14,7 @@ import (
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/model"
 	"go-web-gin-health/internal/router"
+	"go-web-gin-health/internal/service"
 	"go-web-gin-health/internal/utils"
 )
 
@@ -53,6 +56,9 @@ func NewApplication() (*Application, error) {
 }
 
 func (a *Application) Run() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.NewOrderService(a.DB).RunCheckoutOrderExpiryWorker(ctx, time.Minute)
 	return a.Engine.Run(fmt.Sprintf("%s:%s", a.Config.AppHost, a.Config.AppPort))
 }
 
@@ -67,6 +73,11 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AuditLog{},
 		&model.Store{},
 		&model.StoreProduct{},
+		&model.StoreTableConfig{},
+		&model.StoreTable{},
+		&model.TableSession{},
+		&model.TableCartItem{},
+		&model.TableOrderDetail{},
 		&model.CustomerLead{},
 		&model.ShareActivityConfig{},
 		&model.ShareCampaign{},

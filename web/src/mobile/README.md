@@ -20,7 +20,7 @@ web/
 │   │       ├── MerchantOrderDetail.vue     # 订单详情
 │   │       ├── MerchantProducts.vue        # 商品管理
 │   │       ├── MerchantStores.vue          # 门店管理
-│   │       ├── MerchantFinance.vue         # 财务管理
+│   │       ├── MerchantFinance.vue         # 订单汇总
 │   │       ├── MerchantGroupBuy.vue        # 团购渠道
 │   │       ├── MerchantCoupons.vue         # 优惠券管理
 │   │       ├── MerchantAI.vue              # AI 运营助手
@@ -88,7 +88,7 @@ npm run build
 | `/m/merchant/orders/:id` | 订单详情 | 订单详情 |
 | `/m/merchant/products` | 商品管理 | 商品上下架 |
 | `/m/merchant/stores` | 门店管理 | 门店信息 |
-| `/m/merchant/finance` | 财务管理 | 营收统计 |
+| `/m/merchant/finance` | 订单汇总 | 按订单和付款时间汇总金额与退款记录；非渠道对账或利润表 |
 | `/m/merchant/group-buy` | 团购渠道 | 管理官方外部平台链接、审核状态、跳转码与点击数 |
 | `/m/merchant/coupons` | 优惠券 | 优惠券管理 |
 | `/m/merchant/ai` | AI 助手 | AI 运营工具 |

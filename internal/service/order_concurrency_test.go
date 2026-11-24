@@ -128,11 +128,11 @@ func TestConcurrentSameTransactionPaymentCallbacksAreIdempotent(t *testing.T) {
 	if len(records) != 1 || successfulAmount != order.TotalAmount {
 		t.Errorf("same transaction must produce one successful ledger row: rows=%d successful_amount=%d want=%d", len(records), successfulAmount, order.TotalAmount)
 	}
-	if updatedProduct.Stock == nil || *updatedProduct.Stock != 8 {
-		t.Errorf("same transaction must deduct stock once: stock=%v", updatedProduct.Stock)
+	if updatedProduct.Stock == nil || *updatedProduct.Stock != 10 {
+		t.Errorf("same transaction must preserve legacy stock: stock=%v", updatedProduct.Stock)
 	}
-	if countOrderAuditAction(t, current, "paid") != 1 || countOrderAuditAction(t, current, "stock_deducted") != 1 {
-		t.Errorf("same transaction must leave one payment and stock audit entry: %s", current.OperationLogs)
+	if countOrderAuditAction(t, current, "paid") != 1 || countOrderAuditAction(t, current, "stock_deducted") != 0 {
+		t.Errorf("same transaction must leave one payment audit entry and no stock entry: %s", current.OperationLogs)
 	}
 }
 
@@ -198,11 +198,11 @@ func TestConcurrentDistinctSuccessfulPaymentCallbacksRecordExceptionWithoutDupli
 	if len(records) != 2 || normalSuccesses != 1 || duplicateExceptions != 1 || successfulAmount != order.TotalAmount {
 		t.Errorf("both external charges must be preserved, with one normal payment and one exception: rows=%d normal=%d duplicate=%d successful_amount=%d transactions=%v", len(records), normalSuccesses, duplicateExceptions, successfulAmount, paymentTransactionNumbers(records))
 	}
-	if updatedProduct.Stock == nil || *updatedProduct.Stock != 8 {
-		t.Errorf("fulfillment stock must be deducted once: stock=%v", updatedProduct.Stock)
+	if updatedProduct.Stock == nil || *updatedProduct.Stock != 10 {
+		t.Errorf("payment must preserve legacy stock: stock=%v", updatedProduct.Stock)
 	}
-	if countOrderAuditAction(t, current, "paid") != 1 || countOrderAuditAction(t, current, "stock_deducted") != 1 || countOrderAuditAction(t, current, "duplicate_payment_exception") != 1 {
-		t.Errorf("distinct callbacks must leave one fulfillment and one visible duplicate-payment audit entry: %s", current.OperationLogs)
+	if countOrderAuditAction(t, current, "paid") != 1 || countOrderAuditAction(t, current, "stock_deducted") != 0 || countOrderAuditAction(t, current, "duplicate_payment_exception") != 1 {
+		t.Errorf("distinct callbacks must leave one payment, no stock entry, and one visible duplicate-payment audit entry: %s", current.OperationLogs)
 	}
 }
 

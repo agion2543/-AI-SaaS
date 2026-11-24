@@ -250,6 +250,40 @@ func TestManualReviewLegacySubscriptionUsesEnteredTermsAndPersistsAtomicAuditWit
 	}
 }
 
+func TestManualReviewLegacyExpiredStaticQRSubscriptionAfterExpiry(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	merchant, _, order := createLegacyManualReviewFixture(t, db)
+	now := time.Now()
+	if err := db.Model(&model.Order{}).Where("id = ?", order.ID).Update("created_at", now.Add(-checkoutOrderExpiryDuration-time.Minute)).Error; err != nil {
+		t.Fatalf("age synthetic legacy subscription order: %v", err)
+	}
+	service := NewOrderService(db)
+	if count, err := service.ExpireUnpaidCheckoutOrders(now); err != nil || count != 1 {
+		t.Fatalf("expire legacy static QR subscription: count=%d err=%v", count, err)
+	}
+	result, err := service.ReviewLegacyMerchantSubscriptionOrder(order.ID, validManualReviewRequest(), platformManualReviewActor())
+	if err != nil {
+		t.Fatalf("manually reconcile expired legacy subscription against supplied evidence: %v", err)
+	}
+	if result.Order.Status != "manually_verified" || result.Order.PaidAt != nil || result.Order.TransactionNo != "" || result.Order.PaymentChannel != "admin_manual_verified" {
+		t.Fatalf("historical evidence review must not fabricate channel payment facts: status=%q paid_at=%v transaction=%q channel=%q", result.Order.Status, result.Order.PaidAt, result.Order.TransactionNo, result.Order.PaymentChannel)
+	}
+	if result.Audit.OrderStatusBefore != "closed" || result.Audit.OrderStatusAfter != "manually_verified" {
+		t.Fatalf("audit must preserve expiry-to-manual-review transition: before=%q after=%q", result.Audit.OrderStatusBefore, result.Audit.OrderStatusAfter)
+	}
+	var paymentCount int64
+	if err := db.Model(&model.PaymentRecord{}).Where("order_id = ?", order.ID).Count(&paymentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	var reviewedMerchant model.Merchant
+	if err := db.First(&reviewedMerchant, merchant.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if paymentCount != 0 || reviewedMerchant.SubscriptionStatus != "active" || reviewedMerchant.SubscriptionExpireAt == nil {
+		t.Fatalf("only the explicit evidence review may update entitlements, with no provider payment row: payments=%d merchant=%+v", paymentCount, reviewedMerchant)
+	}
+}
+
 func TestManualReviewLegacySubscriptionAuditFailureRollsBackAllEffects(t *testing.T) {
 	db := newOrderBoundaryTestDB(t)
 	merchant, _, order := createLegacyManualReviewFixture(t, db)

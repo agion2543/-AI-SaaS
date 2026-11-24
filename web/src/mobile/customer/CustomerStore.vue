@@ -26,6 +26,9 @@
 
     <!-- 门店内容 -->
     <template v-else>
+      <van-notice-bar v-if="isTableMode" :type="tableSession?.locked ? 'warning' : 'primary'" :scrollable="false">
+        {{ `桌号：${tableSession?.table_label || `${tableNo}号桌`}` }}{{ tableSession?.locked ? ' · 已有顾客结算，购物车已锁定' : ' · 共享点单' }}
+      </van-notice-bar>
       <!-- 门店公告 -->
       <van-notice-bar
         v-if="storeInfo.notice"
@@ -62,9 +65,6 @@
                 @click="showProductDetail(product)"
               >
                 <template #tags>
-                  <van-tag v-if="isProductSoldOut(product)" type="danger">已售罄</van-tag>
-                  <van-tag v-else-if="isProductUnavailable(product)" type="danger">库存不足起订量</van-tag>
-                  <van-tag v-else-if="isProductLowStock(product)" type="warning">仅剩{{ product.stock }}</van-tag>
                   <van-tag v-if="getProductMinimum(product) > 1" type="warning">{{ getProductMinimum(product) }} 起订</van-tag>
                   <van-tag v-if="getProductPriceTiers(product).length" type="primary">阶梯价</van-tag>
                   <van-tag v-if="product.discount" type="success">立减{{ product.discount }}元</van-tag>
@@ -73,8 +73,6 @@
                   <van-stepper
                     v-model="cart[product.id]"
                     :min="0"
-                    :max="productStockLimit(product)"
-                    :disabled="isProductUnavailable(product)"
                     @change="(val) => updateCart(product, val)"
                     @click.stop
                   />
@@ -96,6 +94,7 @@
         :price="totalPrice"
         label="合计"
         button-text="去结算"
+        :disabled="Boolean(tableSession?.locked)"
         suffix-label=""
         @submit="goToCart"
       >
@@ -159,19 +158,14 @@
           <p class="product-desc">{{ currentProduct.description || '暂无描述' }}</p>
           <div class="product-meta">
             <span class="product-price">¥{{ formatPrice(getProductUnitPrice(currentProduct, addCount)) }}</span>
-            <span v-if="productStockLimit(currentProduct) === undefined" class="product-stock">库存充足</span>
-            <span v-else-if="currentProduct.stock > 0" class="product-stock">库存: {{ currentProduct.stock }}</span>
-            <van-tag v-else-if="isProductSoldOut(currentProduct)" type="danger">已售罄</van-tag>
-            <van-tag v-else-if="isProductUnavailable(currentProduct)" type="danger">库存不足起订量</van-tag>
           </div>
           <p v-if="describeProductPricing(currentProduct)" class="product-pricing">{{ describeProductPricing(currentProduct) }}</p>
         </div>
         <div class="product-actions">
-          <van-stepper v-model="addCount" :min="getMinimumOrderQuantity(currentProduct)" :max="productStockLimit(currentProduct)" :disabled="isProductUnavailable(currentProduct)" />
+          <van-stepper v-model="addCount" :min="getMinimumOrderQuantity(currentProduct)" />
           <van-button
             type="primary"
             size="small"
-            :disabled="isProductUnavailable(currentProduct)"
             @click="addToCartFromDetail"
           >
             加入购物车
@@ -207,16 +201,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast } from 'vant'
-import { fetchCustomerStore, fetchCustomerStoreProducts } from '@/api/modules'
+import { fetchCustomerStore, fetchCustomerStoreProducts, joinCustomerTableSession, fetchCustomerTableSession, updateCustomerTableCartItem, clearCustomerTableCart } from '@/api/modules'
 import { customerResponseList } from '@/utils/mobileCustomerOrder'
 import { describeProductPricing, getMinimumOrderQuantity, getProductPriceTiers, getProductUnitPrice } from '@/utils/productPricing'
 
 const route = useRoute()
 const router = useRouter()
 const storeId = route.params.storeId
+const tableNo = Number(route.query.table_no || 0)
+const tableCode = String(route.query.table_code || '')
+const isTableMode = Number.isInteger(tableNo) && tableNo > 0 && /^[a-zA-Z0-9_-]{32,64}$/.test(tableCode)
+const tableSession = ref(null)
+let tablePollTimer = null
+let cartWriteChain = Promise.resolve()
 
 // 状态
 const loading = ref(true)
@@ -270,20 +270,6 @@ function formatPrice(price) {
   return (Number(price || 0) / 100).toFixed(2)
 }
 
-function productStockLimit(product) {
-  if (product?.stock === undefined || product?.stock === null) return undefined
-  return Math.max(Number(product.stock || 0), 0)
-}
-
-function isProductSoldOut(product) {
-  const stock = productStockLimit(product)
-  return stock !== undefined && stock <= 0
-}
-
-function isProductUnavailable(product) {
-  const stock = productStockLimit(product)
-  return (stock !== undefined && stock <= 0) || (stock !== undefined && stock < getMinimumOrderQuantity(product))
-}
 
 function getProductMinimum(product) {
   return getMinimumOrderQuantity(product)
@@ -291,11 +277,6 @@ function getProductMinimum(product) {
 
 function productDescription(product) {
   return [product?.description, describeProductPricing(product)].filter(Boolean).join(' · ')
-}
-
-function isProductLowStock(product) {
-  const stock = productStockLimit(product)
-  return stock !== undefined && stock > 0 && stock <= 5
 }
 
 function getCategoryCount(catId) {
@@ -318,44 +299,53 @@ function showProductDetail(product) {
 
 function addToCartFromDetail() {
   const product = currentProduct.value
-  if (isProductUnavailable(product)) return
   const newCount = (cart.value[product.id] || 0) + addCount.value
-  const stockLimit = productStockLimit(product)
-  cart.value[product.id] = stockLimit === undefined ? newCount : Math.min(newCount, stockLimit)
   showProductPopup.value = false
-  saveCart()
-  showSuccessToast('已加入购物车')
+  updateCart(product, newCount)
 }
 
+function applyTableSnapshot(snapshot) {
+  if (!snapshot) return
+  tableSession.value = snapshot
+  const next = {}
+  for (const item of snapshot.items || []) next[item.product_id] = item.quantity
+  cart.value = next
+}
+async function syncTableSession() {
+  if (!isTableMode || !tableSession.value?.id) return
+  try {
+    const res = await fetchCustomerTableSession(tableSession.value.id, tableCode)
+    applyTableSnapshot(res.data?.session)
+  } catch (e) { if (e.response?.status === 409) tableSession.value = { ...tableSession.value, locked: true } }
+}
 function updateCart(product, value) {
   if (value > 0) {
     const minimum = getMinimumOrderQuantity(product)
-    const stockLimit = productStockLimit(product)
     if (value < minimum) {
-      if (stockLimit !== undefined && stockLimit < minimum) {
-        delete cart.value[product.id]
-        showToast('库存不足最低起订量')
-      } else {
-        cart.value[product.id] = minimum
-        showToast(`最低起订量为 ${minimum}${product.sales_unit || '件'}`)
-      }
-    } else {
-      cart.value[product.id] = value
-    }
-  } else {
-    delete cart.value[product.id]
-  }
-  saveCart()
+      cart.value[product.id] = minimum
+      showToast(`最低起订量为 ${minimum}${product.sales_unit || '件'}`)
+    } else cart.value[product.id] = value
+  } else delete cart.value[product.id]
+  if (isTableMode && tableSession.value) {
+    if (tableSession.value.locked) { showToast('该桌已结算，购物车已锁定'); syncTableSession(); return }
+    const quantity = cart.value[product.id] || 0
+    cartWriteChain = cartWriteChain.then(async () => {
+      const res = await updateCustomerTableCartItem(tableSession.value.id, tableCode, { product_id: product.id, action: 'set', quantity })
+      applyTableSnapshot(res.data?.session)
+    }).catch((e) => { showToast(e.response?.data?.message || '共享购物车更新失败'); syncTableSession() })
+  } else saveCart()
 }
-
 function removeFromCart(product) {
+  if (isTableMode) { updateCart(product, 0); return }
   delete cart.value[product.id]
   saveCart()
 }
-
-function clearCart() {
-  cart.value = {}
-  saveCart()
+async function clearCart() {
+  if (isTableMode && tableSession.value) {
+    if (tableSession.value.locked) { showToast('该桌已结算，购物车已锁定'); return }
+    try { const res = await clearCustomerTableCart(tableSession.value.id, tableCode); applyTableSnapshot(res.data?.session) }
+    catch (e) { showToast(e.response?.data?.message || '清空共享购物车失败') }
+  } else { cart.value = {}; saveCart() }
   showCartPopup.value = false
 }
 
@@ -376,12 +366,9 @@ function loadCart() {
 
 function goToCart() {
   // 保存购物车到本地
-  saveCart()
-  // 跳转到结算页
-  router.push({
-    path: '/m/order/confirm',
-    query: { storeId }
-  })
+  if (tableSession.value?.locked) { showToast('该桌已结算，不能重复结算'); return }
+  if (!isTableMode) saveCart()
+  router.push({ path: '/m/order/confirm', query: { storeId, ...(isTableMode ? { table_no: tableNo, table_code: tableCode, session_id: tableSession.value?.id } : {}) } })
 }
 
 function onSearch() {
@@ -425,7 +412,11 @@ async function loadStoreData() {
       categories.value = [{ id: 0, name: '全部商品' }]
     }
 
-    loadCart()
+    if (isTableMode) {
+      const joined = await joinCustomerTableSession({ store_id: Number(storeId), table_no: tableNo, table_code: tableCode })
+      applyTableSnapshot(joined.data?.session)
+      tablePollTimer = window.setInterval(syncTableSession, 3000)
+    } else loadCart()
   } catch (e) {
     console.error('加载门店数据失败:', e)
     error.value = true
@@ -435,9 +426,8 @@ async function loadStoreData() {
   }
 }
 
-onMounted(() => {
-  loadStoreData()
-})
+onMounted(() => { loadStoreData() })
+onUnmounted(() => { if (tablePollTimer) window.clearInterval(tablePollTimer) })
 </script>
 
 <style scoped>
@@ -550,10 +540,6 @@ onMounted(() => {
   font-weight: bold;
 }
 
-.product-stock {
-  font-size: 12px;
-  color: #666;
-}
 
 .product-pricing {
   margin: 8px 16px 0;

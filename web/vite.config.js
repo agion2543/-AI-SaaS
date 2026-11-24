@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { resolve } from 'path'
+import { resolve } from 'node:path'
+
+const __dirname = import.meta.dirname
 
 export default defineConfig({
   plugins: [vue()],
@@ -34,7 +36,7 @@ export default defineConfig({
     }
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
         mobile: resolve(__dirname, 'mobile.html')

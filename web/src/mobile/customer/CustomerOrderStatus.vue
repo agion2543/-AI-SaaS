@@ -12,7 +12,7 @@
     <van-notice-bar v-if="isSyntheticPreview" type="warning" left-icon="info-o" :scrollable="false">
       合成演示数据 · 非真实交易
     </van-notice-bar>
-    <van-notice-bar v-if="paymentSetupUnavailable && !isConfirmedPaid" type="warning" left-icon="warning-o" :scrollable="false">
+    <van-notice-bar v-if="paymentSetupUnavailable && !isConfirmedPaid && !isTableOrder" type="warning" left-icon="warning-o" :scrollable="false">
       支付入口暂不可用 · 仍未确认收款
     </van-notice-bar>
 
@@ -39,6 +39,7 @@
             <van-button size="mini" plain type="primary" @click="copyOrderNo">复制安全链接</van-button>
           </template>
         </van-cell>
+        <van-cell v-if="Number(order.table_no) > 0" title="桌位" :value="order.table_label || `${order.table_no}号桌`" />
         <van-cell title="下单时间" :value="formatTime(order.created_at)" />
         <van-cell title="门店" :value="order.store_name" />
       </van-cell-group>
@@ -86,28 +87,38 @@
         <van-button type="primary" block :loading="paying" @click="markPaid">已转账，通知门店核对</van-button>
       </van-cell-group>
       <van-cell-group v-else-if="showMerchantQrMissing" inset title="门店收款">
-        <van-cell title="收款码未配置" value="请联系门店核对付款方式" />
+        <van-cell :title="isTableOrder ? '桌位收款方式待核实' : '收款码未配置'" :value="isTableOrder ? '请联系门店确认，勿使用平台支付入口' : '请联系门店核对付款方式'" />
+        <p v-if="isTableOrder" class="manual-payment-note">当前订单未返回可用的商家收款码。请联系门店核对；在商家确认前，系统不会把订单计为已收款。</p>
       </van-cell-group>
 
       <!-- 倒计时（待支付状态） -->
       <van-count-down
-        v-if="order.status === 'pending' && order.expire_time"
-        :time="getExpireTime(order.expire_time)"
+        v-if="isUnpaidCheckout && order.expire_time && !checkoutDeadlineReached"
+        :time="getExpireTime()"
         format="剩余支付时间: HH:mm:ss"
         class="countdown"
         @finish="onCountdownFinish"
       />
+      <div v-else-if="order.expired_unpaid" class="countdown-expired" role="status">
+        支付期限已过，订单已关闭且未付款；如仍需购买，请重新下单。
+      </div>
+      <div v-else-if="checkoutDeadlineReached" class="countdown-expired" role="status">
+        支付时间已到，正在同步订单关闭状态；请勿再次发起付款。
+      </div>
 
       <!-- 操作按钮 -->
       <div class="action-buttons">
-        <template v-if="order.status === 'pending' && payableAmount > 0">
+        <template v-if="order.status === 'pending' && canInitiatePayment">
           <van-button type="primary" block :loading="paying" @click="handlePayment">继续支付</van-button>
         </template>
         <template v-else-if="order.status === 'payment_confirming'">
           <van-button type="warning" plain block disabled>等待门店确认到账</van-button>
         </template>
-        <template v-else-if="order.status === 'failed' && payableAmount > 0">
+        <template v-else-if="order.status === 'failed' && canInitiatePayment">
           <van-button type="primary" block :loading="paying" @click="handlePayment">重新发起支付</van-button>
+        </template>
+        <template v-else-if="checkoutDeadlineReached">
+          <van-button type="warning" plain block disabled>支付期限已到，正在确认订单状态</van-button>
         </template>
         <template v-else-if="order.status === 'completed'">
           <van-button type="primary" block @click="viewStore">再来一单</van-button>
@@ -132,6 +143,7 @@ import { fetchCustomerOrder, markCustomerOrderPaid, retryCustomerOrderPayment } 
 import { captureCustomerOrderAccessToken, getCustomerOrderAccessToken, mobileCustomerOrderAccessPath } from '@/utils/customerOrderAccess'
 import { isCustomerOrderPaid } from '@/utils/mobileCustomerOrder'
 import { customerOrderPollIntervalMs, isCustomerOrderStatusPollable } from '@/utils/customerOrderPolling'
+import { isCheckoutDeadlineReached, isUnpaidCheckoutOrder, remainingCheckoutTime } from '@/utils/customerOrderExpiry'
 
 const route = useRoute()
 const router = useRouter()
@@ -144,6 +156,7 @@ const loading = ref(true)
 const order = ref(null)
 const paying = ref(false)
 const paymentConfig = ref({})
+const checkoutExpiredLocally = ref(false)
 let pollTimer = null
 let pollAttempts = 0
 let orderRequestInFlight = false
@@ -151,11 +164,19 @@ let orderRequestInFlight = false
 // 计算属性
 const payableAmount = computed(() => Number(order.value?.total_amount ?? order.value?.amount ?? 0))
 const isConfirmedPaid = computed(() => isCustomerOrderPaid(order.value) && payableAmount.value > 0)
+const isUnpaidCheckout = computed(() => isUnpaidCheckoutOrder(order.value))
+const checkoutDeadlineReached = computed(() => isUnpaidCheckout.value && (checkoutExpiredLocally.value || isCheckoutDeadlineReached(order.value)))
+const isTableOrder = computed(() => Number(order.value?.table_no || 0) > 0)
+const isPendingMerchantQrTableOrder = computed(() => isTableOrder.value && order.value?.payment_channel === 'merchant_qr' && order.value?.status === 'pending')
+const canInitiatePayment = computed(() => isUnpaidCheckout.value && !checkoutDeadlineReached.value && !isTableOrder.value)
 const paymentStatusText = computed(() => {
+  if (order.value?.expired_unpaid) return '已过期 · 未付款'
+  if (checkoutDeadlineReached.value) return '支付时间已到，正在同步关闭状态'
   if (payableAmount.value <= 0) return '无需付款'
   if (order.value?.status === 'payment_confirming') return '等待门店确认到账'
   if (isConfirmedPaid.value) return '已确认收款'
   if (order.value?.status === 'failed') return '支付未完成'
+  if (isPendingMerchantQrTableOrder.value) return '待支付 · 商家收款码'
   if (['pending', 'submitted', 'preparing'].includes(order.value?.status)) return '待付款或核对'
   return '待核对'
 })
@@ -165,10 +186,15 @@ const merchantPayOptions = computed(() => {
   if (paymentConfig.value?.wechat_qr_code) options.push({ key: 'wechat', label: '商户微信收款码', value: paymentConfig.value.wechat_qr_code })
   return options
 })
-const canUseMerchantQr = computed(() => payableAmount.value > 0 && ['submitted', 'preparing'].includes(order.value?.status) && !order.value?.paid_at && merchantPayOptions.value.length > 0)
-const showMerchantQrMissing = computed(() => payableAmount.value > 0 && ['submitted', 'preparing'].includes(order.value?.status) && !order.value?.paid_at && merchantPayOptions.value.length === 0)
+const canUseMerchantQr = computed(() => payableAmount.value > 0 && (['submitted', 'preparing'].includes(order.value?.status) || isPendingMerchantQrTableOrder.value) && !order.value?.paid_at && merchantPayOptions.value.length > 0)
+const showMerchantQrMissing = computed(() => {
+  if (payableAmount.value <= 0 || order.value?.paid_at) return false
+  if (['submitted', 'preparing'].includes(order.value?.status)) return merchantPayOptions.value.length === 0
+  return isTableOrder.value && order.value?.status === 'pending' && (!isPendingMerchantQrTableOrder.value || merchantPayOptions.value.length === 0)
+})
 
 const statusClass = computed(() => {
+  if (checkoutDeadlineReached.value) return 'status-cancelled'
   const statusMap = {
     pending: 'status-pending',
     submitted: 'status-pending',
@@ -188,6 +214,7 @@ const statusClass = computed(() => {
 })
 
 const statusIcon = computed(() => {
+  if (checkoutDeadlineReached.value) return 'cross'
   const iconMap = {
     pending: 'clock-o',
     submitted: 'clock-o',
@@ -207,6 +234,8 @@ const statusIcon = computed(() => {
 })
 
 const statusText = computed(() => {
+  if (order.value?.expired_unpaid) return '订单已过期'
+  if (checkoutDeadlineReached.value) return '支付时间已到'
   const textMap = {
     pending: '待支付',
     submitted: payableAmount.value <= 0 ? '订单已提交，无需付款' : '订单已提交',
@@ -226,7 +255,10 @@ const statusText = computed(() => {
 })
 
 const statusDesc = computed(() => {
-  if (paymentSetupUnavailable.value && !isConfirmedPaid.value && payableAmount.value > 0) {
+  if (order.value?.expired_unpaid) return '订单已超过30分钟支付期限并关闭，尚未确认收款；如仍需购买，请重新下单。'
+  if (checkoutDeadlineReached.value) return '支付期限已结束，正在同步订单关闭状态；请勿再次付款。'
+  if (isPendingMerchantQrTableOrder.value) return '请使用门店配置的商家收款码付款；付款后由门店人工核对到账，页面返回本身不代表已收款。'
+  if (paymentSetupUnavailable.value && !isConfirmedPaid.value && payableAmount.value > 0 && !isTableOrder.value) {
     return '支付宝付款入口暂不可用；订单尚未确认收款，可稍后重试或联系门店核对。'
   }
   const descMap = {
@@ -268,10 +300,8 @@ function formatTime(time) {
   return new Date(time).toLocaleString('zh-CN')
 }
 
-function getExpireTime(expireTime) {
-  const expire = new Date(expireTime).getTime()
-  const now = Date.now()
-  return Math.max(0, expire - now)
+function getExpireTime() {
+  return remainingCheckoutTime(order.value) ?? 0
 }
 
 function getPayTypeText(payType) {
@@ -308,7 +338,8 @@ function goBack() {
 }
 
 function onCountdownFinish() {
-  showToast('订单已过期')
+  checkoutExpiredLocally.value = true
+  showToast('支付时间已到，正在同步订单状态')
   loadOrderData()
 }
 
@@ -375,7 +406,7 @@ async function onVisibilityChange() {
 }
 
 async function handlePayment() {
-  if (!orderNo || !['pending', 'failed'].includes(order.value?.status) || payableAmount.value <= 0 || paying.value) return
+  if (!orderNo || !canInitiatePayment.value || paying.value) return
   paying.value = true
   try {
     const res = await retryCustomerOrderPayment(orderNo, { pay_mode: 'page' })
@@ -540,6 +571,17 @@ onUnmounted(() => {
   margin: 12px 16px;
   border-radius: 8px;
   font-size: 16px;
+}
+
+.countdown-expired {
+  margin: 12px 16px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: #8a5b13;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
 }
 
 .action-buttons {

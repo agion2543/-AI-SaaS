@@ -120,8 +120,6 @@
         <el-select v-model="filters.quality" clearable placeholder="运营问题">
           <el-option label="缺少图片" value="missing_image" />
           <el-option label="缺少描述" value="missing_description" />
-          <el-option label="售罄" value="sold_out" />
-          <el-option label="低库存" value="low_stock" />
           <el-option label="排序靠后" value="sort_late" />
         </el-select>
       </div>
@@ -180,18 +178,6 @@
           </template>
         </el-table-column>
         <el-table-column prop="sort" label="排序" width="90" sortable />
-        <el-table-column label="库存" width="190">
-          <template #default="{ row }">
-            <div class="stock-cell">
-              <el-tag :type="stockTagType(row)" effect="light">{{ stockLabel(row) }}</el-tag>
-              <div class="stock-actions">
-                <el-button size="small" text type="danger" :disabled="isSoldOut(row)" @click="markSoldOut(row)">售罄</el-button>
-                <el-button size="small" text type="primary" @click="addStock(row, 10)">补 10</el-button>
-                <el-button size="small" text @click="clearStockLimit(row)">不限</el-button>
-              </div>
-            </div>
-          </template>
-        </el-table-column>
         <el-table-column label="顾客端展示" min-width="150">
           <template #default="{ row }">
             <div class="display-cell">
@@ -258,38 +244,6 @@
             <el-input v-model="form.specification" placeholder="例如：500g/袋、12 瓶/箱" maxlength="80" />
           </el-form-item>
         </div>
-        <div class="form-grid">
-          <el-form-item label="最低购买量">
-            <el-input-number v-model="form.minimum_order_quantity" :min="1" :max="1000000000" :step="1" class="wide-input" />
-            <small class="field-tip">普通零售保持 1；批量商品可设置更高起订量。</small>
-          </el-form-item>
-          <el-form-item label="数量档位价（可选）">
-            <div class="tier-editor">
-              <div v-for="(tier, index) in form.price_tiers" :key="index" class="tier-row">
-                <span>满</span>
-                <el-input-number v-model="tier.min_quantity" :min="2" :max="1000000000" :step="1" />
-                <span>{{ form.sales_unit || '件' }}，单价</span>
-                <el-input-number v-model="tier.price_yuan" :min="0" :precision="2" :step="0.1" />
-                <span>元</span>
-                <el-button text type="danger" @click="removePriceTier(index)">移除</el-button>
-              </div>
-              <el-button plain size="small" @click="addPriceTier">添加一档</el-button>
-              <small class="field-tip">由商家自行设置起购数量与单价；数量越大，单价不能高于上一档或基础价。</small>
-            </div>
-          </el-form-item>
-        </div>
-        <div class="form-grid">
-          <el-form-item label="库存控制">
-            <el-radio-group v-model="form.stock_enabled">
-              <el-radio-button :label="false">不限库存</el-radio-button>
-              <el-radio-button :label="true">填写库存</el-radio-button>
-            </el-radio-group>
-            <small class="field-tip">不限库存适合服务类或长期供应商品；库存为 0 时顾客端会显示售罄。</small>
-          </el-form-item>
-          <el-form-item label="可售库存">
-            <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="!form.stock_enabled" class="wide-input" />
-          </el-form-item>
-        </div>
         <el-form-item label="商品状态">
           <el-radio-group v-model="form.status">
             <el-radio-button label="active">上架展示</el-radio-button>
@@ -329,6 +283,41 @@
             </div>
           </div>
         </el-form-item>
+        <div class="advanced-settings">
+          <button
+            type="button"
+            class="advanced-settings-toggle"
+            :aria-expanded="advancedSettingsExpanded"
+            aria-controls="merchant-product-advanced-fields"
+            @click="advancedSettingsExpanded = !advancedSettingsExpanded"
+          >
+            <span class="advanced-settings-title">起订量和阶梯价（高级设置）</span>
+            <small class="advanced-settings-summary">{{ advancedSettingsSummary }}</small>
+            <span class="advanced-settings-action">{{ advancedSettingsExpanded ? '收起' : '展开' }}</span>
+          </button>
+          <div id="merchant-product-advanced-fields" v-show="advancedSettingsExpanded" class="advanced-settings-content">
+            <div class="form-grid">
+              <el-form-item label="最低购买量">
+                <el-input-number v-model="form.minimum_order_quantity" :min="1" :max="1000000000" :step="1" class="wide-input" />
+                <small class="field-tip">普通零售保持 1；批量商品可设置更高起订量。</small>
+              </el-form-item>
+              <el-form-item label="数量档位价（可选）">
+                <div class="tier-editor">
+                  <div v-for="(tier, index) in form.price_tiers" :key="index" class="tier-row">
+                    <span>满</span>
+                    <el-input-number v-model="tier.min_quantity" :min="2" :max="1000000000" :step="1" />
+                    <span>{{ form.sales_unit || '件' }}，单价</span>
+                    <el-input-number v-model="tier.price_yuan" :min="0" :precision="2" :step="0.1" />
+                    <span>元</span>
+                    <el-button text type="danger" @click="removePriceTier(index)">移除</el-button>
+                  </div>
+                  <el-button plain size="small" @click="addPriceTier">添加一档</el-button>
+                  <small class="field-tip">由商家自行设置起购数量与单价；数量越大，单价不能高于上一档或基础价。</small>
+                </div>
+              </el-form-item>
+            </div>
+          </div>
+        </div>
         <div v-if="aiDraftNote" class="ai-draft-note">
           <strong>AI 商品优化提示</strong>
           <p>{{ aiDraftNote }}</p>
@@ -415,6 +404,7 @@ const loading = ref(false)
 const saving = ref(false)
 const uploading = ref(false)
 const dialogVisible = ref(false)
+const advancedSettingsExpanded = ref(false)
 const batchCategoryVisible = ref(false)
 const dialogMode = ref('create')
 const editingId = ref(null)
@@ -439,10 +429,14 @@ const form = reactive({
   price_tiers: [],
   description: '',
   image_url: '',
-  stock_enabled: false,
-  stock: 0,
   sort: 100,
   status: 'active'
+})
+
+const advancedSettingsSummary = computed(() => {
+  const minimum = Number(form.minimum_order_quantity || 1)
+  const tierCount = Array.isArray(form.price_tiers) ? form.price_tiers.length : 0
+  return `起订量 ${minimum} · ${tierCount ? `阶梯价 ${tierCount} 档` : '未设置阶梯价'}`
 })
 
 const batchCategoryForm = reactive({
@@ -453,8 +447,6 @@ const activeCount = computed(() => products.value.filter((item) => item.status =
 const inactiveCount = computed(() => products.value.filter((item) => item.status !== 'active').length)
 const missingImageCount = computed(() => products.value.filter((item) => !String(item.image_url || '').trim()).length)
 const missingDescriptionCount = computed(() => products.value.filter((item) => !String(item.description || '').trim()).length)
-const soldOutCount = computed(() => products.value.filter((item) => item.stock !== null && item.stock !== undefined && Number(item.stock) <= 0).length)
-const lowStockCount = computed(() => products.value.filter((item) => item.stock !== null && item.stock !== undefined && Number(item.stock) > 0 && Number(item.stock) <= 5).length)
 const lateSortCount = computed(() => products.value.filter((item) => Number(item.sort || 100) >= 100).length)
 const menuHealthScore = computed(() => {
   if (!products.value.length) return 0
@@ -481,9 +473,6 @@ const launchBrief = computed(() => {
   if (missingImageCount.value > 0) {
     return { title: '先补图片，顾客端转化会更稳', text: `还有 ${missingImageCount.value} 个商品缺图。真实扫码下单时，图片比长描述更影响点击。` }
   }
-  if (soldOutCount.value > 0) {
-    return { title: '先处理售罄商品，避免顾客反复点不到', text: `当前有 ${soldOutCount.value} 个商品库存为 0，可补货、下架或改为不限库存。` }
-  }
   if (inactiveCount.value > 0) {
     return { title: '检查下架商品是否需要恢复', text: `当前有 ${inactiveCount.value} 个商品下架，确认是否缺货、停售或需要重新上架。` }
   }
@@ -494,7 +483,6 @@ const launchChecks = computed(() => [
   { label: '上架商品充足', done: activeCount.value >= Math.min(6, products.value.length || 6), hint: `${activeCount.value} 个上架，顾客只能看到上架商品。` },
   { label: '图片基本完整', done: missingImageCount.value === 0, hint: `${missingImageCount.value} 个缺图，建议优先补齐热销商品。` },
   { label: '描述基本完整', done: missingDescriptionCount.value <= Math.max(1, Math.floor(products.value.length * 0.2)), hint: `${missingDescriptionCount.value} 个缺描述，补口味/规格/推荐理由。` },
-  { label: '无售罄阻塞', done: soldOutCount.value === 0, hint: `${soldOutCount.value} 个售罄商品，库存为 0 时顾客端不可点。` },
   { label: '前排排序清晰', done: lateSortCount.value < products.value.length, hint: '排序值越小越靠前，招牌和套餐建议排前。' }
 ])
 const batchHint = computed(() => {
@@ -507,7 +495,6 @@ const menuHealthTip = computed(() => {
   if (!products.value.length) return '先新增商品形成菜单'
   if (menuHealthScore.value >= 85) return '菜单基础完整，适合继续做套餐和营销'
   if (missingImageCount.value > 0) return '优先补齐商品图片'
-  if (soldOutCount.value > 0) return '优先处理售罄商品'
   if (missingDescriptionCount.value > 0) return '优先补齐商品描述'
   return '检查下架商品和排序'
 })
@@ -519,14 +506,6 @@ const opsCards = computed(() => [
     hint: '图片会直接影响顾客扫码页点击率',
     tone: missingImageCount.value ? 'warning' : 'good',
     action: () => setQualityFilter('missing_image')
-  },
-  {
-    key: 'sold_out',
-    label: '售罄商品',
-    value: soldOutCount.value,
-    hint: '库存为 0 时顾客端不能继续加购',
-    tone: soldOutCount.value ? 'danger' : 'good',
-    action: () => setQualityFilter('sold_out')
   },
   {
     key: 'health',
@@ -552,14 +531,6 @@ const opsCards = computed(() => [
     tone: 'muted',
     action: () => setStatusFilter('inactive')
   },
-  {
-    key: 'low_stock',
-    label: '低库存商品',
-    value: lowStockCount.value,
-    hint: '库存 1-5 份，建议及时补货或下架',
-    tone: lowStockCount.value ? 'warning' : 'good',
-    action: () => setQualityFilter('low_stock')
-  }
 ])
 const primaryOpsCards = computed(() => opsCards.value.slice(0, 3))
 const secondaryOpsCards = computed(() => opsCards.value.slice(3))
@@ -601,8 +572,6 @@ const normalizeCategory = (value) => value || defaultCategory
 const matchesQuality = (item, quality) => {
   if (quality === 'missing_image') return !String(item.image_url || '').trim()
   if (quality === 'missing_description') return !String(item.description || '').trim()
-  if (quality === 'sold_out') return item.stock !== null && item.stock !== undefined && Number(item.stock) <= 0
-  if (quality === 'low_stock') return item.stock !== null && item.stock !== undefined && Number(item.stock) > 0 && Number(item.stock) <= 5
   if (quality === 'sort_late') return Number(item.sort || 100) >= 100
   return true
 }
@@ -611,8 +580,6 @@ const productQualityTags = (item) => {
   if (!String(item.image_url || '').trim()) tags.push({ label: '缺图', type: 'warning' })
   if (!String(item.description || '').trim()) tags.push({ label: '缺描述', type: 'info' })
   if (item.status !== 'active') tags.push({ label: '未展示', type: 'info' })
-  if (item.stock !== null && item.stock !== undefined && Number(item.stock) <= 0) tags.push({ label: '售罄', type: 'danger' })
-  if (item.stock !== null && item.stock !== undefined && Number(item.stock) > 0 && Number(item.stock) <= 5) tags.push({ label: '低库存', type: 'warning' })
   if (Number(item.sort || 100) >= 100) tags.push({ label: '排序靠后', type: 'warning' })
   if (!tags.length) tags.push({ label: '展示完整', type: 'success' })
   return tags
@@ -626,25 +593,10 @@ const visibleActiveProducts = computed(() => products.value
   .sort((a, b) => Number(a.sort || 100) - Number(b.sort || 100)))
 const displayHint = (row) => {
   if (row.status !== 'active') return '下架商品不会出现在扫码页'
-  if (row.stock !== null && row.stock !== undefined && Number(row.stock) <= 0) return '已售罄，顾客不可加购'
   if (!String(row.image_url || '').trim()) return '缺图会影响点击'
   if (Number(row.sort || 100) >= 100) return '排序靠后，建议调整'
   return '扫码页正常展示'
 }
-const stockLabel = (row) => {
-  if (row.stock === null || row.stock === undefined) return '不限库存'
-  const stock = Number(row.stock)
-  if (stock <= 0) return '已售罄'
-  return `剩 ${stock} 份`
-}
-const stockTagType = (row) => {
-  if (row.stock === null || row.stock === undefined) return 'info'
-  const stock = Number(row.stock)
-  if (stock <= 0) return 'danger'
-  if (stock <= 5) return 'warning'
-  return 'success'
-}
-const isSoldOut = (row) => row.stock !== null && row.stock !== undefined && Number(row.stock || 0) <= 0
 const handleSelectionChange = (rows) => {
   selectedProducts.value = rows
 }
@@ -679,8 +631,6 @@ const openProductAI = () => {
       categories: categoryOptions.value.length,
       missing_image: missingImageCount.value,
       missing_desc: missingDescriptionCount.value,
-      sold_out: soldOutCount.value,
-      low_stock: lowStockCount.value,
       health: `${menuHealthScore.value}%`,
       brief: launchBrief.value.title,
       product: products.value[0]?.name || ''
@@ -725,11 +675,10 @@ const resetForm = () => {
     price_tiers: [],
     description: '',
     image_url: '',
-    stock_enabled: false,
-    stock: 0,
     sort: 100,
     status: 'active'
   })
+  advancedSettingsExpanded.value = false
   editingId.value = null
   aiDraftNote.value = ''
 }
@@ -776,6 +725,7 @@ const openCustomerPreview = () => {
 const openEdit = (row) => {
   dialogMode.value = 'edit'
   editingId.value = row.id
+  advancedSettingsExpanded.value = false
   aiDraftNote.value = ''
   Object.assign(form, {
     name: row.name || '',
@@ -787,8 +737,6 @@ const openEdit = (row) => {
     price_tiers: Array.isArray(row.price_tiers) ? row.price_tiers.map((tier) => ({ min_quantity: Number(tier.min_quantity), price_yuan: Number(tier.price || 0) / 100 })) : [],
     description: row.description || '',
     image_url: row.image_url || '',
-    stock_enabled: row.stock !== null && row.stock !== undefined,
-    stock: row.stock === null || row.stock === undefined ? 0 : Number(row.stock),
     sort: row.sort || 100,
     status: row.status || 'active'
   })
@@ -806,7 +754,6 @@ const buildPayload = () => ({
   price_tiers: form.price_tiers.map((tier) => ({ min_quantity: Number(tier.min_quantity), price: yuanToCents(tier.price_yuan) })),
   description: form.description.trim(),
   image_url: form.image_url.trim(),
-  stock: form.stock_enabled ? Number(form.stock || 0) : null,
   sort: Number(form.sort || 100),
   status: form.status || 'active'
 })
@@ -832,7 +779,6 @@ const buildRowPayload = (row, extra = {}) => ({
   price_tiers: Array.isArray(row.price_tiers) ? row.price_tiers : [],
   description: row.description || '',
   image_url: row.image_url || '',
-  stock: row.stock === undefined ? null : row.stock,
   sort: row.sort || 100,
   status: row.status || 'active',
   ...extra
@@ -881,7 +827,6 @@ const buildProductPublishChecks = () => {
   const categoryOk = String(form.category || '').trim().length >= 2
   const descriptionOk = String(form.description || '').trim().length >= 8
   const imageOk = Boolean(String(form.image_url || '').trim()) && isValidImageUrl(form.image_url)
-  const stockOk = !form.stock_enabled || Number(form.stock || 0) > 0
   const sortOk = Number(form.sort || 0) > 0 && Number(form.sort || 0) <= 100
   const items = [
     { ok: nameOk, text: nameOk ? '商品名称清晰。' : '商品名称过短，顾客扫码页不容易判断。' },
@@ -889,7 +834,6 @@ const buildProductPublishChecks = () => {
     { ok: categoryOk, text: categoryOk ? '商品分类可用于顾客筛选。' : '建议补充商品分类，例如热销、套餐、饮品或服务。' },
     { ok: descriptionOk, text: descriptionOk ? '商品描述较完整。' : 'AI 草稿落地后建议补充口味、规格、服务内容或推荐理由。' },
     { ok: imageOk, text: imageOk ? '商品图片已配置。' : '缺少图片会影响顾客点击，建议上传图片后再重点上架。' },
-    { ok: stockOk, text: stockOk ? '库存状态可售。' : '当前库存为 0，顾客端会显示售罄或无法购买。' },
     { ok: sortOk, text: sortOk ? '排序适合在扫码页展示。' : '排序值建议控制在 1-100，重点商品排得更靠前。' }
   ]
   return { items, blockers: items.filter((item) => !item.ok) }
@@ -971,21 +915,6 @@ const moveSort = async (row, delta) => {
   ElMessage.success('排序已更新')
 }
 
-const markSoldOut = async (row) => {
-  await updateRow(row, { stock: 0 })
-  ElMessage.success('已标记售罄，顾客端不可继续加购')
-}
-
-const addStock = async (row, amount) => {
-  const current = row.stock === null || row.stock === undefined ? 0 : Number(row.stock || 0)
-  await updateRow(row, { stock: current + amount, status: 'active' })
-  ElMessage.success(`库存已增加 ${amount} 份`)
-}
-
-const clearStockLimit = async (row) => {
-  await updateRow(row, { stock: null })
-  ElMessage.success('已改为不限库存')
-}
 
 const disableProduct = async (row) => {
   await deleteMerchantStoreProduct(row.id)
@@ -1343,17 +1272,6 @@ onMounted(load)
   margin-top: 7px;
 }
 
-.stock-cell {
-  display: grid;
-  gap: 5px;
-}
-
-.stock-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-wrap: wrap;
-}
 
 .display-cell {
   display: grid;
@@ -1404,6 +1322,48 @@ onMounted(load)
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.advanced-settings {
+  margin: 18px 0;
+  overflow: hidden;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+}
+
+.advanced-settings-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 0;
+  background: #f8fafc;
+  color: #1e293b;
+  cursor: pointer;
+  text-align: left;
+}
+
+.advanced-settings-title {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.advanced-settings-summary {
+  flex: 1;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.advanced-settings-action {
+  color: #2563eb;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.advanced-settings-content {
+  padding: 14px 16px;
+  border-top: 1px solid #e2e8f0;
 }
 
 .form-grid {
@@ -1586,6 +1546,12 @@ onMounted(load)
   .form-grid,
   .image-row {
     grid-template-columns: 1fr;
+  }
+
+  .advanced-settings-toggle {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .batch-strip {

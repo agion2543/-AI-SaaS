@@ -74,6 +74,15 @@ export MYSQL_APP_PASSWORD=replace-with-a-strong-mysql-app-password
 ```
 
 也可以把这两个变量放到服务器的安全环境变量管理里，不建议提交到 GitHub。
+生产部署和全新安装 Compose 都要求这两个变量非空；未设置时 Compose 会直接报错，不再回退到内置占位密码。`MYSQL_APP_PASSWORD` 必须与 `.env.production` 中 `MYSQL_DSN` 的密码一致。
+
+在生产 Compose 启动前，从仓库根目录运行只读预检：
+
+```bash
+python3 scripts/preflight-production-deploy.py
+```
+
+它会检查 `.env.production` 的必需配置和应用/前端/支付回调 URL 格式、当前 shell 中的 `MYSQL_ROOT_PASSWORD`/`MYSQL_APP_PASSWORD`，并确认 `MYSQL_DSN` 指向本项目的 `saas_user@mysql:3306/saas_billing` 且密码一致。检查不会输出密钥、访问支付服务、连接数据库或启动容器；未通过时先修正配置再继续。
 
 ## 4. 新数据库首次安装
 
@@ -143,13 +152,13 @@ ALIPAY_RETURN_URL=https://你的前端域名/payment/return
 
 新安装应使用 `docker-compose.new-install.yml`：它不会挂载 `sql/init.sql` 或历史 SQL 目录，迁移器从空数据库应用版本 `schema-v1-candidate-20261113`，API 随后只运行初始数据种子逻辑，不执行 GORM AutoMigrate。候选快照来自 HEAD `15274c8` 加 2026-11-13 生成时的本地未提交模型改动，批准范围仅限今后的全新安装；它不代表任何历史数据库结构。
 
-`docker-compose.prod.yml` 保留原来的 `mysql_prod_data` 卷键，但移除了 `sql/init.sql` 与历史 SQL 挂载；它先运行 `/app/schema-migrate`，只有迁移成功后才启动 API，并显式设置 `DB_AUTO_MIGRATE=false`、`INITIAL_DATA_SEED_ENABLED=false`。Compose 命名卷会附加项目名前缀，因此升级时必须沿用旧部署的同一个 `-p` 项目名（若旧命令未指定 `-p`，应从同一项目目录运行）；更换项目名会创建另一个卷，不能把它当成已迁移的旧数据库。未知历史结构会被拒绝，API 不启动，也不会回退到 GORM `AutoMigrate`。此入口只接受真正空 schema 或精确受管 v1–v7；全新安装若需要管理员和默认套餐种子，请使用上面的 `docker-compose.new-install.yml`。**运行此 Compose 前，必须确认 `.env.production` 的 `MYSQL_DSN` 指向本项目内的 `mysql:3306/saas_billing`，且密码与 `MYSQL_APP_PASSWORD` 相同；连接独立 MySQL 时改用 `docker-compose.managed.yml`。**旧库升级仍未支持、未验证；不得删除账本绕过拒绝。具体限制见[数据库迁移现状与安全边界](database-migration-status.md)。
+`docker-compose.prod.yml` 保留原来的 `mysql_prod_data` 卷键，但移除了 `sql/init.sql` 与历史 SQL 挂载；它先运行 `/app/schema-migrate`，只有迁移成功后才启动 API，并显式设置 `DB_AUTO_MIGRATE=false`、`INITIAL_DATA_SEED_ENABLED=false`。Compose 命名卷会附加项目名前缀，因此升级时必须沿用旧部署的同一个 `-p` 项目名（若旧命令未指定 `-p`，应从同一项目目录运行）；更换项目名会创建另一个卷，不能把它当成已迁移的旧数据库。未知历史结构会被拒绝，API 不启动，也不会回退到 GORM `AutoMigrate`。此入口只接受真正空 schema（依序安装 v1→v10）、精确受管 v1–v9（顺序升级至 v10）或精确受管 v10（no-op）；全新安装若需要管理员和默认套餐种子，请使用上面的 `docker-compose.new-install.yml`。**运行此 Compose 前，必须确认 `.env.production` 的 `MYSQL_DSN` 指向本项目内的 `mysql:3306/saas_billing`，且密码与 `MYSQL_APP_PASSWORD` 相同；同时在 Compose 的环境中提供非空的 `MYSQL_ROOT_PASSWORD` 和 `MYSQL_APP_PASSWORD`。连接独立 MySQL 时改用 `docker-compose.managed.yml`。**旧库升级仍未支持、未验证；不得删除账本绕过拒绝。具体限制见[数据库迁移现状与安全边界](database-migration-status.md)。
 
 ### 空 schema 或精确受管数据库的版本化部署
 
-若数据库使用生产 Compose 自带的 MySQL 与 `mysql_prod_data` 卷，可运行 `docker-compose.prod.yml`：迁移服务等待 MySQL healthy，backend 等待迁移服务成功退出。真正空 schema 会安装 v1→v8，精确受管 v1–v7 会升级至 v8；非空未知旧库、部分迁移、额外对象或结构漂移均失败关闭，backend 不会启动。此 Compose 的 `.env.production` 必须将 `MYSQL_DSN` 指向 `mysql:3306/saas_billing`；独立 MySQL 必须选用下述 managed Compose。更新时沿用原 Compose 项目名，确保项目名前缀对应的旧 MySQL 卷被复用；该入口关闭启动种子写入，不能替代需要初始管理员/默认套餐的新安装流程。
+若数据库使用生产 Compose 自带的 MySQL 与 `mysql_prod_data` 卷，可运行 `docker-compose.prod.yml`：迁移服务等待 MySQL healthy，backend 等待迁移服务成功退出。真正空 schema 会安装 v1→v10，精确受管 v1–v9 会升级至 v10，精确受管 v10 为 no-op；非空未知旧库、部分迁移、额外对象或结构漂移均失败关闭，backend 不会启动。启动前须提供非空的 `MYSQL_ROOT_PASSWORD`、`MYSQL_APP_PASSWORD`；`.env.production` 中的 `MYSQL_DSN` 必须指向 `mysql:3306/saas_billing`，其密码与 `MYSQL_APP_PASSWORD` 一致。独立 MySQL 必须选用下述 managed Compose。更新时沿用原 Compose 项目名，确保项目名前缀对应的旧 MySQL 卷被复用；该入口关闭启动种子写入，不能替代需要初始管理员/默认套餐的新安装流程。
 
-`docker-compose.managed.yml` 是连接独立 MySQL 的 opt-in 路径：它不创建 MySQL、不挂载数据卷或历史 SQL，也不运行 GORM AutoMigrate。它与生产 Compose 都设置 `INITIAL_DATA_SEED_ENABLED=false`，避免迁移启动时改写 `super_admin` 角色、创建初始管理员或插入默认会员套餐/商家计划；应用配置虽默认开启种子，Compose 会显式覆盖。managed 迁移器虽接受空 schema，但不会创建初始管理员或默认套餐；首次安装需要这些种子数据时应使用上面的 `docker-compose.new-install.yml`。先在 `.env.production` 把 `MYSQL_DSN` 明确设为容器可达的目标 MySQL；数据库本身须已创建，账号须具备迁移所需 DDL 权限。它只接受空 schema（安装 v1→v8）或 checksum、账本和结构指纹精确匹配的受管 v1–v7（逐级升级到 v8）；精确受管 v8 会作为 no-op。非空未知旧库、部分/中断迁移或任何结构漂移都拒绝，迁移失败时 API 不会启动。
+`docker-compose.managed.yml` 是连接独立 MySQL 的 opt-in 路径：它不创建 MySQL、不挂载数据卷或历史 SQL，也不运行 GORM AutoMigrate。它与生产 Compose 都设置 `INITIAL_DATA_SEED_ENABLED=false`，避免迁移启动时改写 `super_admin` 角色、创建初始管理员或插入默认会员套餐/商家计划；应用配置虽默认开启种子，Compose 会显式覆盖。managed 迁移器虽接受空 schema，但不会创建初始管理员或默认套餐；首次安装需要这些种子数据时应使用上面的 `docker-compose.new-install.yml`。先在 `.env.production` 把 `MYSQL_DSN` 明确设为容器可达的目标 MySQL；数据库本身须已创建，账号须具备迁移所需 DDL 权限。它只接受空 schema（安装 v1→v10）或 checksum、账本和结构指纹精确匹配的受管 v1–v9（逐级升级到 v10）；精确受管 v10 会作为 no-op。非空未知旧库、部分/中断迁移或任何结构漂移都拒绝，迁移失败时 API 不会启动。
 
 在切换部署前先备份并停止旧应用对目标库的写入；不要同时运行两套 Compose 连接同一数据库。不要把新安装 Compose 的专属卷与既有数据库混用，也不要将原始历史 SQL 批量执行。未知旧库升级依旧不支持、不应尝试猜测。若版本化迁移在 DDL 中途失败，可能留下 `applying` 状态或部分对象；不要删账本或手工补结构，应停止操作并恢复经验证备份，或仅在隔离副本中排查。
 

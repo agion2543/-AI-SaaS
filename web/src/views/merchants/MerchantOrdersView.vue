@@ -210,6 +210,7 @@
           <template #default="{ row }">
             <div class="order-main">
               <el-link type="primary" @click="goDetail(row)">{{ row.order_no }}</el-link>
+              <el-tag v-if="Number(row.table_no) > 0" size="small" type="warning" effect="plain">{{ row.table_label || `${row.table_no}号桌` }}</el-tag>
               <div class="pickup-code" :class="{ urgent: ['submitted', 'payment_confirming', 'received'].includes(row.status) }">核对码 {{ pickupCode(row) }}</div>
               <small>{{ formatTime(row.created_at) }}</small>
               <small v-if="isActionableOrder(row)" :class="['wait-time', { urgent: orderWaitMinutes(row) >= 10 }]">
@@ -331,7 +332,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -347,10 +348,16 @@ import {
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
+import {
+  mergeMerchantOrderRouteState,
+  normalizeMerchantOrderRouteState,
+  shouldReloadOrdersForQuickModeChange
+} from '../../utils/merchantOrderRouteState'
 import { printStoreOrderReceipt } from '../../utils/orderReceipt'
 
 const route = useRoute()
 const router = useRouter()
+const initialOrderRouteState = normalizeMerchantOrderRouteState(route.query)
 const orders = ref([])
 const stores = ref([])
 const total = ref(0)
@@ -362,12 +369,13 @@ const selectedRows = ref([])
 const noteDialogVisible = ref(false)
 const editingOrderId = ref(null)
 const noteForm = reactive({ merchant_note: '' })
-const filters = reactive({ keyword: '', status: route.query.status || '', store_id: undefined })
-const activeQuickMode = ref(route.query.quick || 'all')
+const filters = reactive({ keyword: '', status: initialOrderRouteState.status, store_id: undefined })
+const activeQuickMode = ref(initialOrderRouteState.quick)
 const autoRefreshEnabled = ref(true)
 const lastRefreshAt = ref('')
 const previousActionCount = ref(null)
 let refreshTimer = null
+let ordersRequestSequence = 0
 const refreshIntervalMs = 20000
 
 const pageReceivableAmount = computed(() => orders.value.reduce((sum, item) => sum + receivableAmount(item), 0))
@@ -724,6 +732,7 @@ const updateRefreshSnapshot = (nextOrders, notify) => {
 }
 
 const loadOrders = async ({ silent = false, notify = false } = {}) => {
+  const requestSequence = ++ordersRequestSequence
   if (!silent) loading.value = true
   try {
     const params = { page: page.value, page_size: pageSize }
@@ -731,14 +740,30 @@ const loadOrders = async ({ silent = false, notify = false } = {}) => {
     if (filters.status) params.status = filters.status
     if (filters.store_id) params.store_id = filters.store_id
     const res = await fetchMerchantOrders(params)
+    if (requestSequence !== ordersRequestSequence) return
     const nextOrders = res.data.list || []
     orders.value = nextOrders
     total.value = res.data.total || 0
     updateRefreshSnapshot(nextOrders, notify)
   } finally {
-    if (!silent) loading.value = false
+    if (requestSequence === ordersRequestSequence) loading.value = false
   }
 }
+
+watch(
+  () => [route.query.status, route.query.quick],
+  ([status, quick]) => {
+    const nextState = normalizeMerchantOrderRouteState({ status, quick })
+    const statusChanged = filters.status !== nextState.status
+    if (!statusChanged && activeQuickMode.value === nextState.quick) return
+
+    filters.status = nextState.status
+    activeQuickMode.value = nextState.quick
+    page.value = 1
+    clearSelection()
+    if (statusChanged) void loadOrders()
+  }
+)
 
 const reload = async () => {
   page.value = 1
@@ -748,16 +773,28 @@ const reload = async () => {
 const setStatus = async (status) => {
   filters.status = status
   activeQuickMode.value = 'all'
-  await reload()
+  page.value = 1
+  clearSelection()
+  await router.replace({
+    query: mergeMerchantOrderRouteState(route.query, { status, quick: 'all' })
+  })
+  await loadOrders()
 }
 
 const setQuickMode = async (mode) => {
+  const statusWasFiltered = Boolean(filters.status)
+  const shouldReload = shouldReloadOrdersForQuickModeChange({
+    statusWasFiltered,
+    currentPage: page.value
+  })
   activeQuickMode.value = mode
-  if (filters.status) {
-    filters.status = ''
-    page.value = 1
-    await loadOrders()
-  }
+  filters.status = ''
+  page.value = 1
+  clearSelection()
+  await router.replace({
+    query: mergeMerchantOrderRouteState(route.query, { status: '', quick: mode })
+  })
+  if (shouldReload) await loadOrders()
 }
 
 const resetFilters = async () => {
@@ -765,6 +802,10 @@ const resetFilters = async () => {
   filters.status = ''
   filters.store_id = undefined
   activeQuickMode.value = 'all'
+  clearSelection()
+  await router.replace({
+    query: mergeMerchantOrderRouteState(route.query, { status: '', quick: 'all' })
+  })
   await reload()
 }
 

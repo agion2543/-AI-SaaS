@@ -10,6 +10,19 @@ import (
 	"go-web-gin-health/internal/model"
 )
 
+func TestOrderSerializersExposeTableNo(t *testing.T) {
+	order := &model.Order{OrderType: "store_order", TableNo: 12}
+	if got := serializePublicCustomerOrder(order)["table_no"]; got != 12 {
+		t.Errorf("public order table_no = %#v, want 12", got)
+	}
+	if got := serializeOrder(order)["table_no"]; got != 12 {
+		t.Errorf("admin order table_no = %#v, want 12", got)
+	}
+	if got := serializeMerchantOrderSummary(order).TableNo; got != 12 {
+		t.Errorf("merchant order table_no = %d, want 12", got)
+	}
+}
+
 func TestSerializePublicCustomerOrderOmitsInternalOrderFields(t *testing.T) {
 	order := &model.Order{
 		OrderNo:                 "SYNTHETIC-ORDER-001",
@@ -43,6 +56,71 @@ func TestSerializePublicCustomerOrderOmitsInternalOrderFields(t *testing.T) {
 	}
 	if got := fmt.Sprint(response["operation_logs"]); strings.Contains(got, "internal") {
 		t.Errorf("public operation log must omit internal details, got %s", got)
+	}
+}
+
+func TestSerializePublicCustomerOrderDerivesCheckoutExpiry(t *testing.T) {
+	createdAt := time.Date(2026, time.November, 23, 14, 0, 0, 0, time.UTC)
+	paidAt := createdAt.Add(time.Minute)
+	for _, test := range []struct {
+		name     string
+		status   string
+		amount   int64
+		paidAt   *time.Time
+		wantTime bool
+	}{
+		{name: "pending checkout", status: "pending", amount: 1000, wantTime: true},
+		{name: "failed checkout", status: "failed", amount: 1000, wantTime: true},
+		{name: "zero amount", status: "pending", amount: 0},
+		{name: "paid", status: "pending", amount: 1000, paidAt: &paidAt},
+		{name: "closed", status: "closed", amount: 1000},
+		{name: "merchant confirmation", status: "payment_confirming", amount: 1000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order := &model.Order{
+				BaseModel:   model.BaseModel{CreatedAt: createdAt},
+				TotalAmount: test.amount,
+				Status:      test.status,
+				PaidAt:      test.paidAt,
+			}
+			response := serializePublicCustomerOrder(order)
+			got, exists := response["expire_time"]
+			deadline, ok := got.(*time.Time)
+			if !test.wantTime {
+				if !exists || deadline != nil {
+					t.Fatalf("expire_time = %#v, want null for non-checkout or paid order", got)
+				}
+				return
+			}
+			if !ok || deadline == nil {
+				t.Fatalf("expire_time = %#v, want derived deadline", got)
+			}
+			if want := createdAt.Add(30 * time.Minute); !deadline.Equal(want) {
+				t.Errorf("expire_time = %s, want %s", deadline, want)
+			}
+		})
+	}
+}
+
+func TestSerializePublicCustomerOrderShowsClosedExpiredUnpaidState(t *testing.T) {
+	paidAt := time.Date(2026, time.November, 23, 14, 31, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		paidAt   *time.Time
+		logs     string
+		wantFlag bool
+	}{
+		{name: "expired unpaid", logs: `[{"action":"checkout_expired","text":"closed","time":"2026-11-23T14:30:00Z"}]`, wantFlag: true},
+		{name: "expired then paid", paidAt: &paidAt, logs: `[{"action":"checkout_expired","text":"closed","time":"2026-11-23T14:30:00Z"}]`},
+		{name: "ordinary closed order", logs: `[{"action":"closed","text":"customer cancelled","time":"2026-11-23T14:30:00Z"}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order := &model.Order{TotalAmount: 1000, Status: "closed", PaidAt: test.paidAt, OperationLogs: test.logs}
+			response := serializePublicCustomerOrder(order)
+			if got := response["expired_unpaid"]; got != test.wantFlag {
+				t.Errorf("expired_unpaid = %#v, want %t", got, test.wantFlag)
+			}
+		})
 	}
 }
 

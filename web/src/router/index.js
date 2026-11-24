@@ -2,55 +2,54 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useMerchantAuthStore } from '../stores/merchantAuth'
-import AdminLayout from '../layout/AdminLayout.vue'
-import MerchantLayout from '../layout/MerchantLayout.vue'
-import UserLayout from '../layout/UserLayout.vue'
-import LoginView from '../views/auth/LoginView.vue'
-import ForgotPasswordView from '../views/auth/ForgotPasswordView.vue'
-import UserLoginView from '../views/auth/UserLoginView.vue'
-import DashboardView from '../views/dashboard/DashboardView.vue'
-import UsersView from '../views/users/UsersView.vue'
-import UserProfileView from '../views/users/UserProfileView.vue'
-import PackagesView from '../views/packages/PackagesView.vue'
-import UserPackagesView from '../views/packages/UserPackagesView.vue'
-import OrdersView from '../views/orders/OrdersView.vue'
-import SubscriptionRevenueView from '../views/orders/SubscriptionRevenueView.vue'
-import UserOrdersView from '../views/orders/UserOrdersView.vue'
-import UserPayView from '../views/orders/UserPayView.vue'
-import PaymentReturnView from '../views/orders/PaymentReturnView.vue'
-import CardsView from '../views/cards/CardsView.vue'
-import SystemView from '../views/system/SystemView.vue'
-import PlatformCostView from '../views/system/PlatformCostView.vue'
-import AuditLogsView from '../views/system/AuditLogsView.vue'
-import FollowUpTodosView from '../views/system/FollowUpTodosView.vue'
-import AdminAccessView from '../views/system/AdminAccessView.vue'
-import AdminAccessRestrictedView from '../views/system/AdminAccessRestrictedView.vue'
-import MerchantsView from '../views/merchants/MerchantsView.vue'
-import GroupBuyLinksView from '../views/platform/GroupBuyLinksView.vue'
-import RefundReconciliationView from '../views/platform/RefundReconciliationView.vue'
-import MerchantDetailView from '../views/merchants/MerchantDetailView.vue'
-import MerchantLoginView from '../views/merchants/MerchantLoginView.vue'
-import MerchantDashboardView from '../views/merchants/MerchantDashboardView.vue'
-import MerchantProfileView from '../views/merchants/MerchantProfileView.vue'
-import MerchantAIView from '../views/merchants/MerchantAIView.vue'
-import MerchantPromotionsView from '../views/merchants/MerchantPromotionsView.vue'
-import MerchantPromotionCalculatorView from '../views/merchants/MerchantPromotionCalculatorView.vue'
-import MerchantGroupBuyView from '../views/merchants/MerchantGroupBuyView.vue'
-import MerchantCouponsView from '../views/merchants/MerchantCouponsView.vue'
-import MerchantShareView from '../views/merchants/MerchantShareView.vue'
-import MerchantStoresView from '../views/merchants/MerchantStoresView.vue'
-import MerchantStoreProductsView from '../views/merchants/MerchantStoreProductsView.vue'
-import MerchantOrdersView from '../views/merchants/MerchantOrdersView.vue'
-import MerchantOrderDetailView from '../views/merchants/MerchantOrderDetailView.vue'
-import MerchantFinanceView from '../views/merchants/MerchantFinanceView.vue'
-import MerchantPaymentSettingsView from '../views/merchants/MerchantPaymentSettingsView.vue'
-import MerchantSubscriptionView from '../views/merchants/MerchantSubscriptionView.vue'
-import MerchantRegisterView from '../views/merchants/MerchantRegisterView.vue'
-import CustomerStoreView from '../views/customer/CustomerStoreView.vue'
-import CustomerOrderSuccessView from '../views/customer/CustomerOrderSuccessView.vue'
-import { fetchMerchantInfo } from '../api/modules'
+import { fetchMerchantInfo, fetchAdminSession } from '../api/modules'
 import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
-import { fetchAdminSession } from '../api/modules'
+const AdminLayout = () => import('../layout/AdminLayout.vue')
+const MerchantLayout = () => import('../layout/MerchantLayout.vue')
+const UserLayout = () => import('../layout/UserLayout.vue')
+const LoginView = () => import('../views/auth/LoginView.vue')
+const ForgotPasswordView = () => import('../views/auth/ForgotPasswordView.vue')
+const UserLoginView = () => import('../views/auth/UserLoginView.vue')
+const DashboardView = () => import('../views/dashboard/DashboardView.vue')
+const UsersView = () => import('../views/users/UsersView.vue')
+const UserProfileView = () => import('../views/users/UserProfileView.vue')
+const PackagesView = () => import('../views/packages/PackagesView.vue')
+const UserPackagesView = () => import('../views/packages/UserPackagesView.vue')
+const OrdersView = () => import('../views/orders/OrdersView.vue')
+const SubscriptionRevenueView = () => import('../views/orders/SubscriptionRevenueView.vue')
+const UserOrdersView = () => import('../views/orders/UserOrdersView.vue')
+const UserPayView = () => import('../views/orders/UserPayView.vue')
+const PaymentReturnView = () => import('../views/orders/PaymentReturnView.vue')
+const CardsView = () => import('../views/cards/CardsView.vue')
+const SystemView = () => import('../views/system/SystemView.vue')
+const PlatformCostView = () => import('../views/system/PlatformCostView.vue')
+const AuditLogsView = () => import('../views/system/AuditLogsView.vue')
+const FollowUpTodosView = () => import('../views/system/FollowUpTodosView.vue')
+const AdminAccessView = () => import('../views/system/AdminAccessView.vue')
+const AdminAccessRestrictedView = () => import('../views/system/AdminAccessRestrictedView.vue')
+const MerchantsView = () => import('../views/merchants/MerchantsView.vue')
+const GroupBuyLinksView = () => import('../views/platform/GroupBuyLinksView.vue')
+const RefundReconciliationView = () => import('../views/platform/RefundReconciliationView.vue')
+const MerchantDetailView = () => import('../views/merchants/MerchantDetailView.vue')
+const MerchantLoginView = () => import('../views/merchants/MerchantLoginView.vue')
+const MerchantDashboardView = () => import('../views/merchants/MerchantDashboardView.vue')
+const MerchantProfileView = () => import('../views/merchants/MerchantProfileView.vue')
+const MerchantAIView = () => import('../views/merchants/MerchantAIView.vue')
+const MerchantPromotionsView = () => import('../views/merchants/MerchantPromotionsView.vue')
+const MerchantPromotionCalculatorView = () => import('../views/merchants/MerchantPromotionCalculatorView.vue')
+const MerchantGroupBuyView = () => import('../views/merchants/MerchantGroupBuyView.vue')
+const MerchantCouponsView = () => import('../views/merchants/MerchantCouponsView.vue')
+const MerchantShareView = () => import('../views/merchants/MerchantShareView.vue')
+const MerchantStoresView = () => import('../views/merchants/MerchantStoresView.vue')
+const MerchantStoreProductsView = () => import('../views/merchants/MerchantStoreProductsView.vue')
+const MerchantOrdersView = () => import('../views/merchants/MerchantOrdersView.vue')
+const MerchantOrderDetailView = () => import('../views/merchants/MerchantOrderDetailView.vue')
+const MerchantFinanceView = () => import('../views/merchants/MerchantFinanceView.vue')
+const MerchantPaymentSettingsView = () => import('../views/merchants/MerchantPaymentSettingsView.vue')
+const MerchantSubscriptionView = () => import('../views/merchants/MerchantSubscriptionView.vue')
+const MerchantRegisterView = () => import('../views/merchants/MerchantRegisterView.vue')
+const CustomerStoreView = () => import('../views/customer/CustomerStoreView.vue')
+const CustomerOrderSuccessView = () => import('../views/customer/CustomerOrderSuccessView.vue')
 
 const routes = [
   { path: '/', redirect: '/admin/dashboard' },

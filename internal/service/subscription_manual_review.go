@@ -94,8 +94,9 @@ func (s *OrderService) ReviewLegacyMerchantSubscriptionOrder(
 		if order.OrderType != "merchant_subscription" {
 			return errors.New("only merchant subscription orders can use historical manual review")
 		}
-		if order.Status != "pending" {
-			return errors.New("only pending subscription orders can use historical manual review")
+		reconcileExpiredStaticQR := order.Status == "closed" && order.PaymentChannel == "platform_qr" && orderHasAction(order.OperationLogs, "checkout_expired")
+		if order.Status != "pending" && !reconcileExpiredStaticQR {
+			return errors.New("only pending orders or expired unpaid platform QR subscriptions can use historical manual review")
 		}
 		if order.MerchantID == nil || *order.MerchantID == 0 {
 			return errors.New("subscription order has no merchant")
@@ -157,7 +158,7 @@ func (s *OrderService) ReviewLegacyMerchantSubscriptionOrder(
 			"operation_logs":      order.OperationLogs,
 			"updated_at":          reviewedAt,
 		}
-		updateResult := tx.Model(&model.Order{}).Where("id = ? AND status = ?", order.ID, "pending").Updates(updates)
+		updateResult := tx.Model(&model.Order{}).Where("id = ? AND status = ?", order.ID, beforeOrderStatus).Updates(updates)
 		if updateResult.Error != nil {
 			return fmt.Errorf("update manually reviewed subscription order: %w", updateResult.Error)
 		}

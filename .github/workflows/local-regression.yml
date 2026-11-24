@@ -8,6 +8,70 @@ permissions:
   contents: read
 
 jobs:
+  compose-config:
+    name: Isolated Compose config validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4.2.2
+
+      - name: Validate Compose files with synthetic environment
+        run: bash scripts/validate-compose-config.sh
+
+  windows-powershell-backup:
+    name: Windows PowerShell synthetic backup
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4.2.2
+
+      - name: Run synthetic PowerShell backup test
+        shell: powershell
+        run: .\scripts\test-backup-mysql.ps1
+
+  schema-lifecycle:
+    name: Isolated MySQL 8 schema lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Install MySQL 8 and listener checker
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends mysql-server iproute2
+          sudo systemctl stop mysql.service || true
+
+      - name: Assert non-root MySQL 8 prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(id -u)" -eq 0 ]]; then
+            echo "The lifecycle harness must run as a non-root user." >&2
+            exit 1
+          fi
+          for tool in go mysqld mysql mysqladmin mysqldump ss; do
+            command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }
+          done
+          server_version="$(mysqld --no-defaults --version)"
+          printf 'MySQL server: %s\n' "$server_version"
+          [[ "$server_version" =~ Ver[[:space:]]8\. ]] || { echo "Expected MySQL 8.x." >&2; exit 1; }
+
+      - name: Run socket-only synthetic schema lifecycle
+        run: bash scripts/validate-schema-lifecycle.sh
+
   offline-regression:
     name: Offline regression baseline
     runs-on: ubuntu-latest

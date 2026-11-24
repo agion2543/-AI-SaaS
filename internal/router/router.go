@@ -32,6 +32,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	packageService := service.NewPackageService(db)
 	alipayService, _ := service.NewAlipayService(cfg)
 	orderService := service.NewOrderService(db, alipayService)
+	tableOrderingService := service.NewTableOrderingService(db, orderService)
 	adminService := service.NewAdminService(cfg, db)
 	adminAccessService := service.NewAdminAccessService(db)
 	merchantService := service.NewMerchantService(cfg, db)
@@ -46,6 +47,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	userCtl := controller.NewUserController(db, authService)
 	packageCtl := controller.NewPackageController(packageService)
 	orderCtl := controller.NewOrderController(orderService, alipayService, auditService)
+	tableOrderingCtl := controller.NewTableOrderingController(tableOrderingService, cfg.FrontendURL)
 	adminCtl := controller.NewAdminController(adminService, dashboardService, auditService, cfg.AppURL)
 	adminAccessCtl := controller.NewAdminAccessController(adminAccessService)
 	shareCtl := controller.NewShareController(shareService)
@@ -83,6 +85,11 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		apiLegacy.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		apiLegacy.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		apiLegacy.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		apiLegacy.POST("/customer/table-sessions/join", tableOrderingCtl.Join)
+		apiLegacy.GET("/customer/table-sessions/:sessionId", tableOrderingCtl.Snapshot)
+		apiLegacy.PUT("/customer/table-sessions/:sessionId/items", tableOrderingCtl.UpdateItem)
+		apiLegacy.DELETE("/customer/table-sessions/:sessionId/items", tableOrderingCtl.Clear)
+		apiLegacy.POST("/customer/table-sessions/:sessionId/checkout", tableOrderingCtl.Checkout)
 		apiLegacy.POST("/customer/orders/recover", orderCtl.RecoverCustomerOrder)
 		apiLegacy.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
 		apiLegacy.POST("/customer/orders/:orderNo/items", orderCtl.AppendCustomerOrderItems)
@@ -97,6 +104,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		merchantLegacy.Use(middleware.Auth(cfg, "merchant", db))
 		{
 			merchantLegacy.GET("/info", merchantCtl.Info)
+			merchantLegacy.GET("/maintenance-notice", merchantCtl.MaintenanceNotice)
 			merchantLegacy.GET("/check-subscription", merchantCtl.CheckSubscription)
 			merchantLegacy.GET("/subscription", merchantCtl.Subscription)
 			merchantLegacy.POST("/subscription/orders", merchantCtl.CreateSubscriptionOrder)
@@ -107,6 +115,8 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantProtected := merchantLegacy.Group("")
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
+				merchantProtected.GET("/store-tables/:storeId", tableOrderingCtl.GetMerchantTables)
+				merchantProtected.PUT("/store-tables/:storeId", tableOrderingCtl.ConfigureMerchantTables)
 				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
 				merchantProtected.GET("/ai/quota", merchantCtl.AIQuota)
 				merchantProtected.POST("/ai/marketing-copy", merchantCtl.GenerateAIMarketingCopy)
@@ -222,6 +232,8 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.POST("/platform-costs/expenses/:id/reversals", adminCtl.CreatePlatformExpenseReversal)
 			adminLegacy.GET("/configs", adminCtl.Configs)
 			adminLegacy.POST("/configs", adminCtl.SaveConfigs)
+			adminLegacy.GET("/maintenance-notice", adminCtl.MaintenanceNotice)
+			adminLegacy.PUT("/maintenance-notice", adminCtl.SaveMaintenanceNotice)
 			adminLegacy.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 		}
 	}
@@ -249,6 +261,11 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		v1.POST("/customer/store/:storeId/coupons", middleware.CustomerCouponLookupRateLimit(cfg.JWTSecret), orderCtl.PublicStoreCoupons)
 		v1.POST("/customer/stores/:id/leads", merchantCtl.CreateCustomerLead)
 		v1.POST("/customer/orders", orderCtl.CreateCustomerOrder)
+		v1.POST("/customer/table-sessions/join", tableOrderingCtl.Join)
+		v1.GET("/customer/table-sessions/:sessionId", tableOrderingCtl.Snapshot)
+		v1.PUT("/customer/table-sessions/:sessionId/items", tableOrderingCtl.UpdateItem)
+		v1.DELETE("/customer/table-sessions/:sessionId/items", tableOrderingCtl.Clear)
+		v1.POST("/customer/table-sessions/:sessionId/checkout", tableOrderingCtl.Checkout)
 		v1.POST("/customer/orders/recover", orderCtl.RecoverCustomerOrder)
 		v1.GET("/customer/orders/:orderNo", orderCtl.CustomerOrderDetail)
 		v1.POST("/customer/orders/:orderNo/items", orderCtl.AppendCustomerOrderItems)
@@ -283,6 +300,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		merchantGroup.Use(middleware.Auth(cfg, "merchant", db))
 		{
 			merchantGroup.GET("/info", merchantCtl.Info)
+			merchantGroup.GET("/maintenance-notice", merchantCtl.MaintenanceNotice)
 			merchantGroup.GET("/check-subscription", merchantCtl.CheckSubscription)
 			merchantGroup.GET("/subscription", merchantCtl.Subscription)
 			merchantGroup.POST("/subscription/orders", merchantCtl.CreateSubscriptionOrder)
@@ -293,6 +311,8 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantProtected := merchantGroup.Group("")
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
+				merchantProtected.GET("/store-tables/:storeId", tableOrderingCtl.GetMerchantTables)
+				merchantProtected.PUT("/store-tables/:storeId", tableOrderingCtl.ConfigureMerchantTables)
 				merchantProtected.GET("/ai/insights", merchantCtl.AIInsights)
 				merchantProtected.GET("/ai/quota", merchantCtl.AIQuota)
 				merchantProtected.POST("/ai/marketing-copy", merchantCtl.GenerateAIMarketingCopy)
@@ -426,6 +446,8 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.GET("/cards", adminCtl.Cards)
 			adminGroup.POST("/configs", adminCtl.SaveConfigs)
 			adminGroup.GET("/configs", adminCtl.Configs)
+			adminGroup.GET("/maintenance-notice", adminCtl.MaintenanceNotice)
+			adminGroup.PUT("/maintenance-notice", adminCtl.SaveMaintenanceNotice)
 		}
 	}
 }

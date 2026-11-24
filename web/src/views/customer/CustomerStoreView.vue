@@ -33,6 +33,16 @@
         </div>
       </header>
 
+      <section v-if="isTableOrder" class="table-session-banner" :class="{ locked: tableSessionLocked }" role="status">
+        <div>
+          <span>共享桌点单 · {{ tableSession?.table_label || tableNoLabel }}</span>
+          <strong>{{ tableSessionLocked ? '本桌已发起结算，购物车已锁定' : '同桌顾客可共同选购' }}</strong>
+          <small v-if="tableSession?.checkout_order_no">结算订单 {{ tableSession.checkout_order_no }}</small>
+          <small v-else>共享购物车会自动同步</small>
+        </div>
+        <el-tag :type="tableSessionLocked ? 'warning' : 'success'">{{ tableSessionLocked ? '已锁定' : '可加购' }}</el-tag>
+      </section>
+
       <section v-if="!available" class="store-unavailable-card">
         <div>
           <span>{{ unavailableReason.label }}</span>
@@ -185,18 +195,17 @@
               <p>{{ product.description || '商家暂未填写商品说明。' }}</p>
               <div class="product-meta-line">
                 <span v-for="badge in productBadges(product).slice(0, 2)" :key="badge">{{ badge }}</span>
-                <span :class="stockStatusClass(product)">{{ stockStatusLabel(product) }}</span>
                 <span v-if="productQuantity(product.id) > 0">已选 {{ productQuantity(product.id) }} 份</span>
               </div>
               <div class="product-bottom">
                 <strong>{{ yuan(product.price) }}</strong>
                 <div v-if="productQuantity(product.id) > 0" class="product-stepper">
-                  <button type="button" @click="decreaseProduct(product.id)">-</button>
+                  <button type="button" :disabled="!canEditTableCart" @click="decreaseProduct(product.id)">-</button>
                   <span>{{ productQuantity(product.id) }}</span>
-                  <button type="button" :disabled="!available || isProductSoldOut(product)" @click="addToCart(product)">+</button>
+                  <button type="button" :disabled="!canEditTableCart" @click="addToCart(product)">+</button>
                 </div>
-                <el-button v-else type="primary" round :disabled="!available || isProductSoldOut(product)" @click="addToCart(product)">
-                  {{ isProductSoldOut(product) ? '售罄' : '加入' }}
+                <el-button v-else type="primary" round :disabled="!canEditTableCart" @click="addToCart(product)">
+                  加入
                 </el-button>
               </div>
             </div>
@@ -210,7 +219,7 @@
         </div>
       </section>
 
-      <button v-if="totalCount > 0" type="button" class="cart-nudge" :class="{ warning: cartStockIssueCount > 0, good: discountTotal > 0 }" @click="openCart">
+      <button v-if="totalCount > 0" type="button" class="cart-nudge" :class="{ good: discountTotal > 0 }" @click="openCart">
         <span>{{ cartNudge.label }}</span>
         <strong>{{ cartNudge.title }}</strong>
         <small>{{ cartNudge.text }}</small>
@@ -249,24 +258,23 @@
           <div v-else class="cart-list">
             <div class="cart-list-head">
               <span>已选 {{ totalCount }} 件</span>
-              <el-button text type="danger" @click="clearCart">清空</el-button>
+              <el-button text type="danger" :disabled="tableSessionLocked || cartBusy" @click="clearCart">清空</el-button>
             </div>
             <article v-for="item in cartItems" :key="item.product_id" class="cart-item">
               <div>
                 <strong>{{ item.name }}</strong>
                 <span>{{ yuan(item.price) }}</span>
-                <small v-if="cartStockHint(item)" :class="{ danger: cartStockDanger(item) }">{{ cartStockHint(item) }}</small>
               </div>
               <div class="cart-actions">
                 <el-input-number
-                  v-model="item.quantity"
+                  :model-value="item.quantity"
                   :min="1"
-                  :max="productStockLimit(item.product_id)"
                   :step="1"
                   size="small"
-                  @change="syncCart"
+                  :disabled="tableSessionLocked || cartBusy"
+                  @change="(value) => setCartQuantity(item.product_id, value)"
                 />
-                <el-button text type="danger" @click="removeFromCart(item.product_id)">删除</el-button>
+                <el-button text type="danger" :disabled="tableSessionLocked || cartBusy" @click="removeFromCart(item.product_id)">删除</el-button>
               </div>
             </article>
           </div>
@@ -317,13 +325,13 @@
               show-word-limit
               placeholder="备注选填，例如规格偏好、预约时间、特殊要求"
             />
-            <el-radio-group v-if="!isSubmitLaterMode" v-model="payMode" class="pay-mode">
+            <el-radio-group v-if="!isSubmitLaterMode && !isTableOrder" v-model="payMode" class="pay-mode">
               <el-radio-button label="page">跳转支付</el-radio-button>
               <el-radio-button label="qr">扫码支付</el-radio-button>
             </el-radio-group>
             <p class="field-tip">{{ checkoutModeTip }}</p>
 
-            <div class="checkout-status-card" :class="{ danger: cartStockIssueCount > 0, good: cartStockIssueCount === 0 && totalCount > 0 }">
+            <div class="checkout-status-card" :class="{ good: totalCount > 0 }">
               <div>
                 <span>{{ checkoutStatusLabel }}</span>
                 <strong>{{ checkoutStatusTitle }}</strong>
@@ -398,6 +406,11 @@ import {
   fetchCustomerStore,
   fetchCustomerStoreCoupons,
   fetchCustomerStoreProducts,
+  joinCustomerTableSession,
+  fetchCustomerTableSession,
+  updateCustomerTableCartItem,
+  clearCustomerTableCart,
+  checkoutCustomerTableSession,
   recoverCustomerOrderAppend,
   recoverCustomerStoreOrder,
   trackShareScan
@@ -431,12 +444,22 @@ const customerPhone = ref('')
 const customerNote = ref('')
 const payMode = ref('page')
 const cart = ref({})
+const tableSession = ref(null)
+const cartBusy = ref(false)
+let cartMutationQueue = Promise.resolve()
 const coupons = ref([])
 const selectedCouponNo = ref('')
 const activeOrder = ref(null)
 const recentOrderNo = ref(localStorage.getItem(`customer_recent_order_${route.params.storeId}`) || '')
 let pollTimer = null
+let tablePollTimer = null
 
+const tableNo = computed(() => Number(route.query.table_no || route.query.tableNo || 0))
+const tableCode = computed(() => String(route.query.table_code || route.query.tableCode || route.query.code || '').trim())
+const isTableOrder = computed(() => tableNo.value > 0 && Boolean(tableCode.value))
+const tableSessionLocked = computed(() => Boolean(tableSession.value?.locked || tableSession.value?.status === 'checkout_locked'))
+const canEditTableCart = computed(() => available.value && !tableSessionLocked.value && !cartBusy.value)
+const tableNoLabel = computed(() => tableNo.value ? `桌号 ${tableNo.value}` : '桌位')
 const shareCode = computed(() => String(route.query.share_code || '').trim())
 const activeOrderNo = computed(() => String(route.query.active_order || '').trim())
 const contactPhone = computed(() => store.value.contact_phone || merchant.value.contact_phone || '')
@@ -468,7 +491,7 @@ const activeProducts = computed(() => [...products.value]
     if (sortDiff !== 0) return sortDiff
     return Number(a.id || 0) - Number(b.id || 0)
   }))
-const orderableProducts = computed(() => activeProducts.value.filter((product) => !isProductSoldOut(product)))
+const orderableProducts = computed(() => activeProducts.value)
 
 const categoryGroups = computed(() => {
   const map = new Map()
@@ -528,7 +551,7 @@ const bestDealText = computed(() => {
 })
 const emptyProductTitle = computed(() => keyword.value.trim() ? '没有找到相关商品' : '暂无可点商品')
 const emptyProductText = computed(() => keyword.value.trim() ? '可以换个关键词或切换分类看看。' : '商家还没有上架商品，可以稍后再来。')
-const appendableActiveOrder = computed(() => Boolean(activeOrderNo.value && activeOrder.value && ['submitted', 'preparing'].includes(activeOrder.value.status) && !activeOrder.value.paid_at))
+const appendableActiveOrder = computed(() => !isTableOrder.value && Boolean(activeOrderNo.value && activeOrder.value && ['submitted', 'preparing'].includes(activeOrder.value.status) && !activeOrder.value.paid_at))
 const activeOrderSummary = computed(() => {
   if (!activeOrderNo.value) return ''
   if (!activeOrder.value) return `订单 ${activeOrderNo.value}`
@@ -573,23 +596,19 @@ const couponTip = computed(() => {
 const discountTotal = computed(() => estimatedDiscount.value + selectedCouponDiscount.value)
 const estimatedPayable = computed(() => Math.max(totalAmount.value - discountTotal.value, 0))
 const payableLabel = computed(() => (isSubmitLaterMode.value || appendableActiveOrder.value ? '预计应付' : '应付金额'))
-const cartStockIssueCount = computed(() => cartItems.value.filter((item) => cartStockDanger(item)).length)
-const checkoutStatusLabel = computed(() => {
-  if (cartStockIssueCount.value > 0) return '库存需调整'
-  if (discountTotal.value > 0) return '优惠已生效'
-  return '结算确认'
-})
+const checkoutStatusLabel = computed(() => (discountTotal.value > 0 ? '优惠已生效' : '结算确认'))
 const checkoutStatusTitle = computed(() => {
-  if (cartStockIssueCount.value > 0) return `${cartStockIssueCount.value} 个商品库存需处理`
   if (appendableActiveOrder.value) return '将追加到当前订单'
   if (isSubmitLaterMode.value) return '提交后可继续查看进度'
+  if (isTableOrder.value) return '提交后使用商家收款码'
   return '提交后进入付款'
 })
 const checkoutStatusText = computed(() => {
-  if (cartStockIssueCount.value > 0) return '请调整售罄或达到库存上限的商品数量，再提交订单。'
+  if (discountTotal.value > 0 && isTableOrder.value && !isSubmitLaterMode.value) return `本单已抵扣 ${yuan(discountTotal.value)}；款项直接进入商家账户，付款后需门店人工核对到账。`
   if (discountTotal.value > 0) return `本单已抵扣 ${yuan(discountTotal.value)}，提交后以订单状态页金额为准。`
   if (appendableActiveOrder.value) return '本次商品会合并到同一笔未结算订单，商家端可看到追加记录。'
   if (isSubmitLaterMode.value) return '订单会先发送给商家，后续可在状态页继续结算或查看处理进度。'
+  if (isTableOrder.value) return '款项直接进入商家自己的支付宝或微信账户；付款后需门店人工核对，页面返回不代表已收款。'
   return '请确认商品、备注和应付金额，付款成功后订单会发送给商家处理。'
 })
 const dealHint = computed(() => {
@@ -607,9 +626,6 @@ const dealHint = computed(() => {
   return { title: '当前无优惠抵扣', text: '可继续下单；如有奖励券，填写手机号后可查询。' }
 })
 const cartNudge = computed(() => {
-  if (cartStockIssueCount.value > 0) {
-    return { label: '库存提醒', title: `${cartStockIssueCount.value} 个商品需调整`, text: '点开购物车处理后再提交' }
-  }
   if (discountTotal.value > 0) {
     return { label: '优惠已生效', title: `已为你抵扣 ${yuan(discountTotal.value)}`, text: `${payableLabel.value} ${yuan(estimatedPayable.value)}` }
   }
@@ -620,27 +636,31 @@ const cartNudge = computed(() => {
   return { label: isSubmitLaterMode.value ? '先提交后结算' : '准备结算', title: `${totalCount.value} 件商品`, text: `${payableLabel.value} ${yuan(estimatedPayable.value)}` }
 })
 const checkoutDisabled = computed(() => {
-  if (!cartItems.value.length || !available.value) return true
+  if (!cartItems.value.length || !available.value || (isTableOrder.value && tableSessionLocked.value)) return true
   if (phoneInvalid.value) return true
   if (!appendableActiveOrder.value && selectedCoupon.value && !selectedCouponUsable.value) return true
   return submitting.value || recoveryChecking.value
 })
 const checkoutButtonText = computed(() => {
   if (!available.value) return '暂停接单'
+  if (isTableOrder.value && tableSessionLocked.value) return '本桌已有人发起结算'
   if (!cartItems.value.length) return '请先选商品'
   if (phoneInvalid.value) return '手机号格式不正确'
   if (selectedCoupon.value && !selectedCouponUsable.value) return '优惠券未达门槛'
   if (appendableActiveOrder.value) return '追加到当前订单'
-  return isSubmitLaterMode.value ? '提交订单' : '提交并付款'
+  if (isSubmitLaterMode.value) return '提交订单'
+  return isTableOrder.value ? '提交并扫码付款' : '提交并付款'
 })
 const checkoutModeTip = computed(() => {
   if (appendableActiveOrder.value) return '当前为继续追加模式，本次商品会合并到同一笔未结算订单。'
   if (isSubmitLaterMode.value) return '当前门店为先提交后结算模式，提交后可在订单状态页查看进度，后续再完成结算。'
+  if (isTableOrder.value) return '桌位订单使用门店已审核的商家收款码；平台不代收，门店核对到账前不会标记为已收款。'
   return '建议在手机上使用“跳转支付”；如果是在电脑或店内平板，可选择扫码支付。'
 })
 const checkoutConfirmText = computed(() => {
   if (appendableActiveOrder.value) return '确认后会把本次商品追加到当前订单，商家端可看到追加记录。'
   if (isSubmitLaterMode.value) return '确认后将创建订单并发送给商家；后续可在订单状态页查看进度和结算。'
+  if (isTableOrder.value) return '确认后将锁定本桌共享购物车；请在订单页使用商家收款码付款，并等待门店人工核对到账。'
   return '确认后将创建订单并进入支付；支付成功后可在订单状态页查看接单进度。'
 })
 const checkoutTrustCards = computed(() => {
@@ -678,54 +698,12 @@ const formatYuan = (value) => (Number(value || 0) / 100).toFixed(2)
 const yuan = (value) => `¥${formatYuan(value)}`
 const shortName = (value = '') => value.slice(0, 2) || '商品'
 const productQuantity = (productId) => Number(cart.value[productId]?.quantity || 0)
-const isProductSoldOut = (product) => product.stock !== undefined && product.stock !== null && Number(product.stock || 0) <= 0
-const isProductLowStock = (product) => product.stock !== undefined && product.stock !== null && Number(product.stock || 0) > 0 && Number(product.stock || 0) <= 5
-const productCardClass = (product) => [
-  'product-card',
-  {
-    selected: productQuantity(product.id) > 0,
-    'sold-out': isProductSoldOut(product),
-    'low-stock': isProductLowStock(product),
-    recommended: productBadges(product).includes('推荐')
-  }
-]
-const productRibbon = (product) => {
-  if (isProductSoldOut(product)) return '售罄'
-  if (isProductLowStock(product)) return '仅剩'
-  if (productBadges(product).includes('推荐')) return '推荐'
-  return ''
-}
-const stockStatusLabel = (product) => {
-  if (product.stock === undefined || product.stock === null) return '可点'
-  if (isProductSoldOut(product)) return '暂不可点'
-  if (isProductLowStock(product)) return `仅剩 ${product.stock} 份`
-  return `库存 ${product.stock}`
-}
-const stockStatusClass = (product) => ({
-  'sold-out': isProductSoldOut(product),
-  'low-stock': isProductLowStock(product),
-  available: product.stock === undefined || product.stock === null
-})
+const productCardClass = (product) => ['product-card', {
+  selected: productQuantity(product.id) > 0,
+  recommended: productBadges(product).includes('推荐')
+}]
+const productRibbon = (product) => (productBadges(product).includes('推荐') ? '推荐' : '')
 const productById = (productId) => products.value.find((product) => Number(product.id) === Number(productId))
-const productStockLimit = (productId) => {
-  const product = productById(productId)
-  if (!product || product.stock === undefined || product.stock === null) return undefined
-  return Math.max(Number(product.stock || 0), 1)
-}
-const cartStockHint = (item) => {
-  const product = productById(item.product_id)
-  if (!product || product.stock === undefined || product.stock === null) return ''
-  const stock = Number(product.stock || 0)
-  if (stock <= 0) return '该商品已售罄，请删除后选择其他商品'
-  if (Number(item.quantity || 0) >= stock) return `已达到当前库存上限 ${stock} 份`
-  if (stock <= 5) return `库存仅剩 ${stock} 份`
-  return ''
-}
-const cartStockDanger = (item) => {
-  const product = productById(item.product_id)
-  if (!product || product.stock === undefined || product.stock === null) return false
-  return Number(product.stock || 0) <= 0 || Number(item.quantity || 0) > Number(product.stock || 0)
-}
 const shouldShowProductImage = (product) => Boolean(product.image_url) && !brokenImages.value.has(product.id)
 const markImageBroken = (productId) => {
   const next = new Set(brokenImages.value)
@@ -787,6 +765,7 @@ const load = async () => {
     promotions.value = storeRes.data.promotions || []
     groupBuyLinks.value = storeRes.data.group_buy_links || []
     await loadProducts()
+    if (isTableOrder.value) await joinTableSession()
     await loadActiveOrder()
     if (shareCode.value) trackShareScan(shareCode.value).catch(() => {})
   } catch (err) {
@@ -846,18 +825,72 @@ const clearRecentOrder = () => {
   localStorage.removeItem(`customer_recent_order_${route.params.storeId}`)
 }
 
+const applyTableSnapshot = (snapshot) => {
+  if (!snapshot) return
+  tableSession.value = snapshot
+  const next = {}
+  ;(snapshot.items || []).forEach((item) => {
+    next[item.product_id] = { ...item, quantity: Number(item.quantity || 0) }
+  })
+  cart.value = next
+}
+
+const joinTableSession = async () => {
+  if (!isTableOrder.value) return
+  try {
+    const res = await joinCustomerTableSession({ store_id: Number(route.params.storeId), table_no: tableNo.value, table_code: tableCode.value })
+    applyTableSnapshot(res.data.session)
+    startTablePolling()
+  } catch (err) {
+    error.value = err.response?.data?.message || '桌码无效或桌位暂不可用，请重新扫码'
+  }
+}
+
+const refreshTableSession = async () => {
+  const session = tableSession.value
+  if (!session?.id || !isTableOrder.value) return
+  try {
+    const res = await fetchCustomerTableSession(session.id, tableCode.value)
+    const latest = res.data.session
+    if (!tableSession.value || Number(latest.cart_version || 0) !== Number(tableSession.value.cart_version || 0) || latest.locked !== tableSession.value.locked) {
+      applyTableSnapshot(latest)
+    }
+  } catch { /* intermittent polling failures are retried */ }
+}
+
+const startTablePolling = () => {
+  stopTablePolling()
+  tablePollTimer = window.setInterval(refreshTableSession, 2500)
+}
+const stopTablePolling = () => {
+  if (tablePollTimer) window.clearInterval(tablePollTimer)
+  tablePollTimer = null
+}
+
+const mutateTableCart = (productId, action, quantity = 0) => {
+  if (!isTableOrder.value) return Promise.resolve()
+  if (tableSessionLocked.value) { ElMessage.warning('本桌已有人发起结算，购物车已锁定'); return Promise.resolve() }
+  const product = productById(productId)
+  if (!product && action !== 'remove') return Promise.resolve()
+  cartBusy.value = true
+  cartMutationQueue = cartMutationQueue.then(async () => {
+    const session = tableSession.value
+    if (!session?.id) throw new Error('桌位会话尚未就绪，请稍后重试')
+    const res = await updateCustomerTableCartItem(session.id, tableCode.value, { product_id: Number(productId), action, quantity })
+    applyTableSnapshot(res.data.session)
+  }).catch((err) => {
+    ElMessage.error(err.response?.data?.message || '共享购物车更新失败，正在同步最新状态')
+    return refreshTableSession()
+  }).finally(() => { cartBusy.value = false })
+  return cartMutationQueue
+}
+
 const pruneCartByProducts = () => {
   const productIds = new Set(activeProducts.value.map((product) => product.id))
   const next = {}
   Object.values(cart.value).forEach((item) => {
     if (!productIds.has(item.product_id)) return
-    const product = productById(item.product_id)
-    if (isProductSoldOut(product)) return
-    const limit = productStockLimit(item.product_id)
-    next[item.product_id] = {
-      ...item,
-      quantity: Math.min(Number(item.quantity || 1), limit || Number(item.quantity || 1))
-    }
+    next[item.product_id] = { ...item, quantity: Math.max(Number(item.quantity || 1), 1) }
   })
   cart.value = next
 }
@@ -882,23 +915,23 @@ const loadCoupons = async () => {
 }
 
 const addToCart = (product) => {
-  if (isProductSoldOut(product)) {
-    ElMessage.warning('该商品暂不可点')
+  if (isTableOrder.value) {
+    if (!canEditTableCart.value) return
+    mutateTableCart(product.id, 'add', 1)
     return
   }
-  const hasStockLimit = product.stock !== undefined && product.stock !== null
-  const stock = hasStockLimit ? Number(product.stock || 0) : Number.MAX_SAFE_INTEGER
-  const nextQuantity = Math.min((cart.value[product.id]?.quantity || 0) + 1, stock)
+  const nextQuantity = (cart.value[product.id]?.quantity || 0) + 1
   cart.value = {
     ...cart.value,
     [product.id]: cart.value[product.id]
       ? { ...cart.value[product.id], quantity: nextQuantity }
       : { product_id: product.id, name: product.name, price: product.price, quantity: 1 }
   }
-  ElMessage.success(hasStockLimit && nextQuantity >= stock ? `已加入，库存最多 ${stock} 份` : `已加入购物车：${product.name}`)
+  ElMessage.success(`已加入购物车：${product.name}`)
 }
 
 const removeFromCart = (productId) => {
+  if (isTableOrder.value) { mutateTableCart(productId, 'remove'); return }
   const next = { ...cart.value }
   delete next[productId]
   cart.value = next
@@ -907,32 +940,47 @@ const removeFromCart = (productId) => {
 const decreaseProduct = (productId) => {
   const item = cart.value[productId]
   if (!item) return
-  const next = { ...cart.value }
-  if (Number(item.quantity || 0) <= 1) {
-    delete next[productId]
-  } else {
-    next[productId] = { ...item, quantity: Number(item.quantity || 0) - 1 }
+  if (isTableOrder.value) {
+    mutateTableCart(productId, Number(item.quantity) <= 1 ? 'remove' : 'set', Math.max(Number(item.quantity) - 1, 0))
+    return
   }
+  const next = { ...cart.value }
+  if (Number(item.quantity || 0) <= 1) delete next[productId]
+  else next[productId] = { ...item, quantity: Number(item.quantity || 0) - 1 }
   cart.value = next
 }
 
-const clearCart = () => {
-  cart.value = {}
+const setCartQuantity = (productId, quantity) => {
+  const value = Number(quantity || 0)
+  if (isTableOrder.value) { mutateTableCart(productId, value <= 0 ? 'remove' : 'set', value); return }
+  const item = cart.value[productId]
+  if (!item) return
+  if (value <= 0) removeFromCart(productId)
+  else cart.value = { ...cart.value, [productId]: { ...item, quantity: value } }
+}
+
+const clearCart = async () => {
+  if (isTableOrder.value) {
+    if (tableSessionLocked.value || cartBusy.value) return
+    cartBusy.value = true
+    try {
+      const res = await clearCustomerTableCart(tableSession.value.id, tableCode.value)
+      applyTableSnapshot(res.data.session)
+    } catch (err) {
+      ElMessage.error(err.response?.data?.message || '清空共享购物车失败')
+      await refreshTableSession()
+      return
+    } finally { cartBusy.value = false }
+  } else { cart.value = {} }
   selectedCouponNo.value = ''
   ElMessage.success('购物车已清空')
 }
 
 const syncCart = () => {
+  if (isTableOrder.value) return refreshTableSession()
   const next = { ...cart.value }
   Object.values(next).forEach((item) => {
-    if (item.quantity <= 0) delete next[item.product_id]
-    const product = productById(item.product_id)
-    if (!product || isProductSoldOut(product)) {
-      delete next[item.product_id]
-      return
-    }
-    const limit = productStockLimit(item.product_id)
-    if (limit) item.quantity = Math.min(Number(item.quantity || 1), limit)
+    if (item.quantity <= 0 || !productById(item.product_id)) delete next[item.product_id]
   })
   cart.value = next
 }
@@ -1218,16 +1266,6 @@ const checkout = async () => {
     ElMessage.warning('购物车商品已不可售，请重新选择')
     return
   }
-  const unavailableItem = cartItems.value.find((item) => {
-    const product = productById(item.product_id)
-    if (!product || isProductSoldOut(product)) return true
-    const limit = productStockLimit(item.product_id)
-    return Boolean(limit && Number(item.quantity || 0) > limit)
-  })
-  if (unavailableItem) {
-    ElMessage.warning('购物车里有库存不足或已售罄商品，请调整后再提交')
-    return
-  }
   if (customerPhone.value && !/^1\d{10}$/.test(customerPhone.value.trim())) {
     ElMessage.warning('手机号需要是 11 位数字')
     return
@@ -1280,11 +1318,21 @@ const checkout = async () => {
       }))
     }
     const attempt = await getCustomerCheckoutAttempt(payload)
-    const res = await createCustomerStoreOrder({
+    const checkoutPayload = {
       ...payload,
       request_key: attempt.request_key,
       access_token: attempt.access_token
-    })
+    }
+    const res = isTableOrder.value
+      ? await checkoutCustomerTableSession(tableSession.value.id, tableCode.value, {
+        request_key: attempt.request_key,
+        access_token: attempt.access_token,
+        customer_phone: payload.customer_phone,
+        customer_note: payload.customer_note,
+        share_code: payload.share_code,
+        coupon_no: payload.coupon_no
+      })
+      : await createCustomerStoreOrder(checkoutPayload)
 
     const order = res.data.order
     const payment = res.data.payment
@@ -1305,6 +1353,12 @@ const checkout = async () => {
       router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
       return
     }
+    if (res.data.payment_config_error && order?.order_no) {
+      ElMessage.warning(res.data.payment_config_error)
+      cartVisible.value = false
+      router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
+      return
+    }
     if (payment?.mode === 'page' && submitAlipayPage(payment.payment_url || payment.form)) return
     if (payment?.mode === 'qr' && payment?.qr_code) {
       qrImageUrl.value = buildQrImage(payment.qr_code)
@@ -1312,7 +1366,9 @@ const checkout = async () => {
       startPolling(order.order_no)
       return
     }
-    ElMessage.success('订单已创建，等待支付结果')
+    ElMessage.success(res.data.payment_method === 'merchant_qr'
+      ? '订单已创建。请在订单页扫描商家收款码，付款后等待门店核对到账。'
+      : '订单已创建，等待支付结果')
     if (order?.order_no) router.push(customerOrderAccessPath(order.order_no, getCustomerOrderAccessToken(order.order_no)))
   } catch (err) {
     ElMessage.error(err.response?.data?.message || (appendRequestInFlight
@@ -1334,7 +1390,7 @@ const initializeCustomerStore = async () => {
 }
 
 onMounted(initializeCustomerStore)
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(() => { stopPolling(); stopTablePolling() })
 </script>
 
 <style scoped>
@@ -1407,6 +1463,35 @@ onBeforeUnmount(stopPolling)
   margin: 0;
   color: rgba(255, 255, 255, 0.76);
 }
+
+.table-session-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 13px 15px;
+  border: 1px solid #bbf7d0;
+  border-radius: 18px;
+  color: #14532d;
+  background: linear-gradient(120deg, #f0fdf4, #ffffff);
+}
+
+.table-session-banner.locked {
+  border-color: #fed7aa;
+  color: #9a3412;
+  background: linear-gradient(120deg, #fff7ed, #ffffff);
+}
+
+.table-session-banner span,
+.table-session-banner strong,
+.table-session-banner small {
+  display: block;
+}
+
+.table-session-banner span { font-size: 11px; font-weight: 800; }
+.table-session-banner strong { margin-top: 3px; font-size: 14px; }
+.table-session-banner small { margin-top: 3px; color: #64748b; font-size: 11px; }
 
 .store-unavailable-card {
   display: flex;
@@ -1854,20 +1939,6 @@ onBeforeUnmount(stopPolling)
   border: 1px solid rgba(37, 99, 235, 0.22);
 }
 
-.product-card.low-stock {
-  border: 1px solid rgba(245, 158, 11, 0.36);
-  background: linear-gradient(135deg, #ffffff, #fffbeb);
-}
-
-.product-card.sold-out {
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-}
-
-.product-card.sold-out .product-info,
-.product-card.sold-out .product-image img {
-  opacity: 0.66;
-}
 
 .product-image {
   position: relative;
@@ -1955,20 +2026,6 @@ onBeforeUnmount(stopPolling)
   font-weight: 800;
 }
 
-.product-meta-line .sold-out {
-  color: #dc2626;
-  background: #fee2e2;
-}
-
-.product-meta-line .low-stock {
-  color: #b45309;
-  background: #fffbeb;
-}
-
-.product-meta-line .available {
-  color: #047857;
-  background: #ecfdf5;
-}
 
 .product-bottom strong {
   color: #ea580c;

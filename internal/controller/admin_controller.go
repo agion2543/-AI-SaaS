@@ -706,6 +706,29 @@ func (ctl *AdminController) Configs(c *gin.Context) {
 	utils.Success(c, list)
 }
 
+func (ctl *AdminController) MaintenanceNotice(c *gin.Context) {
+	notice, err := ctl.admin.GetMaintenanceNotice()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.Success(c, notice)
+}
+
+func (ctl *AdminController) SaveMaintenanceNotice(c *gin.Context) {
+	var req dto.MerchantMaintenanceNotice
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	notice, err := ctl.admin.SaveMaintenanceNotice(req, service.AuditActorFromContext(c))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"saved": true, "notice": notice})
+}
+
 func (ctl *AdminController) SecurityCheck(c *gin.Context) {
 	utils.Success(c, ctl.admin.SecurityCheck())
 }

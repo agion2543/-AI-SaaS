@@ -496,7 +496,7 @@ const merchantStatus = (status) => ({ pending: '待审核', active: '正常', su
 const riskAdvice = (row) => {
   if (row.status === 'suspended') return '先复核冻结原因，确认是否恢复营业或下线商家'
   if (row.refund_rate > 0.35 || row.net_negative) return '优先核对退款记录、顾客投诉和结算金额'
-  if (row.cancel_rate > 0.5) return '联系商家确认库存、营业时间和接单流程'
+  if (row.cancel_rate > 0.5) return '联系商家确认商品上下架状态、营业时间和接单流程'
   if (row.refund_rate > 0.2) return '查看退款原因，必要时暂停活动投放'
   if (row.cancel_rate > 0.3) return '巡检订单取消原因，优化商品可售状态'
   if (Number(row.order_count || 0) >= 3 && row.accept_rate < 0.5) return '提醒商家及时接单，检查通知和人员排班'

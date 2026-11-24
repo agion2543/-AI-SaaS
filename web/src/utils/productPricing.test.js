@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   describeProductPricing,
+  formatCents,
   getMinimumOrderQuantity,
   getProductUnitPrice,
 } from './productPricing.js'
@@ -11,6 +12,11 @@ test('legacy retail product without tier configuration keeps its existing unit p
   assert.equal(getMinimumOrderQuantity(product), 1)
   assert.equal(getProductUnitPrice(product, 1), 1299)
   assert.equal(getProductUnitPrice(product, 8), 1299)
+})
+test('integer cent amounts format as yuan with two decimal places', () => {
+  assert.equal(formatCents(1299), '¥12.99')
+  assert.equal(formatCents(5), '¥0.05')
+  assert.equal(formatCents(0), '¥0.00')
 })
 
 test('quantity-tier price changes only at merchant-configured thresholds', () => {

@@ -3,9 +3,9 @@
     <section class="share-hero">
       <div>
         <p class="eyebrow light">REFERRAL GROWTH</p>
-        <h1>营销裂变看板</h1>
+        <h1>分享活动效果</h1>
         <p class="hero-copy">
-          用分享海报、好友券和复购奖励把一次下单变成二次传播，持续观察扫码、领券、下单和复购转化。
+          查看分享码请求、奖励券状态与系统记录的关联收款订单；以下计数口径与日期范围请以说明为准。
         </p>
       </div>
       <div class="hero-actions">
@@ -37,41 +37,49 @@
 
     <section class="metric-grid">
       <article class="metric-card">
-        <span>分享海报</span>
+        <span>分享活动数</span>
         <strong>{{ stats.total_campaigns || 0 }}</strong>
-        <small>顾客支付成功后生成的海报</small>
+        <small>筛选范围内创建的活动</small>
       </article>
       <article class="metric-card">
-        <span>扫码访问</span>
+        <span>扫码请求</span>
         <strong>{{ stats.scan_count || 0 }}</strong>
-        <small>好友通过海报进入门店页</small>
+        <small>有效分享码请求次数，不按顾客去重</small>
       </article>
       <article class="metric-card">
-        <span>发券数量</span>
+        <span>奖励券数量</span>
         <strong>{{ stats.reward_coupon_count || 0 }}</strong>
-        <small>好友券与分享人奖励券</small>
+        <small>筛选范围内创建的奖励券</small>
       </article>
       <article class="metric-card">
-        <span>转化订单</span>
+        <span>关联收款订单</span>
         <strong>{{ stats.conversion_count || 0 }}</strong>
-        <small>通过分享码完成支付的订单</small>
+        <small>已记录的分享码关联收款订单数，不等于新增顾客数</small>
       </article>
       <article class="metric-card accent">
-        <span>转化金额</span>
+        <span>关联付款金额</span>
         <strong>{{ yuan(stats.conversion_amount || 0) }}</strong>
-        <small>裂变活动带来的交易额</small>
+        <small>记录的付款时订单金额，尚未扣除后续退款</small>
       </article>
     </section>
+
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      title="统计口径"
+      description="日期范围按活动或奖励券创建时间筛选；活动计数是活动创建以来的累计值，扫码请求不去重。奖励券按创建日纳入，状态显示当前状态。关联付款金额按收款确认时的订单金额记录，不扣后续退款；关联记录写入失败时可能少计。以上数据不代表独立顾客、新客数、增量营收或利润，也不是财务结算报表。"
+    />
 
     <section class="insight-grid">
       <el-card class="panel-card" shadow="never">
         <template #header>
           <div class="panel-title">
             <div>
-              <p class="eyebrow">CONVERSION FUNNEL</p>
-              <h2>扫码转化漏斗</h2>
+              <p class="eyebrow">ACTIVITY COUNTS</p>
+              <h2>分享活动计数概览</h2>
             </div>
-            <el-tag type="primary" effect="plain">当前筛选区间</el-tag>
+            <el-tag type="primary" effect="plain">所选创建日期的活动</el-tag>
           </div>
         </template>
         <div class="funnel">
@@ -89,8 +97,8 @@
       <el-card class="panel-card" shadow="never">
         <template #header>
           <div>
-            <p class="eyebrow">COUPON ROI</p>
-            <h2>优惠券使用率</h2>
+            <p class="eyebrow">COUPON REDEMPTION</p>
+            <h2>优惠券核销概览</h2>
           </div>
         </template>
         <div class="coupon-usage">
@@ -130,16 +138,17 @@
         <div v-if="shareReview" class="review-body">
           <div class="review-decision">
             <el-tag :type="reviewTagType(shareReview.level)" size="large">{{ shareReview.decision }}</el-tag>
-            <strong>扫码转化率 {{ percentText(shareReview.scan_conversion_rate) }}</strong>
+            <strong>关联收款订单/扫码请求 {{ percentText(shareReview.scan_conversion_rate) }}</strong>
             <strong>券核销率 {{ percentText(shareReview.coupon_use_rate) }}</strong>
-            <strong>客单转化 {{ yuan(shareReview.avg_conversion_amount || 0) }}</strong>
+            <strong>关联收款订单均额 {{ yuan(shareReview.avg_conversion_amount || 0) }}</strong>
           </div>
+          <small class="review-caveat">扫码请求不去重；该比例不是独立顾客转化率。关联订单金额不扣后续退款，不能代表增量收入或利润。</small>
 
           <div class="review-panels">
             <article>
-              <span>表现最好海报</span>
-              <h3>{{ shareReview.best_campaign?.title || '暂无可复用海报' }}</h3>
-              <p>{{ shareReview.best_campaign?.suggestion || '先开启活动并积累扫码、领券和下单数据。' }}</p>
+              <span>关联收款订单数最多的活动</span>
+              <h3>{{ shareReview.best_campaign?.title || '暂无活动数据' }}</h3>
+              <p>{{ shareReview.best_campaign?.suggestion || '先开启活动并积累扫码请求、奖励券和关联收款记录。' }}</p>
             </article>
             <article>
               <span>优惠券判断</span>
@@ -147,9 +156,9 @@
               <p>{{ shareReview.coupon_advice }}</p>
             </article>
             <article>
-              <span>建议停用/重写</span>
-              <h3>{{ shareReview.stop_campaign?.title || '暂无明显低效海报' }}</h3>
-              <p>{{ shareReview.stop_campaign?.suggestion || '继续观察不同海报和文案的扫码、下单差异。' }}</p>
+              <span>建议人工复核的活动</span>
+              <h3>{{ shareReview.stop_campaign?.title || '暂无待复核活动' }}</h3>
+              <p>{{ shareReview.stop_campaign?.suggestion || '对比活动的扫码请求与关联收款记录；计数差异本身不能证明活动低效。' }}</p>
             </article>
           </div>
 
@@ -319,22 +328,22 @@
           <div class="panel-title">
             <div>
               <p class="eyebrow">RANKING</p>
-              <h2>海报贡献排行</h2>
+              <h2>分享活动计数排行</h2>
             </div>
-            <small>默认按下单数、扫码数排序</small>
+            <small>按已记录关联收款订单数、扫码请求数排序</small>
           </div>
         </template>
-        <el-table v-loading="loading" :data="rankedCampaigns" empty-text="暂无海报活动">
+        <el-table v-loading="loading" :data="rankedCampaigns" empty-text="暂无分享活动">
           <el-table-column label="排名" width="78">
             <template #default="{ $index }">#{{ $index + 1 }}</template>
           </el-table-column>
           <el-table-column prop="store.name" label="门店" min-width="140" />
           <el-table-column prop="poster_title" label="海报标题" min-width="180" show-overflow-tooltip />
           <el-table-column prop="customer_phone" label="分享人" min-width="130" />
-          <el-table-column prop="scan_count" label="扫码" width="90" sortable />
+          <el-table-column prop="scan_count" label="扫码请求" width="100" sortable />
           <el-table-column prop="lead_count" label="发券" width="90" sortable />
-          <el-table-column prop="conversion_count" label="下单" width="90" sortable />
-          <el-table-column label="转化金额" width="120" sortable>
+          <el-table-column prop="conversion_count" label="关联收款订单" width="130" sortable />
+          <el-table-column label="关联付款金额" width="130" sortable>
             <template #default="{ row }">{{ yuan(row.conversion_amount || 0) }}</template>
           </el-table-column>
           <el-table-column prop="created_at" label="创建时间" min-width="160">
@@ -387,6 +396,7 @@ import {
   optimizeMerchantSharePoster,
   saveMerchantShareConfig
 } from '../../api/modules'
+import { shareConfigAmountYuan } from '../../utils/merchantShareMoney'
 
 const router = useRouter()
 const route = useRoute()
@@ -448,10 +458,10 @@ const funnelSteps = computed(() => {
   const couponsIssued = Number(stats.value.reward_coupon_count || 0)
   const orders = Number(stats.value.conversion_count || 0)
   return [
-    { label: '生成海报', value: posters, percent: 100, tip: '顾客支付成功后生成可分享海报' },
-    { label: '好友扫码', value: scans, percent: percent(scans, Math.max(posters, 1)), tip: `扫码/海报：${ratio(scans, posters)}` },
-    { label: '自动发券', value: couponsIssued, percent: percent(couponsIssued, Math.max(scans * 2, 1)), tip: `发券/扫码：${ratio(couponsIssued, scans)}` },
-    { label: '转化下单', value: orders, percent: percent(orders, Math.max(scans, 1)), tip: `下单/扫码：${ratio(orders, scans)}` }
+    { label: '活动数', value: posters, percent: 100, tip: '筛选范围内创建的活动' },
+    { label: '扫码请求', value: scans, percent: percent(scans, Math.max(posters, 1)), tip: `请求/活动：${ratio(scans, posters)}；扫码不去重` },
+    { label: '奖励券', value: couponsIssued, percent: percent(couponsIssued, Math.max(scans, 1)), tip: `券数/扫码请求：${ratio(couponsIssued, scans)}；仅作计数对比` },
+    { label: '关联收款订单', value: orders, percent: percent(orders, Math.max(scans, 1)), tip: `订单/扫码请求：${ratio(orders, scans)}；不是独立顾客转化率` }
   ]
 })
 
@@ -470,8 +480,8 @@ const actionCards = computed(() => {
     },
     {
       type: '社群话术',
-      title: '沉睡顾客召回',
-      text: '适合发到微信群或私域群，强调限时和朋友一起用。',
+      title: '邀请好友到店体验',
+      text: '适合在社群中分享活动信息，邀请好友扫码查看优惠。',
       copy: `本周福利：好友扫码领${friendCoupon}券，满${threshold}可用。带朋友来下单，分享人也有复购奖励，数量有限，先到先得。`
     },
     {
@@ -501,10 +511,10 @@ const applyConfig = (next = {}) => {
   form.enabled = Boolean(next.enabled)
   form.poster_title = next.poster_title || '好友扫码领券'
   form.poster_copy = next.poster_copy || defaultCopy
-  form.friend_coupon_amount_yuan = fenToYuan(next.friend_coupon_amount || 500)
-  form.friend_coupon_threshold_yuan = fenToYuan(next.friend_coupon_threshold || 3000)
-  form.referrer_coupon_amount_yuan = fenToYuan(next.referrer_coupon_amount || 500)
-  form.referrer_coupon_threshold_yuan = fenToYuan(next.referrer_coupon_threshold || 3000)
+  form.friend_coupon_amount_yuan = shareConfigAmountYuan(next.friend_coupon_amount, 500)
+  form.friend_coupon_threshold_yuan = shareConfigAmountYuan(next.friend_coupon_threshold, 3000)
+  form.referrer_coupon_amount_yuan = shareConfigAmountYuan(next.referrer_coupon_amount, 500)
+  form.referrer_coupon_threshold_yuan = shareConfigAmountYuan(next.referrer_coupon_threshold, 3000)
   form.valid_days = next.valid_days || 30
 }
 
@@ -618,7 +628,7 @@ const generateReferralCopy = async () => {
     const bestCampaign = rankedCampaigns.value[0]
     const payload = {
       product_name: bestCampaign?.store?.name || '',
-      goal: `提升裂变扫码、领券、下单和复购转化。当前扫码 ${stats.value.scan_count || 0} 次，发券 ${stats.value.reward_coupon_count || 0} 张，下单 ${stats.value.conversion_count || 0} 单。`,
+      goal: `生成邀请好友查看分享活动的社群文案，不把扫码或关联收款计数表述为新增顾客或增量收入。当前有 ${stats.value.scan_count || 0} 次扫码请求、${stats.value.reward_coupon_count || 0} 张奖励券、${stats.value.conversion_count || 0} 笔已记录关联收款订单。`,
       tone: '亲切、可信、适合本地生活商家，文案要能直接复制发布'
     }
     const res = await generateMerchantAIReferralCopy(payload)

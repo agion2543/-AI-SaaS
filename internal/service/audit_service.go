@@ -243,7 +243,7 @@ func (s *AuditService) List(filter AuditListFilter, page, pageSize int) ([]model
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+	if err := query.Order("created_at desc, id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
 	return logs, total, nil

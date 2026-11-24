@@ -88,6 +88,7 @@
 
     <section class="fulfillment-strip">
       <div class="pickup-focus">
+        <strong v-if="Number(order.table_no) > 0" class="table-number">{{ order.table_label || `${order.table_no}号桌` }}</strong>
         <span>核对码</span>
         <strong>{{ pickupCode }}</strong>
         <small>{{ order.status === 'received' ? `待接单已等待 ${waitText}` : statusLabel(order.status) }}</small>
@@ -112,20 +113,6 @@
       </div>
     </section>
 
-    <section v-if="stockAlertLogs.length" class="stock-alert-board">
-      <div>
-        <span>STOCK CHECK</span>
-        <strong>{{ stockAlertTitle }}</strong>
-        <p>{{ stockAlertText }}</p>
-      </div>
-      <div class="stock-alert-list">
-        <article v-for="(log, index) in stockAlertLogs" :key="`stock-${index}`" :class="{ danger: isStockDanger(log) }">
-          <strong>{{ isStockDanger(log) ? '库存异常' : '库存已扣减' }}</strong>
-          <p>{{ log.text }}</p>
-          <small>{{ formatTime(log.time) }}</small>
-        </article>
-      </div>
-    </section>
 
     <section class="receipt-grid">
       <DataPanel eyebrow="SUMMARY" title="订单小票" description="用于商家核对顾客、门店、应收、收款状态、优惠和退款。">
@@ -454,9 +441,7 @@ const netAmountHint = computed(() => {
   return '已确认收款'
 })
 const refundLogs = computed(() => (Array.isArray(order.value.operation_logs) ? order.value.operation_logs : []).filter((item) => item.action === 'refund'))
-const stockAlertLogs = computed(() => (Array.isArray(order.value.operation_logs) ? order.value.operation_logs : []).filter((item) => item.action === 'stock_deducted'))
 const appendLogs = computed(() => (Array.isArray(order.value.operation_logs) ? order.value.operation_logs : []).filter((item) => item.action === 'items_appended'))
-const hasStockDanger = computed(() => stockAlertLogs.value.some(isStockDanger))
 const totalQuantity = computed(() => (Array.isArray(order.value.items) ? order.value.items : []).reduce((sum, item) => sum + Number(item.quantity || 0), 0))
 const paymentMarkedAt = computed(() => logTime('customer_paid') || logTime('submitted') || '')
 const pickupCode = computed(() => {
@@ -474,15 +459,6 @@ const waitText = computed(() => {
   const hours = Math.floor(waitMinutes.value / 60)
   const minutes = waitMinutes.value % 60
   return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`
-})
-const stockAlertTitle = computed(() => {
-  if (hasStockDanger.value) return '库存异常，接单前先核对商品'
-  if (stockAlertLogs.value.length) return '库存已自动扣减'
-  return ''
-})
-const stockAlertText = computed(() => {
-  if (hasStockDanger.value) return '系统已确认付款，但部分商品库存不足或并发变动。建议先联系顾客确认替换、退款或等待补货，再继续处理。'
-  return '支付成功后已按订单商品扣减库存，不限库存商品不会扣减。'
 })
 const paymentState = computed(() => {
   if (receivableAmount.value <= 0) {
@@ -644,10 +620,6 @@ const refundAdvice = computed(() => {
 })
 const fulfillmentChecklist = computed(() => [
   {
-    label: hasStockDanger.value ? '存在库存异常：接单前先联系顾客或调整商品' : '库存已核对，未发现阻塞接单的库存异常',
-    done: !hasStockDanger.value
-  },
-  {
     label: paymentChecklistText.value,
     done: paymentChecklistDone.value
   },
@@ -692,18 +664,7 @@ const load = async () => {
   order.value = res.data.order || {}
 }
 
-const confirmStockBeforeAccept = async () => {
-  if (!hasStockDanger.value || order.value.status !== 'received') return true
-  await ElMessageBox.confirm(
-    '该订单存在库存异常。请确认已联系顾客或已有替换/退款处理方案，再继续接单。',
-    '库存异常提醒',
-    { type: 'warning', confirmButtonText: '已确认，继续接单', cancelButtonText: '先不接单' }
-  )
-  return true
-}
-
 const accept = async () => {
-  await confirmStockBeforeAccept()
   await acceptMerchantOrder(order.value.id)
   ElMessage.success('订单已接单')
   load()
@@ -882,7 +843,7 @@ const refundType = (status) => ({
 }[status] || 'info')
 const actionLabel = (action) => ({
   paid: '支付成功',
-  stock_deducted: '库存扣减',
+  stock_deducted: '旧库存记录',
   accepted: '商家已接单',
   submitted: '订单已提交',
   customer_paid: '顾客标记已付款',
@@ -894,9 +855,6 @@ const actionLabel = (action) => ({
   refund: '已记录退款',
   note: '更新内部备注'
 }[action] || action || '处理记录')
-function isStockDanger(log) {
-  return String(log?.text || '').includes('库存异常')
-}
 const logTime = (action) => {
   const logs = Array.isArray(order.value.operation_logs) ? order.value.operation_logs : []
   const log = logs.find((item) => item.action === action)
@@ -1072,6 +1030,14 @@ onMounted(load)
   letter-spacing: 0;
 }
 
+.pickup-focus strong.table-number {
+  margin-top: 0;
+  margin-bottom: 8px;
+  color: #b45309;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
 .fulfillment-card strong {
   margin-top: 8px;
   color: #0f2747;
@@ -1188,83 +1154,7 @@ onMounted(load)
   gap: 10px;
 }
 
-.stock-alert-board {
-  display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.6fr);
-  gap: 14px;
-  padding: 16px 18px;
-  border: 1px solid #fed7aa;
-  border-radius: 20px;
-  background: linear-gradient(135deg, #fff7ed, #ffffff);
-  box-shadow: 0 14px 34px rgba(154, 52, 18, 0.08);
-}
 
-.stock-alert-board > div:first-child span,
-.stock-alert-board > div:first-child strong,
-.stock-alert-board > div:first-child p {
-  display: block;
-}
-
-.stock-alert-board > div:first-child span {
-  color: #ea580c;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.1em;
-}
-
-.stock-alert-board > div:first-child strong {
-  margin-top: 6px;
-  color: #7c2d12;
-  font-size: 22px;
-}
-
-.stock-alert-board > div:first-child p {
-  margin: 8px 0 0;
-  color: #9a3412;
-  line-height: 1.6;
-}
-
-.stock-alert-list {
-  display: grid;
-  gap: 10px;
-}
-
-.stock-alert-list article {
-  padding: 12px;
-  border: 1px solid #fed7aa;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.84);
-}
-
-.stock-alert-list article.danger {
-  border-color: #fecaca;
-  background: #fff1f2;
-}
-
-.stock-alert-list strong,
-.stock-alert-list p,
-.stock-alert-list small {
-  display: block;
-}
-
-.stock-alert-list strong {
-  color: #9a3412;
-}
-
-.stock-alert-list article.danger strong {
-  color: #b91c1c;
-}
-
-.stock-alert-list p {
-  margin: 6px 0 0;
-  color: #475569;
-  line-height: 1.55;
-}
-
-.stock-alert-list small {
-  margin-top: 6px;
-  color: #94a3b8;
-}
 
 .receipt-grid,
 .content-grid {

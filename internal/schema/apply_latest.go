@@ -13,160 +13,101 @@ import (
 // ApplyLatest installs v1 into a genuinely empty schema, then appends the
 // subscription manual-review v2, administrator auth-version v3, phone OTP
 // safety v4, email OTP safety v5, light wholesale/retail v6, append-only
-// platform expenses v7, and expense reversal v8 migrations. Existing schemas are accepted
+// platform expenses v7, expense reversal v8, shared table-ordering v9, and
+// merchant table-label v10 migrations. Existing schemas are accepted
 // only when they are exact managed versions; legacy and unknown databases stay
 // fail-closed.
 func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
-	var err error
-	v1Result, v1Err := ApplyCandidate(ctx, db)
-	if v1Err != nil {
-		// First accept or advance the latest exact version. If this fails, probe
-		// earlier exact versions in reverse order; every probe is read-only until
-		// its own source version has been fully verified.
-		v8Result, v8Err := ApplyPlatformExpenseReversalsV8(ctx, db)
-		if v8Err == nil {
-			return v8Result, nil
+	type migrationStep struct {
+		version string
+		apply   func(context.Context, *sql.DB) (Result, error)
+	}
+	steps := []migrationStep{
+		{ManualReviewV2Version, ApplyManualReviewV2},
+		{AdminAuthV3Version, ApplyAdminAuthVersionV3},
+		{OTPSafetyV4Version, ApplyOTPSafetyV4},
+		{EmailOTPSafetyV5Version, ApplyEmailOTPSafetyV5},
+		{WholesaleRetailV6Version, ApplyWholesaleRetailV6},
+		{PlatformExpensesV7Version, ApplyPlatformExpensesV7},
+		{PlatformExpenseReversalsV8Version, ApplyPlatformExpenseReversalsV8},
+		{TableOrderingV9Version, ApplyTableOrderingV9},
+		{TableLabelsV10Version, ApplyTableLabelsV10},
+	}
+	continueFrom := func(version string, prior Result) (Result, error) {
+		current := -1
+		for i := range steps {
+			if steps[i].version == version {
+				current = i
+				break
+			}
 		}
-		v7Result, v7Err := ApplyPlatformExpensesV7(ctx, db)
-		if v7Err == nil {
-			v8Result, err = ApplyPlatformExpenseReversalsV8(ctx, db)
+		if version == BaselineVersion {
+			current = -1
+		} else if current < 0 {
+			return "", fmt.Errorf("unknown managed schema version %q", version)
+		}
+		applied := prior == ResultApplied
+		for _, step := range steps[current+1:] {
+			result, err := step.apply(ctx, db)
 			if err != nil {
 				return "", err
 			}
-			if v7Result == ResultApplied || v8Result == ResultApplied {
-				return ResultApplied, nil
-			}
-			return ResultAlready, nil
-		}
-		v6Result, v6Err := ApplyWholesaleRetailV6(ctx, db)
-		if v6Err == nil {
-			v7Result, err = ApplyPlatformExpensesV7(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v8Result, err = ApplyPlatformExpenseReversalsV8(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			if v6Result == ResultApplied || v7Result == ResultApplied || v8Result == ResultApplied {
-				return ResultApplied, nil
-			}
-			return ResultAlready, nil
-		}
-		v5Result, v5Err := ApplyEmailOTPSafetyV5(ctx, db)
-		if v5Err == nil {
-			v6Result, err := ApplyWholesaleRetailV6(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v7Result, err = ApplyPlatformExpensesV7(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v8Result, err = ApplyPlatformExpenseReversalsV8(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			if v5Result == ResultApplied || v6Result == ResultApplied || v7Result == ResultApplied || v8Result == ResultApplied {
-				return ResultApplied, nil
-			}
-			return ResultAlready, nil
-		}
-		v4Result, v4Err := ApplyOTPSafetyV4(ctx, db)
-		if v4Err == nil {
-			v5Result, err = ApplyEmailOTPSafetyV5(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v6Result, err = ApplyWholesaleRetailV6(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v7Result, err = ApplyPlatformExpensesV7(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			v8Result, err = ApplyPlatformExpenseReversalsV8(ctx, db)
-			if err != nil {
-				return "", err
-			}
-			if v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied || v7Result == ResultApplied || v8Result == ResultApplied {
-				return ResultApplied, nil
-			}
-			return ResultAlready, nil
-		}
-		if db != nil {
-			var laterLedgerRows int64
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_schema_migrations WHERE version IN (?, ?, ?, ?, ?, ?)`, AdminAuthV3Version, OTPSafetyV4Version, EmailOTPSafetyV5Version, WholesaleRetailV6Version, PlatformExpensesV7Version, PlatformExpenseReversalsV8Version).Scan(&laterLedgerRows); err == nil && laterLedgerRows > 0 {
-				return "", v8Err
+			if result == ResultApplied {
+				applied = true
 			}
 		}
-		v2Result, err := ApplyManualReviewV2(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v3Result, err := ApplyAdminAuthVersionV3(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v4Result, err = ApplyOTPSafetyV4(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v5Result, err = ApplyEmailOTPSafetyV5(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v6Result, err = ApplyWholesaleRetailV6(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v7Result, err = ApplyPlatformExpensesV7(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		v8Result, err = ApplyPlatformExpenseReversalsV8(ctx, db)
-		if err != nil {
-			return "", err
-		}
-		if v2Result == ResultApplied || v3Result == ResultApplied || v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied || v7Result == ResultApplied || v8Result == ResultApplied {
+		if applied {
 			return ResultApplied, nil
 		}
 		return ResultAlready, nil
 	}
 
-	v2Result, err := ApplyManualReviewV2(ctx, db)
-	if err != nil {
-		return "", err
+	v1Result, v1Err := ApplyCandidate(ctx, db)
+	if v1Err == nil {
+		return continueFrom(BaselineVersion, v1Result)
 	}
-	v3Result, err := ApplyAdminAuthVersionV3(ctx, db)
-	if err != nil {
-		return "", err
+
+	// Probe from newest to oldest. Each migration verifies an exact managed
+	// source schema before it can write, so failed probes leave the database
+	// untouched; a successful probe is then advanced through every later step.
+	probes := []migrationStep{
+		{TableLabelsV10Version, ApplyTableLabelsV10},
+		{TableOrderingV9Version, ApplyTableOrderingV9},
+		{PlatformExpenseReversalsV8Version, ApplyPlatformExpenseReversalsV8},
+		{PlatformExpensesV7Version, ApplyPlatformExpensesV7},
+		{WholesaleRetailV6Version, ApplyWholesaleRetailV6},
+		{EmailOTPSafetyV5Version, ApplyEmailOTPSafetyV5},
+		{OTPSafetyV4Version, ApplyOTPSafetyV4},
+		{AdminAuthV3Version, ApplyAdminAuthVersionV3},
+		{ManualReviewV2Version, ApplyManualReviewV2},
 	}
-	v4Result, err := ApplyOTPSafetyV4(ctx, db)
-	if err != nil {
-		return "", err
+	probeErrors := make([]error, 0, len(probes))
+	for _, probe := range probes {
+		result, err := probe.apply(ctx, db)
+		if err != nil {
+			probeErrors = append(probeErrors, err)
+			continue
+		}
+		return continueFrom(probe.version, result)
 	}
-	v5Result, err := ApplyEmailOTPSafetyV5(ctx, db)
-	if err != nil {
-		return "", err
+	// Preserve the baseline verifier's explicit checksum refusal. Otherwise,
+	// prefer the most specific lower-version schema/ledger error over the
+	// initial v1 probe error, which often only reports an inventory mismatch.
+	if strings.Contains(v1Err.Error(), "checksum mismatch") {
+		return "", v1Err
 	}
-	v6Result, err := ApplyWholesaleRetailV6(ctx, db)
-	if err != nil {
-		return "", err
+	for _, probeErr := range probeErrors {
+		if strings.Contains(probeErr.Error(), "v7 schema drift") {
+			return "", probeErr
+		}
 	}
-	v7Result, err := ApplyPlatformExpensesV7(ctx, db)
-	if err != nil {
-		return "", err
+	for i := len(probeErrors) - 1; i >= 0; i-- {
+		message := probeErrors[i].Error()
+		if strings.Contains(message, "schema drift") || strings.Contains(message, "ledger entry") || strings.Contains(message, "checksum mismatch") {
+			return "", probeErrors[i]
+		}
 	}
-	v8Result, err := ApplyPlatformExpenseReversalsV8(ctx, db)
-	if err != nil {
-		return "", err
-	}
-	if v1Result == ResultApplied || v2Result == ResultApplied || v3Result == ResultApplied || v4Result == ResultApplied || v5Result == ResultApplied || v6Result == ResultApplied || v7Result == ResultApplied || v8Result == ResultApplied {
-		return ResultApplied, nil
-	}
-	return ResultAlready, nil
+	return "", v1Err
 }
 
 // ApplyManualReviewV2 adds the narrowly scoped append-only historical

@@ -95,7 +95,7 @@ npm run dev
 
 快速启动：
 
-全新安装请使用带初始管理员和默认套餐种子的独立 Compose。`docker-compose.prod.yml` 现有版本化迁移门禁：只接受空 schema（依序安装至 v8）、精确受管 v1–v7（顺序升级至 v8）或精确受管 v8（no-op）；迁移成功后才启动 API，并关闭 GORM `AutoMigrate` 与启动种子写入。未知历史结构会被拒绝，API 保持停止。升级时须沿用旧部署的 Compose 项目名（命名卷名包含项目名前缀），并确认 `.env.production` 的 `MYSQL_DSN` 指向该 Compose 内的 `mysql:3306/saas_billing`；独立 MySQL 应使用 `docker-compose.managed.yml`。阅读[生产部署说明](docs/production-deploy.md)中的数据库迁移章节后，再选择适合目标库的入口。
+全新安装请使用带初始管理员和默认套餐种子的独立 Compose。运行前须在当前 shell 设置非空的 `MYSQL_ROOT_PASSWORD` 和 `MYSQL_APP_PASSWORD`；`MYSQL_APP_PASSWORD` 必须与 `.env.production` 的 `MYSQL_DSN` 密码一致，缺少变量时 Compose 会拒绝启动。`docker-compose.prod.yml` 的版本化迁移门禁只接受空 schema（依序安装至 v10）、精确受管 v1–v9（顺序升级至 v10）或精确受管 v10（no-op）；迁移成功后才启动 API，并关闭 GORM `AutoMigrate` 与启动种子写入。未知历史结构会被拒绝，API 保持停止。升级时须沿用旧部署的 Compose 项目名（命名卷名包含项目名前缀），并确认 `.env.production` 的 `MYSQL_DSN` 指向该 Compose 内的 `mysql:3306/saas_billing`；独立 MySQL 应使用 `docker-compose.managed.yml`。阅读[生产部署说明](docs/production-deploy.md)中的数据库迁移章节后，再选择适合目标库的入口。
 
 ```bash
 cp .env.production.example .env.production

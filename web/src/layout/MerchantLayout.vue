@@ -8,28 +8,33 @@
 
       <el-menu
         router
-        :default-active="$route.path"
+        :mode="compactNavigation ? 'horizontal' : 'vertical'"
+        :default-active="activeMenuPath"
         class="merchant-menu"
         background-color="transparent"
         text-color="#cfe4ef"
         active-text-color="#ffffff"
       >
-        <div class="menu-section">{{ text.sectionOperation }}</div>
-        <el-menu-item index="/merchant/dashboard" :disabled="navigationLocked">{{ text.dashboard }}</el-menu-item>
-        <el-menu-item index="/merchant/stores" :disabled="navigationLocked">{{ text.stores }}</el-menu-item>
+        <div class="menu-section">{{ text.sectionOrders }}</div>
         <el-menu-item index="/merchant/orders" :disabled="navigationLocked">{{ text.orders }}</el-menu-item>
         <el-menu-item index="/merchant/finance" :disabled="navigationLocked">{{ text.finance }}</el-menu-item>
+        <div class="menu-section">{{ text.sectionStores }}</div>
+        <el-menu-item index="/merchant/stores" :disabled="navigationLocked">{{ text.stores }}</el-menu-item>
+        <div class="menu-section">{{ text.sectionActivity }}</div>
+        <el-menu-item index="/merchant/dashboard" :disabled="navigationLocked">{{ text.dashboard }}</el-menu-item>
         <el-menu-item index="/merchant/promotions" :disabled="navigationLocked">{{ text.promotions }}</el-menu-item>
-        <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
-        <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
-        <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
-        <div class="menu-section">{{ text.sectionAI }}</div>
-        <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
         <el-menu-item index="/merchant/share" :disabled="navigationLocked">{{ text.share }}</el-menu-item>
-        <div class="menu-section">{{ text.sectionSettings }}</div>
+        <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
+        <div class="menu-section">{{ text.sectionSubscription }}</div>
         <el-menu-item index="/merchant/subscription">{{ text.subscription }}</el-menu-item>
-        <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
-        <el-menu-item index="/merchant/profile" :disabled="navigationLocked">{{ text.profile }}</el-menu-item>
+        <el-sub-menu index="merchant-more" :disabled="navigationLocked">
+          <template #title>{{ text.more }}</template>
+          <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
+          <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
+          <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
+          <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
+          <el-menu-item index="/merchant/profile" :disabled="navigationLocked">{{ text.profile }}</el-menu-item>
+        </el-sub-menu>
       </el-menu>
 
       <div v-if="navigationLocked" class="subscription-lock">
@@ -47,6 +52,15 @@
       </header>
 
       <section class="merchant-content">
+        <el-alert
+          v-if="maintenanceNotice"
+          class="maintenance-notice"
+          type="warning"
+          show-icon
+          :closable="false"
+          :title="maintenanceNotice.title"
+          :description="maintenanceNoticeDescription"
+        />
         <el-alert
           v-if="subscriptionExpired && route.path !== '/merchant/subscription'"
           type="warning"
@@ -66,45 +80,60 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchMerchantInfo } from '../api/modules'
+import { fetchMerchantInfo, fetchMerchantMaintenanceNotice } from '../api/modules'
 import { useMerchantAuthStore } from '../stores/merchantAuth'
 import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
+import { getMerchantPcActivePath } from '../utils/navigation'
 
 const text = {
-  subtitle: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
-  sectionOperation: '\u7ecf\u8425',
-  sectionAI: 'AI \u80fd\u529b',
-  sectionSettings: '\u8bbe\u7f6e',
-  dashboard: '\u7ecf\u8425\u770b\u677f',
-  stores: '\u95e8\u5e97\u7ba1\u7406',
-  orders: '\u8ba2\u5355\u7ba1\u7406',
-  finance: '\u8d22\u52a1\u5bf9\u8d26',
-  promotions: '\u4f18\u60e0\u6d3b\u52a8',
-  promotionCalculator: '\u4fc3\u9500\u6d4b\u7b97',
-  groupBuy: '\u56e2\u8d2d\u6e20\u9053',
-  coupons: '\u5238\u5305/\u6838\u9500',
-  ai: 'AI \u7ecf\u8425\u5206\u6790',
-  share: '\u88c2\u53d8\u770b\u677f',
-  subscription: '\u8ba2\u9605\u4ed8\u8d39',
-  paymentSettings: '\u6536\u6b3e\u8bbe\u7f6e',
-  profile: '\u5546\u5bb6\u4fe1\u606f',
-  lockTip: '\u5e73\u53f0\u5df2\u6682\u505c\u5546\u5bb6\u4e1a\u52a1\u6743\u9650\uff0c\u8bf7\u67e5\u770b\u8ba2\u9605\u72b6\u6001\u548c\u6062\u590d\u65b9\u5f0f',
-  title: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
-  description: '\u67e5\u770b\u5546\u5bb6\u4fe1\u606f\u4e0e\u540e\u7eed\u7ecf\u8425\u80fd\u529b\u7684\u7edf\u4e00\u5165\u53e3',
-  logout: '\u9000\u51fa\u767b\u5f55'
+  subtitle: '商家工作台',
+  sectionOrders: '订单',
+  sectionStores: '门店与商品',
+  sectionActivity: '活动与效果报告',
+  sectionSubscription: '订阅',
+  more: '更多功能',
+  dashboard: '经营概览',
+  stores: '门店管理',
+  orders: '订单管理',
+  finance: '财务对账',
+  promotions: '优惠活动',
+  promotionCalculator: '促销测算',
+  groupBuy: '外部团购跳转入口',
+  coupons: '券包 / 核销',
+  ai: 'AI 经营分析',
+  share: '裂变效果报告',
+  subscription: '订阅状态 / 续费',
+  paymentSettings: '收款设置',
+  profile: '商家信息',
+  lockTip: '平台已暂停商家业务权限，请查看订阅状态和恢复方式',
+  title: '商家工作台',
+  description: '查看商家信息与后续经营能力的统一入口',
+  logout: '退出登录'
 }
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useMerchantAuthStore()
 const merchant = ref({})
+const maintenanceNotice = ref(null)
+let maintenanceNoticeTimer
 const subscriptionState = computed(() => merchantSubscriptionAccessState(merchant.value))
 const subscriptionExpired = computed(() => subscriptionState.value === 'expired')
 const subscriptionPaused = computed(() => subscriptionState.value === 'paused')
 const navigationLocked = computed(() => subscriptionPaused.value)
 const routeViewKey = computed(() => route.fullPath)
+const activeMenuPath = computed(() => getMerchantPcActivePath(route.path))
+const maintenanceNoticeDescription = computed(() => {
+  const notice = maintenanceNotice.value
+  if (!notice) return ''
+  return `维护窗口（北京时间）：${notice.window_start.replace('T', ' ')} 至 ${notice.window_end.replace('T', ' ')}。可能影响：${notice.expected_impact} 商家准备事项：${notice.preparation}`
+})
+const compactNavigation = ref(false)
+const updateNavigationMode = () => {
+  compactNavigation.value = window.matchMedia('(max-width: 768px)').matches
+}
 
 const refreshSubscriptionState = async () => {
   if (!authStore.token) {
@@ -119,13 +148,32 @@ const refreshSubscriptionState = async () => {
   }
 }
 
+const refreshMaintenanceNotice = async () => {
+  try {
+    const res = await fetchMerchantMaintenanceNotice()
+    maintenanceNotice.value = res.data?.notice || null
+  } catch {
+    // 不让公告请求故障影响商家日常操作；保留已展示的上一条公告。
+  }
+}
+
 const logout = () => {
   authStore.logout()
   router.push('/merchant/login')
 }
 
 watch(() => route.fullPath, refreshSubscriptionState)
-onMounted(refreshSubscriptionState)
+onMounted(() => {
+  updateNavigationMode()
+  window.addEventListener('resize', updateNavigationMode, { passive: true })
+  refreshSubscriptionState()
+  refreshMaintenanceNotice()
+  maintenanceNoticeTimer = window.setInterval(refreshMaintenanceNotice, 5 * 60 * 1000)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateNavigationMode)
+  window.clearInterval(maintenanceNoticeTimer)
+})
 </script>
 
 <style scoped>
@@ -169,6 +217,14 @@ onMounted(refreshSubscriptionState)
 }
 
 .merchant-menu :deep(.el-menu-item) {
+  height: 48px;
+  margin: 5px 0;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.merchant-menu :deep(.el-sub-menu__title) {
   height: 48px;
   margin: 5px 0;
   border-radius: 14px;
@@ -269,10 +325,95 @@ onMounted(refreshSubscriptionState)
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
+  .merchant-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .merchant-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 8px 12px 6px;
+  }
+
+  .merchant-brand {
+    padding: 0 6px 4px;
+  }
+
+  .merchant-brand-title {
+    font-size: 16px;
+    line-height: 1.3;
+  }
+
+  .merchant-brand-subtitle {
+    display: none;
+  }
+
+  .merchant-menu {
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+
+  .merchant-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .merchant-menu.el-menu--horizontal {
+    border-bottom: 0;
+  }
+
+  .merchant-menu :deep(.el-menu-item),
+  .merchant-menu :deep(.el-sub-menu__title) {
+    flex: 0 0 auto;
+    height: 40px;
+    margin: 0 4px 0 0;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    border-bottom: 0;
+  }
+
+  .merchant-menu :deep(.el-sub-menu) {
+    flex: 0 0 auto;
+  }
+
+  .menu-section {
+    display: none;
+  }
+
+  .subscription-lock {
+    margin: 5px 4px 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .merchant-main {
+    min-width: 0;
+    padding: 10px 12px 24px;
+    gap: 12px;
+  }
+
   .merchant-header {
     flex-direction: column;
     align-items: flex-start;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .merchant-title {
+    font-size: 20px;
+  }
+
+  .merchant-subtitle {
+    font-size: 12px;
+    line-height: 1.4;
   }
 }
 </style>

@@ -298,6 +298,7 @@ import {
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
+import { promotionPaidAmountFen } from '../../utils/merchantPromotionMoney'
 import { exportRowsToXlsx } from '../../utils/xlsx'
 
 const route = useRoute()
@@ -350,9 +351,9 @@ const promotionEffects = computed(() => {
     const bucket = map[promotionId]
     bucket.order_count += 1
     bucket.discount_amount += Number(order.discount_amount || 0)
-    if (Boolean(order.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0) {
+    if (Boolean(order.paid_at) && promotionPaidAmountFen(order) > 0) {
       bucket.paid_count += 1
-      bucket.revenue_amount += orderPaidAmount(order)
+      bucket.revenue_amount += promotionPaidAmountFen(order)
     }
   })
   return map
@@ -471,7 +472,6 @@ const formatMoney = (value) => {
   return yuan % 1 === 0 ? yuan.toFixed(0) : yuan.toFixed(2)
 }
 const formatCurrency = (value) => `¥${centsToYuan(value).toFixed(2)}`
-const orderPaidAmount = (order) => Number(order.amount ?? order.total_amount ?? 0)
 const promotionEffect = (row) => promotionEffects.value[Number(row.id)] || {
   order_count: 0,
   paid_count: 0,

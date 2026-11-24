@@ -182,12 +182,6 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		if !ok {
 			return nil, errors.New("some products are unavailable")
 		}
-		if product.Stock != nil && item.Quantity > *product.Stock {
-			if *product.Stock <= 0 {
-				return nil, fmt.Errorf("%s 已售罄", product.Name)
-			}
-			return nil, fmt.Errorf("%s 库存仅剩 %d 件", product.Name, *product.Stock)
-		}
 		snapshot, lineAmount, err := buildStoreOrderItemSnapshot(product, item.Quantity)
 		if err != nil {
 			return nil, err
@@ -322,13 +316,27 @@ func (s *OrderService) PublicStoreCoupons(storeID uint, phone string) ([]model.R
 }
 
 func (s *OrderService) PublicOrderDetail(orderNo, accessToken string) (*model.Order, error) {
-	return s.findCustomerOrderWithAccess(orderNo, accessToken)
+	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if isUnpaidCheckoutExpired(*order, now) {
+		if err := s.expireCheckoutOrderIfDue(order.ID, now); err != nil {
+			return nil, err
+		}
+		return s.findCustomerOrderWithAccess(orderNo, accessToken)
+	}
+	return order, nil
 }
 
 func (s *OrderService) findCustomerOrderWithAccess(orderNo, accessToken string) (*model.Order, error) {
 	order, err := s.orders.FindByOrderNo(orderNo)
 	if err != nil || order.OrderType != "store_order" || !customerOrderAccessTokenMatches(order, accessToken) {
 		return nil, errors.New("order not found")
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumber(order); err != nil {
+		return nil, err
 	}
 	return order, nil
 }
@@ -337,10 +345,14 @@ func (s *OrderService) PublicPaymentConfigForOrder(order *model.Order) (*model.M
 	if order == nil || order.OrderType != "store_order" || order.MerchantID == nil {
 		return nil, nil
 	}
+	return loadPublicMerchantPaymentConfig(s.db, *order.MerchantID)
+}
+
+func loadPublicMerchantPaymentConfig(db *gorm.DB, merchantID uint) (*model.MerchantPaymentConfig, error) {
 	var config model.MerchantPaymentConfig
-	err := s.db.Where(
+	err := db.Where(
 		"merchant_id = ? AND mode = ? AND status = ? AND audit_status = ?",
-		*order.MerchantID,
+		merchantID,
 		"direct",
 		"enabled",
 		"approved",
@@ -351,11 +363,16 @@ func (s *OrderService) PublicPaymentConfigForOrder(order *model.Order) (*model.M
 	if err != nil {
 		return nil, err
 	}
+	config.AlipayQRCode = strings.TrimSpace(config.AlipayQRCode)
+	config.WechatQRCode = strings.TrimSpace(config.WechatQRCode)
+	if config.AlipayQRCode == "" && config.WechatQRCode == "" {
+		return nil, nil
+	}
 	return &config, nil
 }
 
 func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo, accessToken string) (*model.Order, error) {
-	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
+	order, err := s.PublicOrderDetail(orderNo, accessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -365,15 +382,32 @@ func (s *OrderService) MarkCustomerStoreOrderPaid(orderNo, accessToken string) (
 	if order.TotalAmount <= 0 {
 		return nil, errors.New("this order does not require payment")
 	}
-	if order.Status != "submitted" && order.Status != "preparing" {
-		return nil, errors.New("only submitted orders can be marked as paid")
+	isPendingTableMerchantQR := order.TableNo > 0 && order.PaymentChannel == "merchant_qr" && order.Status == "pending"
+	if order.Status != "submitted" && order.Status != "preparing" && !isPendingTableMerchantQR {
+		return nil, errors.New("only submitted orders or merchant-QR table checkouts can be marked as paid")
+	}
+	if isPendingTableMerchantQR {
+		config, err := s.PublicPaymentConfigForOrder(order)
+		if err != nil {
+			return nil, err
+		}
+		if config == nil {
+			return nil, errors.New("商家收款码当前不可用，请联系门店核实")
+		}
 	}
 	order.Status = "payment_confirming"
 	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "customer_paid", "顾客已标记付款，等待商家确认收款")
 	if err := s.orders.Save(order); err != nil {
 		return nil, err
 	}
-	return s.orders.FindByOrderNo(orderNo)
+	updated, err := s.orders.FindByOrderNo(orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumber(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken string, req dto.AppendCustomerOrderItemsRequest) (*model.Order, error) {
@@ -436,12 +470,6 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 		if !ok {
 			return nil, errors.New("some products are unavailable")
 		}
-		if product.Stock != nil && item.Quantity > *product.Stock {
-			if *product.Stock <= 0 {
-				return nil, fmt.Errorf("%s 已售罄", product.Name)
-			}
-			return nil, fmt.Errorf("%s 库存仅剩 %d 件", product.Name, *product.Stock)
-		}
 		snapshot, lineAmount, err := buildStoreOrderItemSnapshot(product, item.Quantity)
 		if err != nil {
 			return nil, err
@@ -488,13 +516,29 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 	if err := s.orders.Save(order); err != nil {
 		return nil, err
 	}
-	return s.orders.FindByOrderNo(orderNo)
+	updated, err := s.orders.FindByOrderNo(orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumber(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *OrderService) PrepareCustomerOrderRetry(orderNo, accessToken string) (*model.Order, error) {
 	order, err := s.findCustomerOrderWithAccess(orderNo, accessToken)
 	if err != nil {
 		return nil, err
+	}
+	if isUnpaidCheckoutExpired(*order, time.Now()) {
+		if err := s.expireCheckoutOrderIfDue(order.ID, time.Now()); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("payment window expired; order is closed")
+	}
+	if order.TableNo > 0 {
+		return nil, errors.New("桌位订单不可使用平台支付入口，请使用商家收款码并等待门店核对")
 	}
 	if order.TotalAmount <= 0 || order.PaidAt != nil {
 		return nil, errors.New("this order does not require payment")
@@ -686,15 +730,6 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 		if err := validatePaymentCallbackAmount(order, req.Amount); err != nil {
 			return err
 		}
-		var subscriptionTerms merchantSubscriptionOrderTerms
-		if req.Status == "success" && order.OrderType == "merchant_subscription" {
-			terms, err := merchantSubscriptionTermsFromOrder(&order)
-			if err != nil {
-				return err
-			}
-			subscriptionTerms = terms
-		}
-
 		var existingPayment model.PaymentRecord
 		paymentErr := tx.Where("transaction_no = ?", req.TransactionNo).First(&existingPayment).Error
 		if paymentErr == nil {
@@ -707,6 +742,26 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 		if paymentErr != nil && !errors.Is(paymentErr, gorm.ErrRecordNotFound) {
 			return paymentErr
 		}
+		if order.OrderType == "merchant_subscription" && order.PaymentChannel == "platform_qr" {
+			return errors.New("platform static QR subscription payments require manual reconciliation")
+		}
+		if isUnpaidCheckoutExpired(order, time.Now()) {
+			order.Status = "closed"
+			order.OperationLogs = s.appendOrderLog(order.OperationLogs, "checkout_expired", "未付款订单超过30分钟有效期，系统已关闭")
+			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+		}
+
+		var subscriptionTerms merchantSubscriptionOrderTerms
+		if req.Status == "success" && order.OrderType == "merchant_subscription" && order.Status == "pending" {
+			terms, err := merchantSubscriptionTermsFromOrder(&order)
+			if err != nil {
+				return err
+			}
+			subscriptionTerms = terms
+		}
+
 		rawPayload := ""
 		if req.RawPayload != nil {
 			bytes, err := json.Marshal(req.RawPayload)
@@ -729,9 +784,9 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 				exceptionAction = "duplicate_payment_exception"
 				exceptionText = fmt.Sprintf("检测到同一订单的另一笔成功收款，已登记为重复收款异常；交易号：%s，金额：%s 元", req.TransactionNo, formatFen(req.Amount))
 			} else if order.Status != "pending" {
-				paymentStatus = "late_success_exception"
+				paymentStatus = model.PaymentStatusPaidReviewRequired
 				exceptionAction = "late_payment_exception"
-				exceptionText = fmt.Sprintf("订单状态不允许履约，但支付渠道已报告成功；已登记待核查收款异常；交易号：%s，金额：%s 元", req.TransactionNo, formatFen(req.Amount))
+				exceptionText = fmt.Sprintf("支付渠道已确认付款，但订单已过期或不允许自动履约；已保留为已付款待人工核对，系统不会自动履约、开通订阅权益或退款；交易号：%s，金额：%s 元", req.TransactionNo, formatFen(req.Amount))
 			}
 		}
 
@@ -759,6 +814,12 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 			return nil
 		}
 		if exceptionAction != "" {
+			if order.PaidAt == nil {
+				paidAt := time.Now()
+				order.PaidAt = &paidAt
+				order.TransactionNo = req.TransactionNo
+				order.PaymentChannel = req.PaymentChannel
+			}
 			order.OperationLogs = s.appendOrderLog(order.OperationLogs, exceptionAction, exceptionText)
 			if err := tx.Save(&order).Error; err != nil {
 				return err
@@ -782,13 +843,6 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 		if order.OrderType == "store_order" {
 			order.Status = "received"
 			order.OperationLogs = s.appendOrderLog(order.OperationLogs, "paid", "支付成功，订单已发送给商家处理")
-			stockLog, err := s.deductStoreOrderStockTx(tx, &order)
-			if err != nil {
-				return err
-			}
-			if stockLog != "" {
-				order.OperationLogs = s.appendOrderLog(order.OperationLogs, "stock_deducted", stockLog)
-			}
 			if err := tx.Save(&order).Error; err != nil {
 				return err
 			}
@@ -871,8 +925,9 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 		if order.OrderType != "merchant_subscription" {
 			return errors.New("only merchant subscription orders can be confirmed")
 		}
-		if order.Status != "pending" {
-			return errors.New("only pending subscription orders can be confirmed")
+		reconcileExpiredStaticQR := order.Status == "closed" && order.PaymentChannel == "platform_qr" && order.PaidAt == nil && orderHasAction(order.OperationLogs, "checkout_expired")
+		if order.Status != "pending" && !reconcileExpiredStaticQR {
+			return errors.New("only pending orders or expired unpaid platform QR subscriptions can be confirmed")
 		}
 		terms, err := merchantSubscriptionTermsFromOrder(&order)
 		if err != nil {
@@ -919,7 +974,13 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 		order.TransactionNo = transactionNo
 		order.PaymentChannel = "platform_qr"
 		order.SubscriptionEndAt = &expire
-		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "subscription_payment_confirmed", "平台已确认订阅款到账，商家订阅已开通或续期")
+		confirmationAction := "subscription_payment_confirmed"
+		confirmationText := "平台已确认订阅款到账，商家订阅已开通或续期"
+		if reconcileExpiredStaticQR {
+			confirmationAction = "subscription_payment_reconciled_after_expiry"
+			confirmationText = "管理员已人工核对平台静态二维码收款账户确认到账；已关闭的订阅订单经人工对账后开通或续期"
+		}
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, confirmationAction, confirmationText)
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
@@ -947,6 +1008,7 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 			event.Input.Detail["plan"] = terms.Name
 			event.Input.Detail["order_no"] = order.OrderNo
 			event.Input.Detail["payment_mode"] = "platform_qr"
+			event.Input.Detail["reconciliation_after_expiry"] = reconcileExpiredStaticQR
 			event.Input.Detail["expire_at"] = expire
 			event.Input.Detail["result"] = "subscription_opened"
 			if err := appendOptionalAuditTx(tx, []AuditEvent{event}); err != nil {
@@ -967,79 +1029,15 @@ func (s *OrderService) ConfirmMerchantSubscriptionPayment(orderID uint, remark s
 	return &result, nil
 }
 
-func (s *OrderService) deductStoreOrderStockTx(tx *gorm.DB, order *model.Order) (string, error) {
-	var items []StoreOrderItemSnapshot
-	if err := json.Unmarshal([]byte(order.Items), &items); err != nil {
-		return "", err
-	}
-	if len(items) == 0 {
-		return "", nil
-	}
-
-	deducted := make([]string, 0, len(items))
-	shortage := make([]string, 0)
-	for _, item := range items {
-		if item.ProductID == 0 || item.Quantity <= 0 {
-			continue
-		}
-
-		var product model.StoreProduct
-		if err := tx.Select("id", "name", "stock").Where("id = ?", item.ProductID).First(&product).Error; err != nil {
-			return "", err
-		}
-		if product.Stock == nil {
-			continue
-		}
-
-		currentStock := *product.Stock
-		if currentStock <= 0 {
-			shortage = append(shortage, fmt.Sprintf("%s 已售罄但订单已付款，请人工处理", item.Name))
-			continue
-		}
-		if currentStock < item.Quantity {
-			if err := tx.Model(&model.StoreProduct{}).Where("id = ?", item.ProductID).Update("stock", 0).Error; err != nil {
-				return "", err
-			}
-			shortage = append(shortage, fmt.Sprintf("%s 库存不足，付款数量 %d，扣减前仅剩 %d", item.Name, item.Quantity, currentStock))
-			continue
-		}
-		update := tx.Model(&model.StoreProduct{}).
-			Where("id = ? AND stock IS NOT NULL AND stock >= ?", item.ProductID, item.Quantity).
-			Update("stock", gorm.Expr("stock - ?", item.Quantity))
-		if update.Error != nil {
-			return "", update.Error
-		}
-		if update.RowsAffected == 0 {
-			var latest model.StoreProduct
-			if err := tx.Select("id", "name", "stock").Where("id = ?", item.ProductID).First(&latest).Error; err != nil {
-				return "", err
-			}
-			if latest.Stock == nil {
-				continue
-			}
-			shortage = append(shortage, fmt.Sprintf("%s 库存并发变动，付款数量 %d，当前仅剩 %d", item.Name, item.Quantity, *latest.Stock))
-			if *latest.Stock > 0 {
-				if err := tx.Model(&model.StoreProduct{}).Where("id = ?", item.ProductID).Update("stock", 0).Error; err != nil {
-					return "", err
-				}
-			}
-			continue
-		}
-		deducted = append(deducted, fmt.Sprintf("%s -%d", item.Name, item.Quantity))
-	}
-
-	parts := make([]string, 0, 2)
-	if len(deducted) > 0 {
-		parts = append(parts, "库存已扣减："+strings.Join(deducted, "、"))
-	}
-	if len(shortage) > 0 {
-		parts = append(parts, "库存异常："+strings.Join(shortage, "；"))
-	}
-	return strings.Join(parts, "；"), nil
-}
-
 func (s *OrderService) MerchantOrders(merchantID uint, status string, storeID *uint, keyword string, page, pageSize int) ([]model.Order, int64, error) {
-	return s.orders.ListByMerchant(merchantID, status, storeID, keyword, (page-1)*pageSize, pageSize)
+	orders, total, err := s.orders.ListByMerchant(merchantID, status, storeID, keyword, (page-1)*pageSize, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumbers(orders); err != nil {
+		return nil, 0, err
+	}
+	return orders, total, nil
 }
 
 func (s *OrderService) MerchantOrderDetail(merchantID, orderID uint) (*model.Order, error) {
@@ -1049,6 +1047,9 @@ func (s *OrderService) MerchantOrderDetail(merchantID, orderID uint) (*model.Ord
 	}
 	if order.OrderType != "store_order" {
 		return nil, errors.New("order not found")
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumber(order); err != nil {
+		return nil, err
 	}
 	return order, nil
 }
@@ -1114,13 +1115,6 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*m
 			order.Status = "received"
 		}
 		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "merchant_payment_confirmed", "商家已确认收到顾客付款")
-		stockLog, err := s.deductStoreOrderStockTx(tx, &order)
-		if err != nil {
-			return err
-		}
-		if stockLog != "" {
-			order.OperationLogs = s.appendOrderLog(order.OperationLogs, "stock_deducted", stockLog)
-		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
@@ -1284,6 +1278,9 @@ func (s *OrderService) AllOrders() ([]model.Order, error) {
 	orders, err := s.orders.ListAll()
 	if err != nil || len(orders) == 0 {
 		return orders, err
+	}
+	if err := NewTableOrderingService(s.db, s).AttachTableNumbers(orders); err != nil {
+		return nil, err
 	}
 	hasReviews := s.db.Migrator().HasTable(&model.MerchantSubscriptionManualReview{})
 	hasAudits := s.db.Migrator().HasTable(&model.MerchantSubscriptionManualReviewAudit{})

@@ -7,22 +7,26 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 HOME_DIR="${HOME:-/home/ubuntu}"
 SAFE_PATH="${PATH:-/usr/bin:/bin}"
 WITH_AGE_RESTORE=0
+WITH_SCHEMA_LIFECYCLE=0
 
 usage() {
   cat <<'USAGE'
-Usage: bash scripts/test-local-regression.sh [--with-age-restore]
+Usage: bash scripts/test-local-regression.sh [--with-age-restore] [--with-schema-lifecycle]
 
 Runs offline Go tests/build/vet, all web/src Node tests, a temporary-output
 Vite build, shell syntax checks, and synthetic backup tests. The optional
 age/MySQL restore drill is attempted only when explicitly requested and its
 local safety prerequisites are satisfied; missing prerequisites are reported
-as SKIP. No dependencies are installed or downloaded.
+as SKIP. The optional schema lifecycle drill runs only when explicitly
+requested and local MySQL 8 prerequisites are available. No dependencies are
+installed or downloaded.
 USAGE
 }
 
 while (($#)); do
   case "$1" in
     --with-age-restore) WITH_AGE_RESTORE=1 ;;
+    --with-schema-lifecycle) WITH_SCHEMA_LIFECYCLE=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -126,6 +130,9 @@ run_clean python3 "$SCRIPT_DIR/test-upload-github-filter.py"
 printf '%s\n' '== Static PowerShell backup reflection regression (no PowerShell) =='
 run_clean python3 "$SCRIPT_DIR/test-backup-mysql-reflection.py"
 
+printf '%s\n' '== Production deployment preflight tests (synthetic environment only) =='
+run_clean python3 "$SCRIPT_DIR/test-production-preflight.py"
+
 printf '%s\n' '== Synthetic backup tests (no real DB or age) =='
 for test_script in test-backup-mysql.sh test-backup-integrity.sh test-backup-retention.sh; do
   run_clean bash "$SCRIPT_DIR/$test_script"
@@ -167,6 +174,38 @@ if ((WITH_AGE_RESTORE)); then
   fi
 else
   printf '%s\n' 'SKIP: optional age/MySQL restore drill (not requested; use --with-age-restore to check local prerequisites).'
+fi
+
+if ((WITH_SCHEMA_LIFECYCLE)); then
+  SCHEMA_LIFECYCLE_SKIP=""
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    SCHEMA_LIFECYCLE_SKIP="Linux is required"
+  elif [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    SCHEMA_LIFECYCLE_SKIP="the schema lifecycle harness refuses to run as root"
+  elif [[ -n "${MYSQL_DSN:-}" || -n "${MYSQL_PWD:-}" ]]; then
+    SCHEMA_LIFECYCLE_SKIP="MYSQL_DSN or MYSQL_PWD is set; the harness refuses inherited database credentials"
+  else
+    for tool in mysqld mysql mysqladmin mysqldump ss; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        SCHEMA_LIFECYCLE_SKIP="missing local dependency: $tool"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$SCHEMA_LIFECYCLE_SKIP" ]]; then
+    MYSQL_SERVER_VERSION="$(mysqld --no-defaults --version 2>/dev/null || true)"
+    if [[ ! "$MYSQL_SERVER_VERSION" =~ Ver[[:space:]]8\. ]]; then
+      SCHEMA_LIFECYCLE_SKIP="local MySQL 8.x server is required (found '${MYSQL_SERVER_VERSION:-unknown}')"
+    fi
+  fi
+  if [[ -n "$SCHEMA_LIFECYCLE_SKIP" ]]; then
+    printf 'SKIP: optional isolated schema lifecycle test: %s.\n' "$SCHEMA_LIFECYCLE_SKIP"
+  else
+    printf '%s\n' '== Optional isolated MySQL 8 schema lifecycle (temporary socket-only server) =='
+    bash "$SCRIPT_DIR/validate-schema-lifecycle.sh"
+  fi
+else
+  printf '%s\n' 'SKIP: optional schema lifecycle test (not requested; use --with-schema-lifecycle when local MySQL 8 is available).'
 fi
 
 printf '%s\n' 'PASS: local offline regression baseline completed; temporary build/test files are being removed.'

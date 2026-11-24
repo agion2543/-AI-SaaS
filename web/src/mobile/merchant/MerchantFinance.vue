@@ -2,7 +2,7 @@
   <div class="merchant-finance">
     <!-- 顶部导航 -->
     <van-nav-bar
-      title="财务管理"
+      title="订单汇总"
       left-arrow
       fixed
       placeholder
@@ -16,7 +16,7 @@
     </van-nav-bar>
 
     <div v-if="!canWrite" class="readonly-banner" role="status">
-      订阅已到期：财务数据仅可只读查看。<van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
+      订阅已到期：本页订单汇总仅供查看。<van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
     </div>
 
     <!-- 加载状态 -->
@@ -28,51 +28,40 @@
       <!-- 概览卡片 -->
       <div class="overview-card">
         <div class="overview-header">
-          <span class="overview-title">本月概览</span>
+          <span class="overview-title">所选月份订单汇总</span>
         </div>
         <div class="overview-content">
           <div class="overview-item">
-            <div class="item-value text-primary">¥{{ formatPrice(stats.monthRevenue) }}</div>
-            <div class="item-label">本月营收</div>
+            <div class="item-value text-primary">¥{{ formatPrice(stats.paidAmount) }}</div>
+            <div class="item-label">系统记录付款金额</div>
           </div>
           <div class="overview-item">
             <div class="item-value">{{ stats.monthOrders }}</div>
-            <div class="item-label">本月订单</div>
+            <div class="item-label">按下单时间统计的订单数</div>
           </div>
           <div class="overview-item">
-            <div class="item-value">¥{{ formatPrice(stats.avgOrderValue) }}</div>
-            <div class="item-label">客单价</div>
+            <div class="item-value">¥{{ formatPrice(stats.avgPaidOrderAmount) }}</div>
+            <div class="item-label">付款订单均额</div>
           </div>
         </div>
       </div>
 
-      <!-- 收支明细 -->
-      <van-cell-group inset title="收支明细">
-        <van-cell title="商品销售">
-          <template #value>
-            <span class="income">+¥{{ formatPrice(stats.productSales) }}</span>
-          </template>
-        </van-cell>
-        <van-cell title="优惠抵扣">
-          <template #value>
-            <span class="expense">-¥{{ formatPrice(stats.discountAmount) }}</span>
-          </template>
-        </van-cell>
-        <van-cell title="退款">
+      <p class="scope-note">
+        口径说明：订单数、已完成订单数、有退款记录订单数和退款金额按订单创建时间归入所选月份；付款金额、付款订单均额及趋势按付款时间（paid_at）归月。退款订单占比按订单笔数计算，不是退款金额比例。金额字段以分记录，本页换算为元显示；金额来自系统订单/退款记录，不代表支付渠道对账或净利润。付款与退款可能归入不同月份，不应直接相减。当前仅统计页面请求到的第 1 页订单（请求上限 500 条）。
+      </p>
+
+      <!-- 退款金额只展示订单中已有的记录，不代表渠道到账核验 -->
+      <van-cell-group inset title="退款记录汇总">
+        <van-cell title="订单中已记录的退款金额">
           <template #value>
             <span class="expense">-¥{{ formatPrice(stats.refundAmount) }}</span>
-          </template>
-        </van-cell>
-        <van-cell title="实际收入">
-          <template #value>
-            <span class="income-bold">¥{{ formatPrice(stats.monthRevenue) }}</span>
           </template>
         </van-cell>
       </van-cell-group>
 
       <!-- 每日趋势 -->
       <div class="trend-section">
-        <div class="section-title">每日订单趋势</div>
+        <div class="section-title">所选月付款订单趋势（仅显示月末 14 天）</div>
         <div class="trend-chart">
           <div
             v-for="(day, index) in dailyStats"
@@ -87,36 +76,25 @@
         </div>
       </div>
 
-      <!-- 订单统计 -->
+      <!-- 订单数量指标按下单时间归月 -->
       <van-cell-group inset title="订单统计">
         <van-cell title="已完成订单">
           <template #value>
             <span class="text-success">{{ orderStats.completed }}</span>
           </template>
         </van-cell>
-        <van-cell title="已退款订单">
+        <van-cell title="有退款记录订单">
           <template #value>
             <span class="text-danger">{{ orderStats.refunded }}</span>
           </template>
         </van-cell>
-        <van-cell title="退款率">
+        <van-cell title="有退款记录订单占比">
           <template #value>
             <span>{{ orderStats.refundRate }}%</span>
           </template>
         </van-cell>
       </van-cell-group>
 
-      <!-- 对账单 -->
-      <div class="settlement-section">
-        <van-cell-group inset>
-          <van-cell
-            title="对账单"
-            is-link
-            value="查看全部"
-            @click="viewAllStatements"
-          />
-        </van-cell-group>
-      </div>
     </template>
 
     <!-- 日期选择 -->
@@ -159,21 +137,19 @@ const stats = computed(() => {
            (orderDate.getMonth() + 1) === parseInt(currentDate.value[1])
   })
 
-  const completedOrders = orders.value.filter(o => {
+  const paidOrdersInMonth = orders.value.filter(o => {
     const paidDate = o.paid_at ? new Date(o.paid_at) : null
     return paidDate && paidDate.getFullYear() === parseInt(currentDate.value[0]) && (paidDate.getMonth() + 1) === parseInt(currentDate.value[1]) && Number(o.total_amount ?? o.amount ?? 0) > 0
   })
   const refundedOrders = monthOrders.filter(o => Number(o.refunded_amount || 0) > 0)
 
-  const monthRevenue = completedOrders.reduce((sum, o) => sum + Number(o.total_amount ?? o.amount ?? 0), 0)
+  const paidAmount = paidOrdersInMonth.reduce((sum, o) => sum + Number(o.total_amount ?? o.amount ?? 0), 0)
   const refundAmount = refundedOrders.reduce((sum, o) => sum + Number(o.refunded_amount || 0), 0)
 
   return {
     monthOrders: monthOrders.length,
-    monthRevenue,
-    avgOrderValue: completedOrders.length > 0 ? monthRevenue / completedOrders.length : 0,
-    productSales: monthRevenue,
-    discountAmount: 0,
+    paidAmount,
+    avgPaidOrderAmount: paidOrdersInMonth.length > 0 ? paidAmount / paidOrdersInMonth.length : 0,
     refundAmount
   }
 })
@@ -218,7 +194,7 @@ const dailyStats = computed(() => {
 })
 
 function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
+  return (Number(price || 0) / 100).toFixed(2)
 }
 
 function getBarHeight(orders) {
@@ -230,10 +206,6 @@ function onDateConfirm({ selectedValues }) {
   currentDate.value = selectedValues
   showDatePicker.value = false
   loadOrders()
-}
-
-function viewAllStatements() {
-  showToast('对账单功能开发中')
 }
 
 async function loadOrders() {
@@ -285,6 +257,17 @@ onMounted(() => {
 
 .overview-header {
   margin-bottom: 16px;
+}
+
+.scope-note {
+  margin: 12px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .overview-title {

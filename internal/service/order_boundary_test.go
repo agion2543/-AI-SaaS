@@ -44,13 +44,13 @@ func newOrderBoundaryTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.MembershipPackage{},
 		&model.Promotion{},
-			&model.Order{},
-			&model.PaymentRecord{},
-			&model.RefundRecord{},
-			&model.MerchantSettlement{},
-			&model.MerchantSubscriptionManualReview{},
-			&model.MerchantSubscriptionManualReviewAudit{},
-		); err != nil {
+		&model.Order{},
+		&model.PaymentRecord{},
+		&model.RefundRecord{},
+		&model.MerchantSettlement{},
+		&model.MerchantSubscriptionManualReview{},
+		&model.MerchantSubscriptionManualReviewAudit{},
+	); err != nil {
 		t.Fatalf("migrate order test schema: %v", err)
 	}
 	sqlDB, err := db.DB()
@@ -144,11 +144,34 @@ func TestPaymentCallbackDuplicateIsIdempotentAndStaleFailureDoesNotDowngrade(t *
 	if current.Status != "received" || current.PaidAt == nil || paymentCount != 2 {
 		t.Fatalf("stale failure must not undo confirmed payment; status=%q paid_at=%v payment_count=%d", current.Status, current.PaidAt, paymentCount)
 	}
-	if updatedProduct.Stock == nil || *updatedProduct.Stock != 8 {
-		t.Fatalf("duplicate success callback must deduct stock once, stock=%v", updatedProduct.Stock)
+	if updatedProduct.Stock == nil || *updatedProduct.Stock != 10 {
+		t.Fatalf("successful payment must preserve legacy stock, stock=%v", updatedProduct.Stock)
 	}
-	if !orderHasAction(current.OperationLogs, "paid") || !orderHasAction(current.OperationLogs, "stock_deducted") {
-		t.Fatalf("successful payment audit actions missing: %s", current.OperationLogs)
+	if !orderHasAction(current.OperationLogs, "paid") || orderHasAction(current.OperationLogs, "stock_deducted") {
+		t.Fatalf("successful payment should log payment without stock deduction: %s", current.OperationLogs)
+	}
+}
+
+func TestMerchantPaymentConfirmationPreservesLegacyStockWithoutStockAudit(t *testing.T) {
+	db := newOrderBoundaryTestDB(t)
+	merchant, _, product, order := createSyntheticStoreOrder(t, db, "SYNTHETIC-MERCHANT-CONFIRM-STOCK-001", "payment_confirming", 500, nil)
+
+	confirmed, err := NewOrderService(db).ConfirmMerchantOrderPayment(merchant.ID, order.ID)
+	if err != nil {
+		t.Fatalf("confirm synthetic merchant QR payment: %v", err)
+	}
+	if confirmed.Status != "received" || confirmed.PaidAt == nil || !orderHasAction(confirmed.OperationLogs, "merchant_payment_confirmed") {
+		t.Fatalf("merchant confirmation did not record payment as expected: %+v", confirmed)
+	}
+	if orderHasAction(confirmed.OperationLogs, "stock_deducted") {
+		t.Fatalf("merchant payment confirmation must not create a stock deduction entry: %s", confirmed.OperationLogs)
+	}
+	var unchanged model.StoreProduct
+	if err := db.First(&unchanged, product.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Stock == nil || *unchanged.Stock != 10 {
+		t.Fatalf("merchant payment confirmation must preserve legacy stock, stock=%v", unchanged.Stock)
 	}
 }
 
@@ -200,13 +223,16 @@ func TestPaymentCallbackFailureRetryAndSuccessTransitionsAreAudited(t *testing.T
 	if err := db.Model(&model.PaymentRecord{}).Where("order_id = ?", order.ID).Count(&paymentCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if paid.Status != "received" || paid.PaidAt == nil || paymentCount != 2 || updatedProduct.Stock == nil || *updatedProduct.Stock != 8 {
+	if paid.Status != "received" || paid.PaidAt == nil || paymentCount != 2 || updatedProduct.Stock == nil || *updatedProduct.Stock != 10 {
 		t.Fatalf("retry success did not settle exactly once: status=%q paid_at=%v payments=%d stock=%v", paid.Status, paid.PaidAt, paymentCount, updatedProduct.Stock)
 	}
-	for _, action := range []string{"payment_failed", "payment_retry", "paid", "stock_deducted"} {
+	for _, action := range []string{"payment_failed", "payment_retry", "paid"} {
 		if !orderHasAction(paid.OperationLogs, action) {
 			t.Errorf("expected %q in operation audit: %s", action, paid.OperationLogs)
 		}
+	}
+	if orderHasAction(paid.OperationLogs, "stock_deducted") {
+		t.Errorf("payment must not create a stock deduction audit entry: %s", paid.OperationLogs)
 	}
 }
 
@@ -258,8 +284,8 @@ func TestPaymentCallbackRejectsAmountMismatchAndInvalidTransitionAtomically(t *t
 	if err := db.First(&currentClosed, closed.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if paymentCount != 1 || latePayment.Status != "late_success_exception" || currentClosed.Status != "closed" || currentClosed.PaidAt != nil || !orderHasAction(currentClosed.OperationLogs, "late_payment_exception") {
-		t.Fatalf("closed order must retain a late-success exception without fulfillment: status=%q paid_at=%v records=%d payment_status=%q logs=%s", currentClosed.Status, currentClosed.PaidAt, paymentCount, latePayment.Status, currentClosed.OperationLogs)
+	if paymentCount != 1 || latePayment.Status != model.PaymentStatusPaidReviewRequired || currentClosed.Status != "closed" || currentClosed.PaidAt == nil || currentClosed.TransactionNo != "synthetic-closed-order-trade" || !orderHasAction(currentClosed.OperationLogs, "late_payment_exception") {
+		t.Fatalf("closed order must retain the verified payment fact and late-success exception without fulfillment: status=%q paid_at=%v transaction=%q records=%d payment_status=%q logs=%s", currentClosed.Status, currentClosed.PaidAt, currentClosed.TransactionNo, paymentCount, latePayment.Status, currentClosed.OperationLogs)
 	}
 	adminPaymentRows, err := service.AllPayments()
 	if err != nil {
@@ -267,7 +293,7 @@ func TestPaymentCallbackRejectsAmountMismatchAndInvalidTransitionAtomically(t *t
 	}
 	adminCanFindLateException := false
 	for _, row := range adminPaymentRows {
-		if row.OrderID == closed.ID && row.TransactionNo == "synthetic-closed-order-trade" && row.Order.OrderNo == closed.OrderNo && row.Amount == closed.TotalAmount && row.Status == "late_success_exception" {
+		if row.OrderID == closed.ID && row.TransactionNo == "synthetic-closed-order-trade" && row.Order.OrderNo == closed.OrderNo && row.Amount == closed.TotalAmount && row.Status == model.PaymentStatusPaidReviewRequired {
 			adminCanFindLateException = true
 		}
 	}

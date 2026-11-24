@@ -132,7 +132,7 @@
         <ActionCard
           label="商用补齐"
           title="复核顾客链路和商品管理"
-          description="继续从真实顾客扫码下单、支付状态、商品排序、库存售罄和图片稳定性补齐商用细节。"
+          description="继续从真实顾客扫码下单、支付状态、商品排序、上下架状态和图片稳定性补齐商用细节。"
           tone="slate"
         />
       </div>
@@ -295,6 +295,39 @@
       </el-form>
     </DataPanel>
 
+    <DataPanel title="商家维护公告" description="提前告知商家计划更新或维护窗口、可能影响和准备事项。" eyebrow="MAINTENANCE NOTICE">
+      <template #actions>
+        <el-button type="primary" :loading="maintenanceNoticeSaving" @click="saveMaintenanceNotice">保存公告</el-button>
+      </template>
+      <el-alert
+        class="config-alert"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="公告用于提前沟通，不代表系统具备零停机或不中断保证。当前部署发版仍可能出现短时不可用；请结合备份、低峰窗口与回滚准备安排更新。"
+      />
+      <el-form :model="maintenanceNoticeForm" label-width="160px" class="config-form">
+        <el-form-item label="发布状态">
+          <el-switch v-model="maintenanceNoticeForm.published" active-text="商家可见" inactive-text="草稿 / 已撤回" />
+        </el-form-item>
+        <el-form-item label="公告标题">
+          <el-input v-model="maintenanceNoticeForm.title" maxlength="100" show-word-limit placeholder="例如：系统计划更新通知" />
+        </el-form-item>
+        <el-form-item label="维护开始（北京时间）">
+          <el-date-picker v-model="maintenanceNoticeForm.window_start" type="datetime" format="YYYY-MM-DD HH:mm" value-format="YYYY-MM-DDTHH:mm" placeholder="选择开始时间" />
+        </el-form-item>
+        <el-form-item label="维护结束（北京时间）">
+          <el-date-picker v-model="maintenanceNoticeForm.window_end" type="datetime" format="YYYY-MM-DD HH:mm" value-format="YYYY-MM-DDTHH:mm" placeholder="选择结束时间" />
+        </el-form-item>
+        <el-form-item label="预期影响">
+          <el-input v-model="maintenanceNoticeForm.expected_impact" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="说明可能受影响的功能、是否可能暂时无法登录/下单/处理订单；尚未确认的不要写成确定事实。" />
+        </el-form-item>
+        <el-form-item label="商家准备事项">
+          <el-input v-model="maintenanceNoticeForm.preparation" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="例如：维护前完成紧急订单处理，维护期间暂用门店备用流程；仅填写实际需要的准备。" />
+        </el-form-item>
+      </el-form>
+    </DataPanel>
+
     <el-dialog v-model="guideDialogVisible" :title="activeGuide?.title || '处理步骤'" width="680px">
       <p class="dialog-desc">{{ activeGuide?.description }}</p>
       <ol class="guide-steps">
@@ -311,7 +344,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchAdminAIConfigStatus, fetchAdminAIUsageOverview, fetchConfigs, fetchSecurityCheck, saveAdminAIConfigPolicy, saveConfigs, uploadPlatformPaymentQRCode } from '../../api/modules'
+import { fetchAdminAIConfigStatus, fetchAdminAIUsageOverview, fetchAdminMaintenanceNotice, fetchConfigs, fetchSecurityCheck, saveAdminAIConfigPolicy, saveAdminMaintenanceNotice, saveConfigs, uploadPlatformPaymentQRCode } from '../../api/modules'
 import ActionCard from '../../components/design/ActionCard.vue'
 import DataPanel from '../../components/design/DataPanel.vue'
 import PageHero from '../../components/design/PageHero.vue'
@@ -320,6 +353,15 @@ const checking = ref(false)
 const aiChecking = ref(false)
 const uploadingQr = ref('')
 const pendingPlatformQrUploads = reactive({ alipay: '', wechat: '' })
+const maintenanceNoticeSaving = ref(false)
+const maintenanceNoticeForm = reactive({
+  published: false,
+  title: '',
+  window_start: '',
+  window_end: '',
+  expected_impact: '',
+  preparation: ''
+})
 const router = useRouter()
 const guideDialogVisible = ref(false)
 const activeGuide = ref(null)
@@ -517,6 +559,11 @@ const loadConfigs = async () => {
   })
 }
 
+const loadMaintenanceNotice = async () => {
+  const res = await fetchAdminMaintenanceNotice()
+  Object.assign(maintenanceNoticeForm, res.data || {})
+}
+
 const loadSecurityCheck = async () => {
   checking.value = true
   try {
@@ -588,6 +635,19 @@ const save = async () => {
   pendingPlatformQrUploads.wechat = ''
   await loadConfigs()
   ElMessage.success('配置已保存')
+}
+
+const saveMaintenanceNotice = async () => {
+  maintenanceNoticeSaving.value = true
+  try {
+    const res = await saveAdminMaintenanceNotice({ ...maintenanceNoticeForm })
+    Object.assign(maintenanceNoticeForm, res.data?.notice || maintenanceNoticeForm)
+    ElMessage.success(maintenanceNoticeForm.published ? '维护公告已发布' : '维护公告已保存 / 撤回')
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || '维护公告保存失败')
+  } finally {
+    maintenanceNoticeSaving.value = false
+  }
 }
 
 const copyText = async (text) => {
@@ -674,7 +734,7 @@ const laneTitle = (section, fallback) => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadConfigs(), loadSecurityCheck()])
+  await Promise.all([loadConfigs(), loadSecurityCheck(), loadMaintenanceNotice()])
 })
 </script>
 

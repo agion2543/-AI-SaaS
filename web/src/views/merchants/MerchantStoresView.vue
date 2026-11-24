@@ -66,6 +66,7 @@
         <template #default="{ row }">
           <div class="action-row">
             <el-button size="small" type="primary" plain @click="manageProducts(row)">管理商品</el-button>
+            <el-button size="small" type="success" plain @click="openTables(row)">桌位与二维码</el-button>
             <el-button size="small" @click="openEdit(row)">编辑/营业设置</el-button>
             <el-button v-if="row.is_open" size="small" type="warning" @click="toggleOpen(row, false)">暂停接单</el-button>
             <el-button v-else size="small" type="success" @click="toggleOpen(row, true)">恢复接单</el-button>
@@ -86,6 +87,34 @@
       />
     </div>
 
+    <el-dialog v-model="tablesDialogVisible" :title="`${tablesStore?.name || '门店'} · 扫码点餐桌位`" width="900px" class="tables-dialog">
+      <div class="tables-toolbar">
+        <div>
+          <strong>桌位数量</strong>
+          <p>设置后生成 1 至 N 桌的专属二维码，可为每桌自定义标签（如 A01、包间）。标签只用于展示，不改变二维码身份；请将二维码张贴在对应桌位。</p>
+        </div>
+        <div class="tables-count-control">
+          <el-input-number v-model="tableCount" :min="0" :max="300" :step="1" :precision="0" controls-position="right" :disabled="tablesSaving" />
+          <el-button type="primary" :loading="tablesSaving" @click="saveTables">保存桌位设置</el-button>
+        </div>
+      </div>
+      <div v-loading="tablesLoading" class="table-qr-grid">
+        <article v-for="item in tableQrs" :key="item.tableNo" class="table-qr-card">
+          <strong>{{ item.label || `${item.tableNo}号桌` }}</strong>
+          <el-input v-model="item.label" :placeholder="`${item.tableNo}号桌`" maxlength="64" size="small" aria-label="桌位标签" />
+          <img :src="item.image" :alt="`${item.label || `${item.tableNo}号桌`}扫码点餐二维码`" />
+          <div class="table-qr-actions">
+            <el-button size="small" @click="downloadTableQr(item)">下载二维码</el-button>
+            <el-button size="small" @click="printTableQr(item)">打印</el-button>
+          </div>
+        </article>
+        <el-empty v-if="!tablesLoading && tableQrs.length === 0" description="当前未设置桌位" />
+      </div>
+      <template #footer>
+        <el-button :disabled="!tableQrs.length" @click="printAllTables">打印全部桌码</el-button>
+        <el-button @click="tablesDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="dialogVisible" :title="dialogMode === 'create' ? '新增门店' : '编辑门店与营业设置'" width="560px">
       <el-form :model="form" label-position="top">
         <el-form-item label="门店名称">
@@ -147,8 +176,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import QRCode from 'qrcode'
 import { ElMessage } from 'element-plus'
-import { createMerchantStore, deleteMerchantStore, fetchMerchantStores, updateMerchantStore } from '../../api/modules'
+import { configureMerchantStoreTables, createMerchantStore, deleteMerchantStore, fetchMerchantStoreTables, fetchMerchantStores, updateMerchantStore } from '../../api/modules'
 
 const router = useRouter()
 const stores = ref([])
@@ -157,6 +187,12 @@ const page = ref(1)
 const pageSize = 10
 const dialogVisible = ref(false)
 const dialogMode = ref('create')
+const tablesDialogVisible = ref(false)
+const tablesLoading = ref(false)
+const tablesSaving = ref(false)
+const tablesStore = ref(null)
+const tableCount = ref(0)
+const tableQrs = ref([])
 const editingId = ref(null)
 const form = reactive({
   name: '',
@@ -300,6 +336,72 @@ const submit = async () => {
 
 const manageProducts = (row) => {
   router.push(`/merchant/stores/${row.id}/products`)
+}
+const renderTableQrs = async (tables = []) => {
+  tableQrs.value = await Promise.all(tables.map(async (table) => ({
+    tableNo: table.table_no,
+    label: String(table.table_label || `${table.table_no}号桌`),
+    url: table.url,
+    image: await QRCode.toDataURL(table.url, { errorCorrectionLevel: 'M', margin: 2, width: 220 })
+  })))
+}
+const openTables = async (row) => {
+  tablesStore.value = row
+  tablesDialogVisible.value = true
+  tablesLoading.value = true
+  tableQrs.value = []
+  try {
+    const res = await fetchMerchantStoreTables(row.id)
+    const config = res.data || {}
+    tableCount.value = Number(config.table_count) || 0
+    await renderTableQrs(config.tables || [])
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '读取桌位设置失败')
+  } finally {
+    tablesLoading.value = false
+  }
+}
+const saveTables = async () => {
+  if (!tablesStore.value || !Number.isInteger(tableCount.value) || tableCount.value < 0 || tableCount.value > 300) {
+    ElMessage.error('桌数需为 0 到 300 的整数')
+    return
+  }
+  tablesSaving.value = true
+  try {
+    await configureMerchantStoreTables(tablesStore.value.id, {
+      table_count: tableCount.value,
+      tables: tableQrs.value.filter((item) => Number(item.tableNo) <= tableCount.value).map((item) => ({ table_no: item.tableNo, table_label: String(item.label || `${item.tableNo}号桌`).trim() || `${item.tableNo}号桌` }))
+    })
+    const latest = await fetchMerchantStoreTables(tablesStore.value.id)
+    const config = latest.data || {}
+    tableCount.value = Number(config.table_count) || 0
+    await renderTableQrs(config.tables || [])
+    ElMessage.success('桌位设置已保存并刷新')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '保存桌位设置失败')
+  } finally {
+    tablesSaving.value = false
+  }
+}
+const downloadTableQr = (item) => {
+  const link = document.createElement('a')
+  link.href = item.image
+  link.download = `桌位-${(item.label || `${item.tableNo}号桌`).replace(/[\\/:*?"<>|]/g, "_")}-扫码点餐.png`
+  link.click()
+}
+const printTableQr = (item) => printTableQrItems([item])
+const printAllTables = () => printTableQrItems(tableQrs.value)
+const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;").replaceAll("'", "&#39;")
+const printTableQrItems = (items) => {
+  if (!items.length) return
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    ElMessage.warning('浏览器阻止了打印窗口，请允许弹出窗口后重试')
+    return
+  }
+  const cards = items.map((item) => `<article><h2>${escapeHtml(item.label || `${item.tableNo}号桌`)}</h2><img src="${item.image}" alt="桌位二维码"><p>扫码点餐</p></article>`).join('')
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>扫码点餐桌码</title><style>body{font-family:Arial,sans-serif}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}article{text-align:center;border:1px solid #ddd;padding:16px;break-inside:avoid}img{width:180px;height:180px}h2{margin:0 0 10px}p{margin:8px 0}@media print{.grid{gap:10px}}</style></head><body><main class="grid">${cards}</main><script>window.onload=()=>window.print()<\/script></body></html>`)
+  printWindow.document.close()
 }
 
 const toggleOpen = async (row, isOpen) => {
@@ -543,6 +645,63 @@ const storeCustomerImpact = (row) => {
   .store-health-grid,
   .store-mode-guide {
     grid-template-columns: 1fr;
+  }
+}
+.tables-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+.tables-toolbar p {
+  margin: 6px 0 0;
+  color: #64748b;
+  line-height: 1.5;
+}
+.tables-count-control,
+.table-qr-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.table-qr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+  max-height: 60vh;
+  overflow: auto;
+  min-height: 120px;
+}
+.table-qr-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.table-qr-card img {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+}
+.table-qr-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 720px) {
+  .tables-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .tables-count-control {
+    flex-wrap: wrap;
   }
 }
 </style>

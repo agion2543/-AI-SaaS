@@ -14,6 +14,7 @@ const MerchantFinance = () => import('../mobile/merchant/MerchantFinance.vue')
 const MerchantCoupons = () => import('../mobile/merchant/MerchantCoupons.vue')
 const MerchantAI = () => import('../mobile/merchant/MerchantAI.vue')
 const MerchantGroupBuy = () => import('../mobile/merchant/MerchantGroupBuy.vue')
+const MerchantMine = () => import('../mobile/merchant/MerchantMine.vue')
 const MerchantSettings = () => import('../mobile/merchant/MerchantSettings.vue')
 const MerchantSubscription = () => import('../mobile/merchant/MerchantSubscription.vue')
 
@@ -39,6 +40,7 @@ const routes = [
     children: [
       { path: '', redirect: '/m/merchant/home' },
       { path: 'home', component: MerchantHome, name: 'MerchantHome', meta: { allowExpiredReadOnly: true } },
+      { path: 'mine', component: MerchantMine, name: 'MerchantMine', meta: { allowExpiredReadOnly: true } },
       { path: 'orders', component: MerchantOrders, name: 'MerchantOrders', meta: { allowExpiredReadOnly: true } },
       { path: 'orders/:id', component: MerchantOrderDetail, name: 'MerchantOrderDetail', meta: { allowExpiredReadOnly: true } },
       { path: 'products', component: MerchantProducts, name: 'MerchantProducts', meta: { allowExpiredReadOnly: true } },

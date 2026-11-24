@@ -94,12 +94,12 @@ func TestMySQLPlatformExpensesV7Migration(t *testing.T) {
 			t.Fatalf("v7 exact rerun: result=%q err=%v", result, err)
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
-			t.Fatalf("latest v8 upgrade from exact v7: result=%q err=%v", result, err)
+			t.Fatalf("latest v10 upgrade from exact v7: result=%q err=%v", result, err)
 		}
 		assertLatestInventory(t, db)
 	})
 
-	t.Run("latest fresh install reaches v8 without expense seed rows", func(t *testing.T) {
+	t.Run("latest fresh install reaches v10 without expense seed rows", func(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("fresh latest install: result=%q err=%v", result, err)

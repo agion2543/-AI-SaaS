@@ -932,7 +932,7 @@ func (s *AdminService) ListMerchantSubscriptionOrders(merchantID uint) ([]model.
 	var orders []model.Order
 	err := s.db.Preload("MerchantPlan").
 		Where("merchant_id = ? AND order_type = ?", merchantID, "merchant_subscription").
-		Order("created_at desc").
+		Order("created_at desc, id desc").
 		Limit(20).
 		Find(&orders).Error
 	return orders, err
@@ -945,7 +945,7 @@ func (s *AdminService) ListMerchantStoreOrders(merchantID uint, limit int) ([]mo
 	var orders []model.Order
 	err := s.db.Preload("Store").Preload("Promotion").
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
-		Order("created_at desc").
+		Order("created_at desc, id desc").
 		Limit(limit).
 		Find(&orders).Error
 	return orders, err
@@ -1239,7 +1239,7 @@ func (s *AdminService) GenerateMerchantInsights(merchantID uint) (map[string]int
 			insights = append(insights, map[string]string{
 				"type":    "warning",
 				"title":   "订单取消率偏高",
-				"content": "近期取消订单占比较高，建议检查商品库存、营业时间和接单响应速度，必要时先暂停接单避免继续损失体验。",
+			"content": "近期取消订单占比较高，建议检查商品上下架状态、营业时间和接单响应速度，必要时先暂停接单避免继续损失体验。",
 			})
 		}
 		if len(hotProducts) > 0 {
@@ -2223,14 +2223,13 @@ func (s *AdminService) productReadinessHealthBlock() OperationHealthBlock {
 	pausedStores := s.countRows(&model.Store{}, "status <> ? OR is_open = ?", "active", false)
 	activeProducts := s.countRows(&model.StoreProduct{}, "status = ?", "active")
 	noImageProducts := s.countRows(&model.StoreProduct{}, "status = ? AND (image_url = '' OR image_url IS NULL)", "active")
-	soldOutProducts := s.countRows(&model.StoreProduct{}, "status = ? AND stock = 0", "active")
-	status := healthStatus(boolToCount(activeStores == 0 || activeProducts == 0), pausedStores+noImageProducts+soldOutProducts)
+	status := healthStatus(boolToCount(activeStores == 0 || activeProducts == 0), pausedStores+noImageProducts)
 	return OperationHealthBlock{
 		Key:        "product_readiness",
 		Title:      "顾客下单与商品准备",
 		Status:     status,
-		Summary:    fmt.Sprintf("营业门店 %d 个，暂停/不可用门店 %d 个，上架商品 %d 个，无图商品 %d 个，售罄商品 %d 个。", activeStores, pausedStores, activeProducts, noImageProducts, soldOutProducts),
-		Suggestion: "真实推广前要确保至少有可营业门店、可售商品和清晰库存；无图或售罄商品不阻塞上线，但会影响转化。",
+		Summary:    fmt.Sprintf("营业门店 %d 个，暂停/不可用门店 %d 个，上架商品 %d 个，无图商品 %d 个。", activeStores, pausedStores, activeProducts, noImageProducts),
+		Suggestion: "推广前应确认有可营业门店、商品信息完整且上下架状态准确；缺少图片可能影响转化。",
 		ActionText: "进入商家商品",
 		ActionPath: "/admin/merchants",
 		Metrics: []OperationHealthMetric{
@@ -2238,7 +2237,6 @@ func (s *AdminService) productReadinessHealthBlock() OperationHealthBlock {
 			healthMetric("暂停门店", pausedStores, "暂停接单或非 active 门店", warningIfPositive(pausedStores)),
 			healthMetric("上架商品", activeProducts, "顾客端可见商品", dangerIfZero(activeProducts)),
 			healthMetric("无图商品", noImageProducts, "影响顾客端转化", warningIfPositive(noImageProducts)),
-			healthMetric("售罄商品", soldOutProducts, "库存为 0 的上架商品", warningIfPositive(soldOutProducts)),
 		},
 	}
 }

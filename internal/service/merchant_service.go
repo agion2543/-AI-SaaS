@@ -798,10 +798,14 @@ func normalizeStoreOrderMode(value string) string {
 }
 
 func (s *MerchantService) ListStoreProducts(merchantID, storeID uint, page, pageSize int) ([]model.StoreProduct, int64, error) {
+	return s.ListStoreProductsFiltered(merchantID, storeID, page, pageSize, "")
+}
+
+func (s *MerchantService) ListStoreProductsFiltered(merchantID, storeID uint, page, pageSize int, keyword string) ([]model.StoreProduct, int64, error) {
 	if _, err := s.stores.FindByMerchantAndID(merchantID, storeID); err != nil {
-		return nil, 0, errors.New("\u95e8\u5e97\u4e0d\u5b58\u5728")
+		return nil, 0, errors.New("门店不存在")
 	}
-	return s.products.ListByStore(storeID, (page-1)*pageSize, pageSize)
+	return s.products.ListByStoreFiltered(storeID, (page-1)*pageSize, pageSize, keyword)
 }
 
 func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.SaveStoreProductRequest) (*model.StoreProduct, error) {
@@ -874,7 +878,6 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 	product.ImageURL = imageURL
 	product.Category = category
 	product.Status = status
-	product.Stock = req.Stock
 	product.Sort = req.Sort
 	product.SalesUnit = salesUnit
 	product.Specification = specification
@@ -1196,7 +1199,7 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 5. 套餐或组合建议
 6. 执行步骤
 7. 风险提醒
-要求：适合直接填入商品表单，避免夸大承诺，优先解决缺图、缺描述、售罄、低库存、排序靠后等问题。`, merchant.Name, scenario, customerTag, strings.TrimSpace(req.ProductName), goal, stats)
+		要求：适合直接填入商品表单，避免夸大承诺，优先完善商品图片、描述、上下架状态和排序；不要把库存数量作为餐品可售条件。`, merchant.Name, scenario, customerTag, strings.TrimSpace(req.ProductName), goal, stats)
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 		defer cancel()

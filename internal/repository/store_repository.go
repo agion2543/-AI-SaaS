@@ -3,6 +3,7 @@ package repository
 import (
 	"go-web-gin-health/internal/model"
 	"gorm.io/gorm"
+	"strings"
 )
 
 type StoreRepository struct {
@@ -89,10 +90,18 @@ func (r *StoreProductRepository) FindByID(id uint) (*model.StoreProduct, error) 
 }
 
 func (r *StoreProductRepository) ListByStore(storeID uint, offset, limit int) ([]model.StoreProduct, int64, error) {
+	return r.ListByStoreFiltered(storeID, offset, limit, "")
+}
+
+func (r *StoreProductRepository) ListByStoreFiltered(storeID uint, offset, limit int, keyword string) ([]model.StoreProduct, int64, error) {
 	var products []model.StoreProduct
 	var total int64
 
 	query := r.db.Model(&model.StoreProduct{}).Where("store_id = ?", storeID)
+	if keyword = strings.TrimSpace(keyword); keyword != "" {
+		pattern := "%" + keyword + "%"
+		query = query.Where("(name LIKE ? OR description LIKE ?)", pattern, pattern)
+	}
 	query.Count(&total)
 	err := query.Order("sort asc, id desc").Offset(offset).Limit(limit).Find(&products).Error
 

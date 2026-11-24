@@ -2,6 +2,10 @@ package model
 
 import "time"
 
+// PaymentStatusPaidReviewRequired records a verified provider success that
+// arrived after the order became ineligible for automatic fulfillment.
+const PaymentStatusPaidReviewRequired = "paid_review_required"
+
 type Order struct {
 	BaseModel
 	OrderNo                  string                                 `gorm:"size:50;uniqueIndex" json:"order_no"`
@@ -16,6 +20,8 @@ type Order struct {
 	Settlement               *MerchantSettlement                    `json:"settlement,omitempty"`
 	StoreID                  *uint                                  `gorm:"index" json:"store_id"`
 	Store                    *Store                                 `json:"store,omitempty"`
+	TableNo                  int                                    `gorm:"-" json:"table_no"`
+	TableLabel               string                                 `gorm:"-" json:"table_label,omitempty"`
 	CustomerPhone            string                                 `gorm:"size:30" json:"customer_phone"`
 	PackageID                *uint                                  `json:"package_id"`
 	Package                  *MembershipPackage                     `json:"package,omitempty"`

@@ -5,10 +5,10 @@ services:
     image: mysql:8.0.46
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-replace-with-root-password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD before starting the fresh-install Compose}
       MYSQL_DATABASE: saas_billing
       MYSQL_USER: saas_user
-      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-replace-with-db-password}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD before starting the fresh-install Compose}
       TZ: Asia/Shanghai
     command:
       - --default-authentication-plugin=mysql_native_password
@@ -19,7 +19,7 @@ services:
     networks:
       - saas_net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-replace-with-root-password}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD before starting the fresh-install Compose}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -47,6 +47,7 @@ services:
       - .env.production
     environment:
       DB_AUTO_MIGRATE: "false"
+      INITIAL_DATA_SEED_ENABLED: "true"
     depends_on:
       schema-migrate:
         condition: service_completed_successfully

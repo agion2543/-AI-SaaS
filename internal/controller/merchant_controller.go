@@ -144,6 +144,15 @@ func (ctl *MerchantController) Info(c *gin.Context) {
 	utils.Success(c, gin.H{"merchant": merchant})
 }
 
+func (ctl *MerchantController) MaintenanceNotice(c *gin.Context) {
+	notice, err := ctl.admin.ActiveMaintenanceNotice()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, "维护公告暂时无法读取")
+		return
+	}
+	utils.Success(c, gin.H{"notice": notice})
+}
+
 func (ctl *MerchantController) Subscription(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
@@ -627,7 +636,7 @@ func (ctl *MerchantController) StoreProducts(c *gin.Context) {
 
 	storeID := uint(atoi(c.Param("storeId")))
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
-	list, total, err := ctl.merchant.ListStoreProducts(merchantID, storeID, page, pageSize)
+	list, total, err := ctl.merchant.ListStoreProductsFiltered(merchantID, storeID, page, pageSize, c.Query("keyword"))
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return

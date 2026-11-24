@@ -82,6 +82,15 @@ type SaveSystemConfigRequest struct {
 	Notice                   string `json:"notice"`
 }
 
+type MerchantMaintenanceNotice struct {
+	Published      bool   `json:"published"`
+	Title          string `json:"title"`
+	WindowStart    string `json:"window_start"`
+	WindowEnd      string `json:"window_end"`
+	ExpectedImpact string `json:"expected_impact"`
+	Preparation    string `json:"preparation"`
+}
+
 type SaveAIConfigPolicyRequest struct {
 	Provider                string `json:"provider" binding:"required"`
 	BaseURL                 string `json:"base_url"`

@@ -75,6 +75,7 @@
         <el-select v-model="statusFilter" clearable placeholder="订阅订单状态">
           <el-option label="全部" value="" />
           <el-option label="待确认收款" value="pending" />
+          <el-option label="已过期未付款（平台静态码）" value="expired_unpaid" />
           <el-option label="已确认收入" value="paid" />
           <el-option label="人工核验（外部凭证）" value="manually_verified" />
           <el-option label="支付失败" value="failed" />
@@ -148,6 +149,61 @@
               </el-button>
               <el-button v-else size="small" disabled>快照异常，暂不可填草稿</el-button>
             </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </DataPanel>
+
+    <DataPanel title="已过期未付款订阅订单（平台静态码）" description="30 分钟内未确认付款的静态码订单已关闭；只有管理员核对平台收款账户确认实际到账后，才能在此人工对账并开通权益。">
+      <el-alert
+        type="warning"
+        show-icon
+        :closable="false"
+        title="这些订单仍是未付款状态"
+        description="平台静态二维码不会自动验证付款；页面回跳或商家自报付款均不会确认到账或开通订阅。请先核对平台收款账户的实际流水，再执行人工确认。"
+      />
+      <el-table :data="expiredUnpaidOrders" empty-text="暂无已过期未付款订阅订单">
+        <el-table-column prop="order_no" label="订阅订单号" min-width="190" />
+        <el-table-column label="商家" min-width="160">
+          <template #default="{ row }">{{ row.merchant?.name || row.merchant_id || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="套餐" width="130">
+          <template #default="{ row }">{{ planName(row) }}</template>
+        </el-table-column>
+        <el-table-column label="金额" width="120">
+          <template #default="{ row }">{{ hasValidSubscriptionSnapshot(row) ? formatMoney(orderAmount(row)) : '需核对原始条款' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="140">
+          <template #default><el-tag type="warning">已过期 · 未付款</el-tag></template>
+        </el-table-column>
+        <el-table-column label="付款方式" width="130">
+          <template #default="{ row }">{{ paymentChannelLabel(row.payment_channel) }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="canConfirmSubscription(row)"
+              size="small"
+              type="warning"
+              :loading="confirmingOrderId === row.id"
+              @click="confirmSubscription(row)"
+            >
+              核对到账并开通
+            </el-button>
+            <el-button
+              v-else-if="canOpenManualReviewDraft(row)"
+              size="small"
+              type="danger"
+              plain
+              @click="openManualReviewDraft(row)"
+            >
+              核验原始凭证
+            </el-button>
+            <el-tag v-else-if="!hasValidSubscriptionSnapshot(row)" type="danger">快照缺失，普通确认禁用</el-tag>
+            <el-tag v-else type="info">此付款渠道需专属人工核对</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -400,6 +456,7 @@ const manualReviewDraftRules = {
 const subscriptionOrders = computed(() => orders.value.filter((item) => item.order_type === 'merchant_subscription'))
 const filteredSubscriptionOrders = computed(() => subscriptionOrders.value.filter(matchFilters))
 const pendingOrders = computed(() => filteredSubscriptionOrders.value.filter((item) => item.status === 'pending'))
+const expiredUnpaidOrders = computed(() => filteredSubscriptionOrders.value.filter(isExpiredUnpaidOrder))
 const pendingSnapshotReviewCount = computed(() => pendingOrders.value.filter((item) => !hasValidSubscriptionSnapshot(item)).length)
 const paidOrders = computed(() => providerPaidSubscriptionOrders(filteredSubscriptionOrders.value))
 const manualReviewedOrders = computed(() => manualReviews.value.filter(matchFilters))
@@ -420,6 +477,7 @@ const expiringMerchantIds = computed(() => new Set(expiringMerchants.value.map((
 const quickFilters = computed(() => [
   { label: '全部订阅', value: '', count: filteredSubscriptionOrders.value.length, hint: '当前筛选范围' },
   { label: '待确认', value: 'pending', count: subscriptionOrders.value.filter((item) => item.status === 'pending').length, hint: '需要核对到账' },
+  { label: '静态码过期未付款', value: 'expired_unpaid', count: subscriptionOrders.value.filter(isExpiredUnpaidOrder).length, hint: '等待管理员核对实际到账' },
   { label: '已确认', value: 'paid', count: subscriptionOrders.value.filter((item) => item.status === 'paid').length, hint: '进入平台收入' },
   { label: '人工核验', value: 'manually_verified', count: manualReviews.value.length, hint: '独立台账，不计收入' },
   { label: '即将到期', value: 'expiring', count: expiringMerchants.value.length, hint: '7 天内需续费跟进' }
@@ -450,7 +508,8 @@ const matchFilters = (item) => {
   if (statusFilter.value === 'expiring') {
     if (!item.merchant_id || !expiringMerchantIds.value.has(Number(item.merchant_id))) return false
   }
-  if (statusFilter.value && statusFilter.value !== 'expiring' && item.status !== statusFilter.value) return false
+  if (statusFilter.value === 'expired_unpaid' && !isExpiredUnpaidOrder(item)) return false
+  if (statusFilter.value && !['expiring', 'expired_unpaid'].includes(statusFilter.value) && item.status !== statusFilter.value) return false
   if (!matchDate(item.created_at)) return false
   if (keyword.value) {
     const text = `${item.order_no || ''} ${item.merchant?.name || ''} ${planName(item)}`.toLowerCase()
@@ -466,11 +525,19 @@ const resetFilters = () => {
 }
 
 const confirmSubscription = async (row) => {
-  if (!hasValidSubscriptionSnapshot(row)) {
-    ElMessage.warning('订单缺少有效快照，普通确认已禁用；请先核验原始凭证。')
+  if (!canConfirmSubscription(row)) {
+    ElMessage.warning('该订单不符合普通确认条件；请先核验原始条款和收款凭证。')
     return
   }
-  await ElMessageBox.confirm(`确认“${row.merchant?.name || row.merchant_id || '-'}”订阅款已到账，并立即开通套餐吗？`, '确认订阅收款', { type: 'warning' })
+  const expiredUnpaid = isExpiredUnpaidOrder(row)
+  const confirmationMessage = expiredUnpaid
+    ? `订单 ${row.order_no} 已因超过 30 分钟未确认付款而关闭。请先核对平台静态二维码收款账户的实际流水；只有确认这笔款项已到账后，才继续人工对账并开通“${row.merchant?.name || row.merchant_id || '-'}”的订阅。`
+    : `确认“${row.merchant?.name || row.merchant_id || '-'}”订阅款已到账，并立即开通套餐吗？`
+  await ElMessageBox.confirm(confirmationMessage, expiredUnpaid ? '人工核对过期订阅收款' : '确认订阅收款', {
+    type: 'warning',
+    confirmButtonText: expiredUnpaid ? '已核对到账并开通' : '确认到账并开通',
+    cancelButtonText: '返回核对'
+  })
   confirmingOrderId.value = row.id
   try {
     const res = await confirmMerchantSubscriptionPayment(row.id, { remark: '订阅营收页确认到账' })
@@ -493,6 +560,10 @@ const confirmSubscription = async (row) => {
 const exportRevenue = async () => {
   exporting.value = true
   try {
+    if (statusFilter.value === 'expired_unpaid') {
+      ElMessage.info('已过期未付款订单的专用导出暂未提供；请在本页表格中进行人工核对。')
+      return
+    }
     if (statusFilter.value === 'expiring' && !expiringMerchantIds.value.size) {
       ElMessage.info('当前没有 7 天内到期的商家可导出。')
       return
@@ -522,7 +593,9 @@ const exportRevenue = async () => {
 const orderAmount = (row) => row?.manual_review?.amount_cents ?? merchantSubscriptionSnapshotPrice(row) ?? Number(row.total_amount ?? row.amount ?? 0)
 const merchantById = (id) => merchants.value.find((item) => Number(item.id) === Number(id)) || null
 const hasValidSubscriptionSnapshot = (row) => hasValidMerchantSubscriptionSnapshot(row)
-const canOpenManualReviewDraft = (row) => row?.order_type === 'merchant_subscription' && row.status === 'pending' && isLegacyMerchantSubscriptionOrderWithoutSnapshot(row)
+const isExpiredUnpaidOrder = (row) => row?.order_type === 'merchant_subscription' && row?.payment_channel === 'platform_qr' && row?.expired_unpaid === true && row?.paid_at == null
+const canConfirmSubscription = (row) => hasValidSubscriptionSnapshot(row) && (row?.status === 'pending' || (isExpiredUnpaidOrder(row) && row?.payment_channel === 'platform_qr'))
+const canOpenManualReviewDraft = (row) => row?.order_type === 'merchant_subscription' && (row.status === 'pending' || (isExpiredUnpaidOrder(row) && row?.payment_channel === 'platform_qr')) && isLegacyMerchantSubscriptionOrderWithoutSnapshot(row)
 const openManualReviewDraft = (row) => {
   if (!canOpenManualReviewDraft(row)) return
   manualReviewDraftOrder.value = row

@@ -37,30 +37,21 @@
         <van-button size="small" type="warning" plain @click="router.push('/m/merchant/subscription')">查看续费</van-button>
       </div>
 
-      <!-- 推广入口优先：点击统计来自现有团购链接接口，不代表交易结果 -->
-      <section class="promotion-focus" aria-labelledby="promotion-focus-title">
-        <div class="promotion-kicker"><van-icon name="fire-o" /> 团购推广</div>
-        <h1 id="promotion-focus-title">配置推广入口，查看跳转点击</h1>
-        <p class="promotion-description">按门店管理抖音生活服务、美团 / 大众点评官方团购链接，并查看专属入口累计点击。</p>
-        <div class="promotion-summary" aria-live="polite">
-          <div v-if="promotionSummary.status === 'loading'" class="promotion-summary-state">正在读取团购数据…</div>
-          <div v-else-if="promotionSummary.status === 'error'" class="promotion-summary-state">团购数据暂不可读，可进入渠道页重试</div>
-          <div v-else-if="stores.length === 0" class="promotion-summary-state">添加门店后即可配置团购入口</div>
-          <div v-else class="promotion-metrics">
-            <div class="promotion-metric">
-              <span>已配置入口</span>
-              <strong>{{ promotionSummary.configuredEntries }}<small> 个</small></strong>
-            </div>
-            <div class="promotion-metric">
-              <span>累计跳转点击</span>
-              <strong>{{ promotionSummary.totalClicks.toLocaleString('zh-CN') }}<small> 次</small></strong>
-            </div>
-          </div>
-        </div>
-        <van-button class="promotion-button" type="primary" round icon="arrow" @click="router.push('/m/merchant/group-buy')">
-          查看团购入口与点击
-        </van-button>
-        <p class="promotion-disclaimer">点击量不代表独立顾客数、订单、付款或收入。</p>
+      <van-cell-group class="ai-entry">
+        <van-cell
+          title="商擎 AI 运营助手"
+          label="经营洞察、营销文案与活动策划 · AI 服务尚未接入"
+          icon="chat-o"
+          is-link
+          value="了解"
+          @click="router.push('/m/merchant/ai')"
+        />
+      </van-cell-group>
+
+      <section class="activity-intro" aria-label="活动与效果概览">
+        <div class="activity-kicker">活动与效果报告</div>
+        <div class="section-title">经营与活动概览</div>
+        <p>先看系统内订单和收款摘要；外部团购跳转点击单独列示，不代表订单、付款或收入归因。</p>
       </section>
 
       <!-- 订单统计卡片 -->
@@ -69,8 +60,15 @@
           <div id="order-stats-title" class="section-title">订单与收款速览</div>
           <span class="stats-scope">快捷参考</span>
         </div>
-        <p class="stats-note">按首页当前读取的最多 20 笔订单记录汇总，并非全量报表；不含外部团购平台订单与核销数据。</p>
-        <van-grid :column="2" :border="false">
+        <p class="stats-note">按商家全部门店当前读取的最多 20 笔订单记录汇总（非全量）；订单数按创建时间，收款按付款确认时间统计且未扣退款；不含外部团购平台订单与核销数据。</p>
+        <div v-if="orderSummaryStatus === 'loading'" class="order-summary-state" role="status">
+          <van-loading size="18px">正在加载订单摘要…</van-loading>
+        </div>
+        <div v-else-if="orderSummaryStatus === 'error'" class="order-summary-state order-summary-error" role="alert">
+          <span>订单摘要加载失败，暂时无法确认统计数据。</span>
+          <van-button size="small" plain type="primary" @click="loadOrders">重试</van-button>
+        </div>
+        <van-grid v-else :column="2" :border="false">
           <van-grid-item>
             <div class="stat-item">
               <div class="stat-value">{{ stats.todayOrders }}</div>
@@ -79,7 +77,7 @@
           </van-grid-item>
           <van-grid-item>
             <div class="stat-item">
-              <div class="stat-value text-primary">¥{{ stats.todayRevenue }}</div>
+              <div class="stat-value text-primary">{{ stats.todayRevenue }}</div>
               <div class="stat-label">今日确认收款</div>
             </div>
           </van-grid-item>
@@ -92,7 +90,7 @@
           <van-grid-item>
             <div class="stat-item">
               <div class="stat-value text-danger">{{ stats.refundRequests }}</div>
-              <div class="stat-label">有退款记录</div>
+              <div class="stat-label">有退款金额</div>
             </div>
           </van-grid-item>
         </van-grid>
@@ -108,16 +106,23 @@
         </van-grid>
       </div>
 
+      <div v-if="canWrite" class="quick-section">
+        <div class="section-title">更多功能</div>
+        <van-grid :column="3" :gutter="10">
+          <van-grid-item v-if="canWrite" icon="setting-o" text="商家设置" @click="$router.push('/m/merchant/settings')" />
+        </van-grid>
+      </div>
+
       <!-- 待处理订单 -->
       <div class="pending-section">
         <div class="section-header">
           <span class="section-title">待处理订单</span>
-          <van-tag v-if="pendingOrders.length" type="danger" size="medium">
+          <van-tag v-if="orderSummaryStatus === 'ready' && pendingOrders.length" type="danger" size="medium">
             {{ stats.pendingOrders }} 单（当前读取记录）
           </van-tag>
         </div>
 
-        <van-list finished>
+        <van-list v-if="orderSummaryStatus === 'ready'" finished>
           <div v-if="pendingOrders.length === 0" class="empty-pending">
             <van-empty description="暂无待处理订单" />
           </div>
@@ -135,7 +140,7 @@
               </van-tag>
             </template>
             <template #num>
-              <div class="order-price">¥{{ formatPrice(order.total_amount ?? order.amount ?? 0) }}</div>
+              <div class="order-price">{{ formatCents(order.total_amount ?? order.amount ?? 0) }}</div>
             </template>
             <template #footer>
               <van-button
@@ -166,9 +171,15 @@
             </template>
           </van-card>
         </van-list>
+        <div v-else-if="orderSummaryStatus === 'loading'" class="pending-order-state" role="status">
+          正在加载待处理订单…
+        </div>
+        <div v-else class="pending-order-state" role="alert">
+          订单加载失败，无法确认是否有待处理订单。
+        </div>
 
         <van-button
-          v-if="pendingOrders.length > 0"
+          v-if="orderSummaryStatus === 'ready' && pendingOrders.length > 0"
           block
           plain
           class="view-more"
@@ -181,7 +192,13 @@
       <!-- 本月订单与收款概览 -->
       <div class="overview-section">
         <div class="section-title">本月订单与收款</div>
-        <van-grid :column="2" :gutter="10">
+        <div v-if="orderSummaryStatus === 'loading'" class="order-summary-state" role="status">
+          正在加载本月订单与收款…
+        </div>
+        <div v-else-if="orderSummaryStatus === 'error'" class="order-summary-state order-summary-error" role="alert">
+          订单摘要加载失败，请点击上方重试。
+        </div>
+        <van-grid v-else :column="2" :gutter="10">
           <van-grid-item>
             <div class="overview-card">
               <div class="overview-value">{{ stats.monthOrders }}</div>
@@ -190,12 +207,38 @@
           </van-grid-item>
           <van-grid-item>
             <div class="overview-card">
-              <div class="overview-value text-primary">¥{{ stats.monthRevenue }}</div>
+              <div class="overview-value text-primary">{{ stats.monthRevenue }}</div>
               <div class="overview-label">本月确认收款</div>
             </div>
           </van-grid-item>
         </van-grid>
       </div>
+
+      <!-- 次级外部渠道入口；仅配置官方链接和统计跳转点击，不读取平台交易 -->
+      <section class="promotion-secondary" aria-labelledby="promotion-secondary-title">
+        <div class="promotion-kicker"><van-icon name="qr" /> 外部平台跳转 · 次级入口</div>
+        <h2 id="promotion-secondary-title">团购链接与点击</h2>
+        <p class="promotion-description">按已读取的最多 100 家门店配置抖音生活服务、美团 / 大众点评官方团购链接统计外部跳转；门店超过 100 家时，首页不含其余门店。</p>
+        <div class="promotion-summary" aria-live="polite">
+          <div v-if="promotionSummary.status === 'loading'" class="promotion-summary-state">正在读取团购数据…</div>
+          <div v-else-if="promotionSummary.status === 'error'" class="promotion-summary-state">团购数据暂不可读，可进入渠道页重试</div>
+          <div v-else-if="stores.length === 0" class="promotion-summary-state">添加门店后即可配置团购入口</div>
+          <div v-else class="promotion-metrics">
+            <div class="promotion-metric">
+              <span>已配置入口</span>
+              <strong>{{ promotionSummary.configuredEntries }}<small> 个</small></strong>
+            </div>
+            <div class="promotion-metric">
+              <span>已读取门店累计跳转点击</span>
+              <strong>{{ promotionSummary.totalClicks.toLocaleString('zh-CN') }}<small> 次</small></strong>
+            </div>
+          </div>
+        </div>
+        <van-button class="promotion-button" type="primary" plain round icon="arrow" @click="router.push('/m/merchant/group-buy')">
+          管理外部团购跳转
+        </van-button>
+        <p class="promotion-disclaimer">本平台不读取团购订单、付款或核销数据；点击量不代表独立顾客数、订单、付款或收入。</p>
+      </section>
     </template>
 
     <!-- 退款弹窗 -->
@@ -230,6 +273,7 @@ import {
   fetchMerchantGroupBuyLinks
 } from '@/api/modules'
 import { mobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
+import { formatCents } from '@/utils/productPricing'
 
 const router = useRouter()
 
@@ -237,6 +281,7 @@ const loading = ref(true)
 const merchantInfo = ref({})
 const subscription = ref(null)
 const orders = ref([])
+const orderSummaryStatus = ref('loading')
 const stores = ref([])
 const storeListLoadFailed = ref(false)
 const promotionSummary = ref({ status: 'loading', configuredEntries: 0, totalClicks: 0 })
@@ -270,10 +315,6 @@ const pendingOrders = computed(() => {
   return orders.value.filter(o => ['pending', 'failed', 'payment_confirming', 'submitted', 'received'].includes(o.status)).slice(0, 5)
 })
 const isConfirmedPaid = (order) => Boolean(order?.paid_at) && Number(order.total_amount ?? order.amount ?? 0) > 0
-
-function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
-}
 
 function getOrderType(status) {
   const typeMap = {
@@ -372,7 +413,14 @@ async function loadMerchantInfo() {
       })
     ])
     merchantInfo.value = infoRes.data?.merchant || infoRes.data || {}
-    stores.value = storesRes.data?.list || (Array.isArray(storesRes.data) ? storesRes.data : [])
+    const storeData = storesRes?.data
+    const storeList = Array.isArray(storeData?.list) ? storeData.list : (Array.isArray(storeData) ? storeData : null)
+    if (storeList) {
+      stores.value = storeList
+    } else {
+      storeListLoadFailed.value = true
+      stores.value = []
+    }
     stats.value.totalStores = stores.value.length
   } catch (e) {
     console.error('加载商家信息失败:', e)
@@ -421,9 +469,14 @@ async function loadPromotionSummary() {
 }
 
 async function loadOrders() {
+  orderSummaryStatus.value = 'loading'
   try {
     const res = await fetchMerchantOrders({ status: '', page: 1, page_size: 20 })
-    orders.value = Array.isArray(res.data?.list) ? res.data.list : (Array.isArray(res.data?.items) ? res.data.items : (Array.isArray(res.data) ? res.data : []))
+    const orderList = Array.isArray(res?.data?.list)
+      ? res.data.list
+      : (Array.isArray(res?.data?.items) ? res.data.items : (Array.isArray(res?.data) ? res.data : null))
+    if (!orderList) throw new Error('订单接口未返回有效列表')
+    orders.value = orderList
 
     // 计算统计数据
     const today = new Date().toDateString()
@@ -459,13 +512,15 @@ async function loadOrders() {
     })
 
     stats.value.todayOrders = todayOrders
-    stats.value.todayRevenue = todayRevenue.toFixed(2)
+    stats.value.todayRevenue = formatCents(todayRevenue)
     stats.value.pendingOrders = pendingOrders
     stats.value.refundRequests = refundRequests
     stats.value.monthOrders = monthOrders
-    stats.value.monthRevenue = monthRevenue.toFixed(2)
+    stats.value.monthRevenue = formatCents(monthRevenue)
+    orderSummaryStatus.value = 'ready'
   } catch (e) {
     console.error('加载订单失败:', e)
+    orderSummaryStatus.value = 'error'
   }
 }
 
@@ -498,30 +553,26 @@ onMounted(async () => {
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .readonly-banner { display: grid; gap: 8px; margin: 12px 16px; padding: 12px; border: 1px solid #f0d49b; border-radius: 12px; color: #80591b; background: #fff8e8; font-size: 12px; line-height: 1.5; }
 
-.promotion-focus {
-  position: relative;
-  overflow: hidden;
-  margin: 14px 16px 12px;
-  padding: 18px;
-  border-radius: 18px;
-  color: #fff;
-  background: linear-gradient(140deg, #153447 0%, #17646a 62%, #168e83 100%);
-  box-shadow: 0 8px 22px rgba(19, 70, 82, .16);
-}
-.promotion-focus::after { position: absolute; right: -48px; top: 82px; width: 150px; height: 150px; border: 1px solid rgba(231, 255, 250, .16); border-radius: 50%; content: ''; pointer-events: none; }
-.promotion-kicker { position: relative; z-index: 1; display: flex; align-items: center; gap: 5px; color: #b9e9df; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
-.promotion-focus h1 { position: relative; z-index: 1; margin: 9px 0 6px; font-size: 20px; line-height: 1.35; }
-.promotion-description { position: relative; z-index: 1; margin: 0; color: #d8ecea; font-size: 12px; line-height: 1.6; }
-.promotion-summary { position: relative; z-index: 1; margin-top: 13px; padding: 11px 12px; border: 1px solid rgba(223, 255, 247, .16); border-radius: 12px; background: rgba(255, 255, 255, .08); }
-.promotion-summary-state { color: #e2f2ef; font-size: 12px; line-height: 1.5; }
+.ai-entry { margin: 12px 16px; overflow: hidden; border: 1px solid #cfe4ff; border-radius: 12px; }
+.ai-entry :deep(.van-cell) { background: #f2f8ff; }
+.activity-intro { margin: 12px 16px; padding: 16px; border-radius: 12px; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, .04); }
+.activity-kicker { margin-bottom: 6px; color: #1989fa; font-size: 11px; font-weight: 700; letter-spacing: .06em; }
+.activity-intro .section-title { margin-bottom: 6px; }
+.activity-intro p { margin: 0; color: #77868d; font-size: 12px; line-height: 1.6; }
+.promotion-secondary { margin: 12px 16px; padding: 16px; border: 1px solid #e9eff1; border-radius: 12px; background: #fff; }
+.promotion-kicker { display: flex; align-items: center; gap: 5px; color: #718087; font-size: 11px; font-weight: 700; }
+.promotion-secondary h2 { margin: 8px 0 6px; color: #25363c; font-size: 16px; line-height: 1.4; }
+.promotion-description { margin: 0; color: #718087; font-size: 12px; line-height: 1.6; }
+.promotion-summary { margin-top: 12px; padding: 11px 12px; border: 1px solid #e9eff1; border-radius: 10px; background: #f8fafb; }
+.promotion-summary-state { color: #64747a; font-size: 12px; line-height: 1.5; }
 .promotion-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .promotion-metric { display: grid; gap: 4px; min-width: 0; }
-.promotion-metric + .promotion-metric { padding-left: 12px; border-left: 1px solid rgba(223, 255, 247, .18); }
-.promotion-metric span { color: #c1dfdc; font-size: 10px; }
-.promotion-metric strong { color: #fff; font-size: 20px; line-height: 1.2; }
-.promotion-metric small { color: #d7ece9; font-size: 11px; font-weight: 500; }
-.promotion-button { position: relative; z-index: 1; width: 100%; margin-top: 12px; color: #165c5d; background: #effff9; border-color: #effff9; font-weight: 700; }
-.promotion-disclaimer { position: relative; z-index: 1; margin: 9px 0 0; color: #c7e2df; font-size: 10px; line-height: 1.5; }
+.promotion-metric + .promotion-metric { padding-left: 12px; border-left: 1px solid #e1e8eb; }
+.promotion-metric span { color: #718087; font-size: 10px; }
+.promotion-metric strong { color: #25363c; font-size: 20px; line-height: 1.2; }
+.promotion-metric small { color: #718087; font-size: 11px; font-weight: 500; }
+.promotion-button { width: 100%; margin-top: 12px; font-weight: 700; }
+.promotion-disclaimer { margin: 9px 0 0; color: #718087; font-size: 10px; line-height: 1.5; }
 
 .user-info {
   display: flex;
@@ -553,6 +604,8 @@ onMounted(async () => {
 .stats-heading .section-title { margin-bottom: 0; }
 .stats-scope { flex: 0 0 auto; color: #85939a; font-size: 10px; }
 .stats-note { margin: 7px 0 10px; color: #7e8d94; font-size: 11px; line-height: 1.5; }
+.order-summary-state, .pending-order-state { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 8px; color: #7e8d94; font-size: 12px; line-height: 1.5; text-align: center; }
+.order-summary-error { flex-wrap: wrap; color: #b44b3d; }
 
 .stat-item {
   text-align: center;

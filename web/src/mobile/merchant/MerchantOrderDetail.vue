@@ -34,6 +34,7 @@
       <!-- 订单信息 -->
       <van-cell-group inset title="订单信息">
         <van-cell title="订单编号" :value="order.order_no" />
+        <van-cell v-if="Number(order.table_no) > 0" title="桌号" :value="order.table_label || `${order.table_no}号桌`" />
         <van-cell title="下单时间" :value="formatTime(order.created_at)" />
         <van-cell title="门店" :value="order.store?.name || '-'" />
         <van-cell
@@ -55,7 +56,7 @@
           <template #title>
             <div class="product-info">
               <span class="product-name">{{ item.product_name || item.name }}</span>
-              <span class="product-price">¥{{ formatPrice(item.price) }}<span v-if="item.sales_unit"> / {{ item.sales_unit }}</span></span>
+              <span class="product-price">{{ formatCents(item.price) }}<span v-if="item.sales_unit"> / {{ item.sales_unit }}</span></span>
             </div>
           </template>
           <template #label>
@@ -63,23 +64,28 @@
             <span v-if="item.specification" class="product-snapshot">规格: {{ item.specification }}</span>
             <span v-if="item.minimum_order_quantity > 1" class="product-snapshot">下单时最低 {{ item.minimum_order_quantity }}{{ item.sales_unit || '件' }}</span>
             <span v-if="item.applied_tier_min_quantity > 0" class="product-snapshot">实际按 {{ item.applied_tier_min_quantity }}{{ item.sales_unit || '件' }}档计价</span>
-            <span class="product-subtotal">小计: ¥{{ formatPrice(item.price * item.quantity) }}</span>
+            <span class="product-subtotal">小计: {{ formatCents(item.line_amount ?? (item.price * item.quantity)) }}</span>
           </template>
         </van-cell>
 
         <van-cell title="应付金额">
           <template #value>
-            <span class="total-price">¥{{ formatPrice(order.total_amount ?? order.amount ?? 0) }}</span>
+            <span class="total-price">{{ formatCents(order.total_amount ?? order.amount ?? 0) }}</span>
           </template>
         </van-cell>
         <van-cell title="已确认实收">
           <template #value>
-            <span class="final-price">¥{{ formatPrice(isConfirmedPaid ? (order.total_amount ?? order.amount ?? 0) : 0) }}</span>
+            <span class="final-price">{{ formatCents(isConfirmedPaid ? (order.total_amount ?? order.amount ?? 0) : 0) }}</span>
           </template>
         </van-cell>
         <van-cell v-if="order.discount_amount > 0" title="优惠">
           <template #value>
-            <span class="discount">-¥{{ formatPrice(order.discount_amount) }}</span>
+            <span class="discount">-{{ formatCents(order.discount_amount) }}</span>
+          </template>
+        </van-cell>
+        <van-cell v-if="Number(order.refunded_amount || 0) > 0" title="订单中已记录的退款金额">
+          <template #value>
+            <span class="refund-price">-{{ formatCents(order.refunded_amount) }}</span>
           </template>
         </van-cell>
       </van-cell-group>
@@ -163,7 +169,7 @@
       @confirm="confirmRefund"
     >
       <div style="padding: 16px;">
-        <p>订单金额: ¥{{ formatPrice(order?.total_amount ?? order?.amount ?? 0) }}</p>
+        <p>订单金额: {{ formatCents(order?.total_amount ?? order?.amount ?? 0) }}</p>
         <van-radio-group v-model="refundAction">
           <van-cell-group>
             <van-cell title="同意退款" clickable @click="refundAction = 'approve'">
@@ -204,6 +210,7 @@ import {
   refundMerchantOrder
 } from '@/api/modules'
 import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '@/utils/refundIdempotency'
+import { formatCents } from '@/utils/productPricing'
 import { cachedMobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
 
 const route = useRoute()
@@ -267,10 +274,6 @@ const statusText = computed(() => {
   }
   return map[order.value?.status] || '未知状态'
 })
-
-function formatPrice(price) {
-  return parseFloat(price || 0).toFixed(2)
-}
 
 function formatTime(time) {
   if (!time) return '-'
@@ -496,6 +499,7 @@ onMounted(() => {
 .discount {
   color: #07c160;
 }
+.refund-price { color: #ee0a24; }
 
 .final-price {
   color: #ee0a24;
