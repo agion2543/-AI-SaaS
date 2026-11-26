@@ -4,8 +4,7 @@
 
     <!-- 底部导航栏 -->
     <van-tabbar
-      v-model="activeTab"
-      route
+      :model-value="activeTab"
       fixed
       placeholder
       safe-area-inset-bottom
@@ -27,31 +26,12 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { getMerchantMobileActiveTab } from '../../utils/navigation'
 
 const route = useRoute()
-const router = useRouter()
-
-const activeTab = ref(0)
-
-// 根据路由更新 TabBar
-const tabRoutes = {
-  '/m/merchant/home': 0,
-  '/m/merchant/orders': 1,
-  '/m/merchant/products': 2,
-  '/m/merchant/finance': 3
-}
-
-watch(
-  () => route.path,
-  (path) => {
-    if (tabRoutes[path] !== undefined) {
-      activeTab.value = tabRoutes[path]
-    }
-  },
-  { immediate: true }
-)
+const activeTab = computed(() => getMerchantMobileActiveTab(route.path))
 </script>
 
 <style scoped>

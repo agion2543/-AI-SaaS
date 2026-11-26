@@ -8,7 +8,8 @@
 
       <el-menu
         router
-        :default-active="$route.path"
+        :mode="compactNavigation ? 'horizontal' : 'vertical'"
+        :default-active="activeMenu"
         class="merchant-menu"
         background-color="transparent"
         text-color="#cfe4ef"
@@ -52,10 +53,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { checkMerchantSubscription } from '../api/modules'
 import { useMerchantAuthStore } from '../stores/merchantAuth'
+import { getMerchantPcActivePath } from '../utils/navigation'
 
 const text = {
   subtitle: '\u5546\u5bb6\u5de5\u4f5c\u53f0',
@@ -83,8 +85,13 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useMerchantAuthStore()
 const subscriptionValid = ref(false)
+const compactNavigation = ref(false)
+const activeMenu = computed(() => getMerchantPcActivePath(route.path))
 const navigationLocked = computed(() => !subscriptionValid.value && route.path === '/merchant/subscription')
 const routeViewKey = computed(() => route.fullPath)
+const updateNavigationMode = () => {
+  compactNavigation.value = window.matchMedia('(max-width: 768px)').matches
+}
 
 const refreshSubscriptionState = async () => {
   if (!authStore.token) {
@@ -105,7 +112,12 @@ const logout = () => {
 }
 
 watch(() => route.fullPath, refreshSubscriptionState)
-onMounted(refreshSubscriptionState)
+onMounted(() => {
+  updateNavigationMode()
+  window.addEventListener('resize', updateNavigationMode, { passive: true })
+  refreshSubscriptionState()
+})
+onBeforeUnmount(() => window.removeEventListener('resize', updateNavigationMode))
 </script>
 
 <style scoped>
@@ -228,10 +240,94 @@ onMounted(refreshSubscriptionState)
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
+  .merchant-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .merchant-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 8px 12px 6px;
+  }
+
+  .merchant-brand {
+    padding: 0 6px 4px;
+  }
+
+  .merchant-brand-title {
+    font-size: 16px;
+    line-height: 1.3;
+  }
+
+  .merchant-brand-subtitle {
+    display: none;
+  }
+
+  .merchant-menu {
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+
+  .merchant-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .merchant-menu.el-menu--horizontal {
+    border-bottom: 0;
+  }
+
+  .merchant-menu :deep(.el-menu-item) {
+    flex: 0 0 auto;
+    height: 40px;
+    margin: 0 4px 0 0;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    border-bottom: 0;
+  }
+
+  .merchant-menu.el-menu--horizontal :deep(.el-menu-item.is-active) {
+    border-bottom: 0;
+  }
+
+  .menu-section {
+    display: none;
+  }
+
+  .subscription-lock {
+    margin: 5px 4px 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .merchant-main {
+    min-width: 0;
+    padding: 10px 12px 24px;
+    gap: 12px;
+  }
+
   .merchant-header {
     flex-direction: column;
     align-items: flex-start;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .merchant-title {
+    font-size: 20px;
+  }
+
+  .merchant-subtitle {
+    font-size: 12px;
+    line-height: 1.4;
   }
 }
 </style>
