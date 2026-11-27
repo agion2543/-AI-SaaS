@@ -107,13 +107,13 @@ func TestMySQLOrderItemsV11Migration(t *testing.T) {
 		if itemColumns != 9 {
 			t.Fatalf("order_items columns=%d, want 9", itemColumns)
 		}
-		// ApplyLatest now continues to v12, so re-applying v11 against a v12
+		// ApplyLatest now continues to v13, so re-applying v11 against a v13
 		// schema must be refused fail-closed (it is no longer an exact v11 schema).
 		if _, err := ApplyOrderItemsV11(ctx, db); err == nil {
-			t.Fatal("v11 migration unexpectedly accepted a v12 schema")
+			t.Fatal("v11 migration unexpectedly accepted a v13 schema")
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
-			t.Fatalf("latest verification after v12 upgrade: result=%q err=%v", result, err)
+			t.Fatalf("latest verification after v13 upgrade: result=%q err=%v", result, err)
 		}
 		assertLatestInventory(t, db)
 	})

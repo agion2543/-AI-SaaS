@@ -4,13 +4,13 @@
 
 `docker-compose.prod.yml` 保留 `mysql_prod_data` 卷键，但 Docker Compose 会按项目名给命名卷加前缀；只有沿用旧部署的同一个项目名才能复用原数据卷。它移除了 `sql/init.sql` 与历史 SQL 挂载。MySQL healthy 后，Compose 运行 `/app/schema-migrate`；只有迁移容器成功退出，backend 才启动。迁移器与 backend 读取 `.env.production`，其中 `MYSQL_DSN` 必须指向该 Compose 的 `mysql:3306/saas_billing`，密码须与 `MYSQL_APP_PASSWORD` 一致；独立 MySQL 应使用 `docker-compose.managed.yml`。backend 显式设置 `DB_AUTO_MIGRATE=false` 与 `INITIAL_DATA_SEED_ENABLED=false`，因此既不执行 GORM `AutoMigrate`，也不会在升级启动时改写初始角色、创建初始管理员或补默认套餐/计划。
 
-迁移器只接受真正空 schema（按 v1→v11 安装）或精确受管 v1–v10（顺序升级至 v11）；精确受管 v11 为 no-op。v9 只新增五张桌位点餐表；v10 只向 `store_tables` 和 `table_order_details` 追加标签列，不改写 v1–v9 的 schema、迁移记录、校验和或历史结构指纹；v11 新增 `order_items` 明细表并向 `orders` 追加 `channel` 列（store_qr / table / share，桌台历史订单回填为 table），不改写 v1–v10 的 schema、迁移记录、校验和或历史结构指纹。未知旧结构、部分初始化、额外对象、账本/checksum/结构指纹不符均拒绝，API 保持停止且不会回退到 AutoMigrate。旧版 Compose 曾挂载 `sql/init.sql` 并由应用执行 AutoMigrate，因此保留下来的卷可能属于未知历史结构；迁移服务拒绝它是预期的 fail-closed，不会删除或重置该卷。全新安装若需要初始管理员和默认套餐，应使用带专属卷及初始种子的 `docker-compose.new-install.yml`。
+迁移器只接受真正空 schema（按 v1→v13 安装）或精确受管 v1–v12（顺序升级至 v13）；精确受管 v13 为 no-op。v9 只新增五张桌位点餐表；v10 只向 `store_tables` 和 `table_order_details` 追加标签列，不改写 v1–v9 的 schema、迁移记录、校验和或历史结构指纹；v11 新增 `order_items` 明细表并向 `orders` 追加 `channel` 列（store_qr / table / share，桌台历史订单回填为 table），不改写 v1–v10 的 schema、迁移记录、校验和或历史结构指纹；v12 新增 AI 成本控制五张表并向 `merchant_ai_usage_logs` 追加 `store_id`/`cached_tokens` 列，不改写 v1–v11 的 schema、迁移记录、校验和或历史结构指纹；v13 新增公告、维护计划、活动目标、活动复盘、AI 建议执行、团购手工核销六张表，不改写 v1–v12 的 schema、迁移记录、校验和或历史结构指纹。未知旧结构、部分初始化、额外对象、账本/checksum/结构指纹不符均拒绝，API 保持停止且不会回退到 AutoMigrate。旧版 Compose 曾挂载 `sql/init.sql` 并由应用执行 AutoMigrate，因此保留下来的卷可能属于未知历史结构；迁移服务拒绝它是预期的 fail-closed，不会删除或重置该卷。全新安装若需要初始管理员和默认套餐，应使用带专属卷及初始种子的 `docker-compose.new-install.yml`。
 
 这条门禁不代表任意旧库升级已支持或已验证，也不证明历史 SQL 可安全重跑。部署前应备份、停掉旧应用写入，并确认现存数据卷对应的 schema 在受支持范围内；若迁移器拒绝旧库，应保持 API 停止，先取得具体版本的 schema-only 基线并在隔离副本上设计验证方案，不能清账本或套用新安装 Compose。
 
 ## 默认开发 Compose：同样走版本化迁移门禁（P0 风险 1 修复）
 
-此前默认 `docker-compose.yml` 是第二条建库路径：它挂载 `sql/init.sql` 并让 backend 以默认开启的 GORM `AutoMigrate` 建 34 张表；之后若同一数据库改走生产/托管 Compose，迁移器会因缺账本、缺触发器、缺 v7/v8 表、多余索引、datetime 精度不同而拒绝，服务无法启动；反向只走 `AutoMigrate` 的部署则根本没有成本表（v7/v8）与退款对账表，相关代码运行时直接报错。此后默认 Compose 与生产/全新安装/托管 Compose 一致，**唯一建库路径是版本化迁移器（v1→v11）**：
+此前默认 `docker-compose.yml` 是第二条建库路径：它挂载 `sql/init.sql` 并让 backend 以默认开启的 GORM `AutoMigrate` 建 34 张表；之后若同一数据库改走生产/托管 Compose，迁移器会因缺账本、缺触发器、缺 v7/v8 表、多余索引、datetime 精度不同而拒绝，服务无法启动；反向只走 `AutoMigrate` 的部署则根本没有成本表（v7/v8）与退款对账表，相关代码运行时直接报错。此后默认 Compose 与生产/全新安装/托管 Compose 一致，**唯一建库路径是版本化迁移器（v1→v13）**：
 
 - `docker-compose.yml` 增加 `schema-migrate` 服务（与 backend 同一镜像，执行容器内 `/app/schema-migrate`），等待 MySQL healthy 后运行；backend 改为依赖 `schema-migrate` 成功完成（`service_completed_successfully`）后才启动，并显式设置 `DB_AUTO_MIGRATE=false`。同时移除 `sql/init.sql` 挂载（文件保留在仓库中，仅作历史记录，不再由任何 Compose 入口执行），MySQL 增加 healthcheck 与 utf8mb4 字符集/排序规则（与生产 Compose 一致）。
 - 开发种子行为不变：默认 Compose 的 backend 显式设置 `INITIAL_DATA_SEED_ENABLED=true`（与 `docker-compose.new-install.yml` 相同），迁移完成后仍由应用写入初始角色、初始管理员与默认套餐/计划；首次创建管理员仍须在 `.env` 中设置至少 12 位的 `INITIAL_ADMIN_PASSWORD`，未设置时服务拒绝完成新库初始化。
@@ -27,7 +27,7 @@
 
 `docker-compose.managed.yml` 是独立 MySQL 的显式版本化部署入口：它不定义 MySQL 服务、数据卷或 `sql/init.sql`/历史 SQL 挂载，而是使用 `.env.production` 中的 `MYSQL_DSN` 指向已经存在、容器可达的目标数据库。该数据库账号需具备当前迁移所需的 schema DDL 权限。后端设置 `DB_AUTO_MIGRATE=false` 和 `INITIAL_DATA_SEED_ENABLED=false`，并且只有 `/app/schema-migrate` 成功退出后才会启动；默认生产 Compose 也显式关闭这两项。种子关闭阻止启动时更新 `super_admin` 角色、创建管理员或插入默认会员套餐/商家计划。应用配置默认仍开启初始数据种子，因此全新安装仍应使用 `docker-compose.new-install.yml`；managed Compose 虽然接受空 schema，但不会创建初始管理员或默认套餐。
 
-当前只支持两种数据库状态：**空 schema**（目标数据库本身已创建，但没有用户表、视图、例程、事件等对象；迁移器会从 v1 安装至 v11），以及**精确受管的 v1–v10**（账本版本、checksum、迁移状态和 schema 指纹都精确匹配；迁移器只按顺序推进到 v11）。精确受管 v11 会作为已管理状态通过且不再改动。非空旧库、部分初始化/未完成迁移、未知账本、额外对象、checksum 或指纹漂移均不支持，并在 API 启动前 fail-closed；不会将旧库静默标成 v1，也不会回退到 GORM AutoMigrate。
+当前只支持两种数据库状态：**空 schema**（目标数据库本身已创建，但没有用户表、视图、例程、事件等对象；迁移器会从 v1 安装至 v13），以及**精确受管的 v1–v12**（账本版本、checksum、迁移状态和 schema 指纹都精确匹配；迁移器只按顺序推进到 v13）。精确受管 v13 会作为已管理状态通过且不再改动。非空旧库、部分初始化/未完成迁移、未知账本、额外对象、checksum 或指纹漂移均不支持，并在 API 启动前 fail-closed；不会将旧库静默标成 v1，也不会回退到 GORM AutoMigrate。
 
 默认生产 Compose 不再有 GORM AutoMigrate 回退，也不因此增加未知旧库升级支持。不要让两套 Compose 同时连接同一数据库；版本化部署前应停掉旧应用写入并完成备份。若迁移在执行 DDL 中途失败，MySQL DDL 可能留下 `applying` 账本或部分对象；fail-closed 不代表自动回滚。此时不要删账本、手工补表或强行启动 API，应先停止操作并从已验证备份恢复，或在隔离副本调查。
 
