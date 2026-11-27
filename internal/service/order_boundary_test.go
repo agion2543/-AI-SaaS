@@ -50,6 +50,8 @@ func newOrderBoundaryTestDB(t *testing.T) *gorm.DB {
 		&model.MerchantSettlement{},
 		&model.MerchantSubscriptionManualReview{},
 		&model.MerchantSubscriptionManualReviewAudit{},
+		&model.MaintenancePlan{},
+		&model.OrderItem{},
 	); err != nil {
 		t.Fatalf("migrate order test schema: %v", err)
 	}

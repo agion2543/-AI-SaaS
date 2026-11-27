@@ -30,6 +30,7 @@ func TestTableCheckoutReturnsApprovedMerchantQRCodeWithoutGatewayPayload(t *test
 		&model.MerchantSubscriptionManualReview{}, &model.MerchantSubscriptionManualReviewAudit{},
 		&model.MerchantPaymentConfig{}, &model.ReferralCoupon{}, &model.StoreTableConfig{},
 		&model.StoreTable{}, &model.TableSession{}, &model.TableCartItem{}, &model.TableOrderDetail{},
+		&model.MaintenancePlan{}, &model.OrderItem{},
 	); err != nil {
 		t.Fatalf("migrate synthetic table checkout schema: %v", err)
 	}

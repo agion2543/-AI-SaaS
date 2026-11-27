@@ -31,6 +31,7 @@ func newTableOrderingFixture(t *testing.T) tableOrderingFixture {
 		&model.TableCartItem{},
 		&model.TableOrderDetail{},
 		&model.MerchantPaymentConfig{},
+		&model.MaintenancePlan{},
 	); err != nil {
 		t.Fatalf("migrate synthetic table-ordering schema: %v", err)
 	}

@@ -38,7 +38,7 @@ func TestMySQLAICostControlV12Migration(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		createExactV11AICostControlSchema(t, ctx, db)
 
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+		if result, err := ApplyAICostControlV12(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact v11 to v12: result=%q err=%v", result, err)
 		}
 		var modelPriceColumns, vendorBillColumns, budgetColumns, alertColumns, switchColumns, usageLogNewColumns int
@@ -75,6 +75,9 @@ func TestMySQLAICostControlV12Migration(t *testing.T) {
 		}
 		if result, err := ApplyAICostControlV12(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("repeat exact v12 migration: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("latest applies v13 after v12 upgrade: result=%q err=%v", result, err)
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v12 upgrade: result=%q err=%v", result, err)
