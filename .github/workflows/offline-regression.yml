@@ -1,0 +1,40 @@
+name: Offline regression
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regression:
+    name: Offline regression baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build backend
+        run: go build ./...
+
+      - name: Vet backend
+        run: go vet ./...
+
+      - name: Test backend
+        run: go test ./...
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 24
+
+      - name: Run frontend navigation tests
+        run: node --test web/src/utils/navigation.test.js
