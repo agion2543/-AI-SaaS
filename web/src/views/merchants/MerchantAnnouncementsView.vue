@@ -44,7 +44,7 @@ const loadAll = async () => {
   loading.value = true
   try {
     const announcements = await fetchMerchantAnnouncements()
-    rows.value = announcements?.data || []
+    rows.value = announcements?.data?.rows || []
   } catch (err) {
     ElMessage.error(err?.response?.data?.message || '加载公告失败')
   } finally {

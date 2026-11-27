@@ -18,6 +18,7 @@
       <van-notice-bar v-if="isTableMode" :type="tableLocked ? 'warning' : 'primary'" :scrollable="false">
         {{ tableLabel || `${tableNo}号桌` }} · {{ tableLocked ? '该桌已有顾客结算，不能重复提交' : '共享购物车结算' }}
       </van-notice-bar>
+      <van-notice-bar v-if="activeMaintenancePlan" type="warning" :text="maintenanceBlockText(activeMaintenancePlan)" wrapable />
       <!-- 订单商品 -->
       <van-cell-group inset title="订单信息">
         <van-cell title="订单门店">
@@ -95,7 +96,7 @@
         label="订单金额"
         button-text="提交订单"
         :loading="submitting"
-        :disabled="submitting || hasMOQViolation || (isTableMode && tableLocked)"
+        :disabled="submitting || hasMOQViolation || (isTableMode && tableLocked) || !!activeMaintenancePlan"
         @submit="submitOrder"
       />
     </template>
@@ -121,11 +122,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast } from 'vant'
-import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder, recoverCustomerStoreOrder, fetchCustomerTableSession, checkoutCustomerTableSession } from '@/api/modules'
+import { fetchCustomerStore, fetchCustomerStoreProducts, fetchCustomerStoreCoupons, createCustomerStoreOrder, recoverCustomerStoreOrder, fetchCustomerTableSession, checkoutCustomerTableSession, fetchPublicMaintenanceStatus } from '@/api/modules'
 import { mobileCustomerOrderAccessPath, saveCustomerOrderAccessToken } from '@/utils/customerOrderAccess'
 import { clearCustomerOrderAttempt, getOrCreateCustomerOrderAttempt, readCustomerOrderAttempt } from '@/utils/customerOrderAttempt'
 import { buildCustomerOrderPayload, customerResponseList, fetchCustomerCouponsForPhone, isDevMockPaymentFlagEnabled, isValidCustomerPhone } from '@/utils/mobileCustomerOrder'
 import { describeProductPricing, getMinimumOrderQuantity, getProductUnitPrice } from '@/utils/productPricing'
+import { maintenanceBlockText } from '@/utils/maintenance'
 
 const route = useRoute()
 const router = useRouter()
@@ -135,6 +137,7 @@ const tableNo = Number(route.query.table_no || 0)
 const tableCode = String(route.query.table_code || '')
 const isTableMode = Number.isInteger(tableSessionId) && tableSessionId > 0 && Number.isInteger(tableNo) && tableNo > 0 && /^[a-zA-Z0-9_-]{32,64}$/.test(tableCode)
 const tableLocked = ref(false)
+const activeMaintenancePlan = ref(null)
 const tableLabel = ref("")
 const pendingCheckoutAttempt = ref(null)
 
@@ -413,6 +416,13 @@ onMounted(async () => {
   }
   if (!isTableMode && await recoverPendingOrder()) return
   loadData()
+  // 维护横幅：公开接口只读维护状态，失败时不挡下单（后端拦截仍是最终关口）。
+  try {
+    const status = await fetchPublicMaintenanceStatus()
+    activeMaintenancePlan.value = status?.data?.maintenance ? status?.data?.plan : null
+  } catch (err) {
+    activeMaintenancePlan.value = null
+  }
 })
 </script>
 

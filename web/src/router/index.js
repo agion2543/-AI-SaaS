@@ -38,6 +38,7 @@ const MerchantLoginView = () => import('../views/merchants/MerchantLoginView.vue
 const MerchantDashboardView = () => import('../views/merchants/MerchantDashboardView.vue')
 const MerchantProfileView = () => import('../views/merchants/MerchantProfileView.vue')
 const MerchantAIView = () => import('../views/merchants/MerchantAIView.vue')
+const MerchantOpsDashboardView = () => import('../views/merchants/MerchantOpsDashboardView.vue')
 const MerchantPromotionsView = () => import('../views/merchants/MerchantPromotionsView.vue')
 const MerchantPromotionCalculatorView = () => import('../views/merchants/MerchantPromotionCalculatorView.vue')
 const MerchantGroupBuyView = () => import('../views/merchants/MerchantGroupBuyView.vue')
@@ -102,6 +103,7 @@ const routes = [
           { path: 'promotion-calculator', component: MerchantPromotionCalculatorView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'group-buy', component: MerchantGroupBuyView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
+          { path: 'ops-dashboard', component: MerchantOpsDashboardView, meta: { requiresMerchantAuth: true } },
           { path: 'announcements', component: MerchantAnnouncementsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
           { path: 'subscription', component: MerchantSubscriptionView, meta: { requiresMerchantAuth: true, allowExpiredSubscription: true } },

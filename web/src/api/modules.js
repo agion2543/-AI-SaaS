@@ -228,6 +228,12 @@ export const fetchMerchantSuggestionExecutions = (params) => http.get('/merchant
 export const updateMerchantSuggestionExecution = (id, payload) => http.put(`/merchant/suggestion-executions/${id}`, payload)
 export const fetchMerchantManualRedemptions = (params) => http.get('/merchant/group-buy-manual-redemptions', { params })
 export const createMerchantManualRedemption = (payload) => http.post('/merchant/group-buy-manual-redemptions', payload)
+export const fetchOpsDailySummary = (params) => http.get('/merchant/ops-dashboard/daily', { params })
+export const fetchOpsProductHealth = (params) => http.get('/merchant/ops-dashboard/product-health', { params })
+export const fetchOpsDormantCustomers = () => http.get('/merchant/ops-dashboard/dormant-customers')
+export const fetchOpsContentScript = (params) => http.get('/merchant/ops-dashboard/content-scripts', { params })
+export const generateOpsSuggestions = () => http.post('/merchant/ops-dashboard/generate-suggestions')
+export const createMerchantCampaignPostmortem = (payload) => http.post('/merchant/campaign-postmortems', payload)
 
 export const fetchAdminGroupBuyLinks = (params) => http.get('/admin/group-buy-links', { params })
 export const fetchAdminGroupBuyLinkDetail = (id) => http.get(`/admin/group-buy-links/${id}`)
