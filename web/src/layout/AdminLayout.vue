@@ -102,6 +102,8 @@ const visibleSections = computed(() => {
       item('/admin/system', '系统配置', '安全检查、站点和策略配置')
     ]
     if (isSuperAdmin) items.push(item('/admin/platform-costs', '平台成本核算', '确认订阅实收与成本状态'))
+    if (isSuperAdmin) items.push(item('/admin/announcements', '平台公告', '发布系统更新、促销与价格变动'))
+    if (isSuperAdmin) items.push(item('/admin/maintenance-plans', '维护计划', '排期维护窗口与在途订单安全'))
     if (isSuperAdmin) items.push(item('/admin/access', '账号与权限', '管理员账号、角色与权限组'))
     sections.push({ title: '系统管理', items })
   } else if (isSuperAdmin) {

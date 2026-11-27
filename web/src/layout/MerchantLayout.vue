@@ -32,6 +32,7 @@
           <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
           <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
           <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
+          <el-menu-item index="/merchant/announcements" :disabled="navigationLocked">{{ text.announcements }}</el-menu-item>
           <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
           <el-menu-item index="/merchant/profile" :disabled="navigationLocked">{{ text.profile }}</el-menu-item>
         </el-sub-menu>
@@ -103,6 +104,7 @@ const text = {
   groupBuy: '外部团购跳转入口',
   coupons: '券包 / 核销',
   ai: 'AI 经营分析',
+  announcements: '平台公告',
   share: '裂变效果报告',
   subscription: '订阅状态 / 续费',
   paymentSettings: '收款设置',

@@ -23,6 +23,9 @@ const PaymentReturnView = () => import('../views/orders/PaymentReturnView.vue')
 const CardsView = () => import('../views/cards/CardsView.vue')
 const SystemView = () => import('../views/system/SystemView.vue')
 const PlatformCostView = () => import('../views/system/PlatformCostView.vue')
+const AnnouncementsView = () => import('../views/system/AnnouncementsView.vue')
+const MaintenancePlansView = () => import('../views/system/MaintenancePlansView.vue')
+const MerchantAnnouncementsView = () => import('../views/merchants/MerchantAnnouncementsView.vue')
 const AuditLogsView = () => import('../views/system/AuditLogsView.vue')
 const FollowUpTodosView = () => import('../views/system/FollowUpTodosView.vue')
 const AdminAccessView = () => import('../views/system/AdminAccessView.vue')
@@ -79,6 +82,8 @@ const routes = [
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView },
       { path: 'platform-costs', component: PlatformCostView },
+      { path: 'announcements', component: AnnouncementsView },
+      { path: 'maintenance-plans', component: MaintenancePlansView },
       { path: 'access', component: AdminAccessView },
       { path: 'limited-access', component: AdminAccessRestrictedView }
     ]
@@ -97,6 +102,7 @@ const routes = [
           { path: 'promotion-calculator', component: MerchantPromotionCalculatorView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'group-buy', component: MerchantGroupBuyView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
+          { path: 'announcements', component: MerchantAnnouncementsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
           { path: 'subscription', component: MerchantSubscriptionView, meta: { requiresMerchantAuth: true, allowExpiredSubscription: true } },
           { path: 'profile', component: MerchantProfileView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
@@ -211,6 +217,7 @@ router.beforeEach(async (to) => {
     if (to.path === '/admin/limited-access') allowed = true
     else if (to.path === '/admin/access') allowed = isSuperAdmin
     else if (to.path === '/admin/platform-costs') allowed = isSuperAdmin
+    else if (to.path === '/admin/announcements' || to.path === '/admin/maintenance-plans') allowed = isSuperAdmin
     else if (to.path === '/admin/dashboard') allowed = hasAny('read_only')
     else if (to.path === '/admin/todos') allowed = hasAny('operations')
     else if (/^\/admin\/(merchants|group-buy-links|users)(\/|$)/.test(to.path)) allowed = hasAny('read_only', 'operations')

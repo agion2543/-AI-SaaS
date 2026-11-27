@@ -95,6 +95,18 @@ func (s *AdminService) UpdateCampaignTarget(id uint, req dto.CreateCampaignTarge
 	return &entry, nil
 }
 
+// GetCampaignTarget reads one campaign target by id.
+func (s *AdminService) GetCampaignTarget(id uint) (*model.CampaignTarget, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("campaign database is unavailable")
+	}
+	var row model.CampaignTarget
+	if err := s.db.First(&row, id).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 // ListCampaignTargets lists a merchant's targets, newest period first.
 func (s *AdminService) ListCampaignTargets(merchantID uint, campaignType string, limit, offset int) ([]model.CampaignTarget, error) {
 	if s == nil || s.db == nil {
@@ -293,6 +305,18 @@ func (s *AdminService) RecordAISuggestionExecution(merchantID uint, req dto.Reco
 		return nil, err
 	}
 	return entry, nil
+}
+
+// GetAISuggestionExecution reads one suggestion execution by id.
+func (s *AdminService) GetAISuggestionExecution(id uint) (*model.AISuggestionExecution, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("suggestion database is unavailable")
+	}
+	var row model.AISuggestionExecution
+	if err := s.db.First(&row, id).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
 }
 
 // ListAISuggestionExecutions lists a merchant's suggestion executions, newest first.
