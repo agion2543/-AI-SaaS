@@ -194,6 +194,9 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyOrderItemsV11(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v10 to v11: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyAICostControlV12(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v11 to v12: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 	})
 
@@ -232,9 +235,12 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyOrderItemsV11(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v10 to v11: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyAICostControlV12(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v11 to v12: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
-			t.Fatalf("repeat latest v11 migration: result=%q err=%v", result, err)
+			t.Fatalf("repeat latest v12 migration: result=%q err=%v", result, err)
 		}
 	})
 

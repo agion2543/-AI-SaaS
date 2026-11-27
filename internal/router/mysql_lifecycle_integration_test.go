@@ -324,7 +324,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -364,6 +364,9 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.OrderItemsV11Version, schema.OrderItemsV11Checksum).Scan(&v11Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.AICostControlV12Version, schema.AICostControlV12Checksum).Scan(&v12Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -376,8 +379,8 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('store_table_configs','store_tables','table_sessions','table_cart_items','table_order_details')`).Scan(&tableOrderingColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 40 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || productPricingColumns != 4 || expenseColumns != 10 || expenseReversalColumns != 9 || tableOrderingColumns != 34 {
-		t.Fatalf("managed schema inventory tables/triggers/v1-v11=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; want 40/10/eleven applied rows and 4/10/9/34 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns)
+	if tables != 45 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || productPricingColumns != 4 || expenseColumns != 10 || expenseReversalColumns != 9 || tableOrderingColumns != 34 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v12=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; want 45/10/twelve applied rows and 4/10/9/34 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns)
 	}
 }
 
@@ -545,10 +548,10 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 11 || len(right) != 11 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 11/11", len(left), len(right))
+	if len(left) != 12 || len(right) != 12 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 12/12", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version} {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version} {
 		leftValue, leftOK := left[version]
 		rightValue, rightOK := right[version]
 		if !leftOK || !rightOK || leftValue != rightValue {
