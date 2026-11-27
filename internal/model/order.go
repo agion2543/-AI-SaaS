@@ -102,9 +102,10 @@ type RefundRecord struct {
 // order_items). Amounts are in the same unit as Order.TotalAmount (cents).
 // ProductNameSnapshot freezes the product name at order time; the live
 // product name may change later. The table is the source for per-product
-// sales aggregation. Rows are not yet written by the order-creation paths:
-// populating order_items from the order Items JSON at creation time is the
-// next step; the table itself ships empty for historical orders.
+// sales aggregation. Rows are written by the order-creation paths
+// (CreateCustomerStoreOrder, table-order checkout, and the append path) in
+// the same transaction as the order; historical orders created before the
+// wiring have no detail rows and are not backfilled.
 type OrderItem struct {
 	BaseModel
 	OrderID             uint          `gorm:"not null;index" json:"order_id"`

@@ -31,6 +31,37 @@ type StoreOrderItemSnapshot struct {
 	PriceTiers             []model.ProductPriceTier `json:"price_tiers,omitempty"`
 }
 
+// orderItemsFromSnapshots converts priced order snapshots into order_items
+// rows (schema v11). UnitPrice is the applied tier unit price and Amount the
+// priced line amount; both are cents, the same unit as Order.TotalAmount.
+// ProductNameSnapshot freezes the product name at order time.
+func orderItemsFromSnapshots(orderID uint, snapshots []StoreOrderItemSnapshot) []model.OrderItem {
+	rows := make([]model.OrderItem, 0, len(snapshots))
+	for _, snap := range snapshots {
+		rows = append(rows, model.OrderItem{
+			OrderID:             orderID,
+			ProductID:           snap.ProductID,
+			ProductNameSnapshot: snap.Name,
+			Quantity:            snap.Quantity,
+			UnitPrice:           snap.Price,
+			Amount:              snap.LineAmount,
+		})
+	}
+	return rows
+}
+
+// writeStoreOrderItems persists the priced snapshots of one store order into
+// order_items, in the caller's transaction. Callers create the order and its
+// detail rows atomically so a store order never exists without its lines;
+// idempotent replays return the existing order (rows already written by the
+// first attempt) instead of writing again.
+func writeStoreOrderItems(tx *gorm.DB, orderID uint, snapshots []StoreOrderItemSnapshot) error {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	return tx.Create(orderItemsFromSnapshots(orderID, snapshots)).Error
+}
+
 type OrderOperationLog struct {
 	Action                   string `json:"action"`
 	Text                     string `json:"text"`
@@ -276,7 +307,17 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 	order.CustomerAccessTokenHash = tokenHash
 	order.CustomerAccessToken = accessToken
 
-	if err := s.orders.Create(order); err != nil {
+	// The order and its order_items rows are created in one transaction so a
+	// store order never exists without its detail lines. A duplicate order_no
+	// (idempotent replay) aborts the transaction; the lookup below then
+	// returns the order created by the first attempt, whose rows are already
+	// in place.
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := repository.NewOrderRepository(tx).Create(order); err != nil {
+			return err
+		}
+		return writeStoreOrderItems(tx, order.ID, snapshots)
+	}); err != nil {
 		if req.RequestKey != "" {
 			if existing, found, lookupErr := s.findIdempotentCustomerOrder(req); lookupErr != nil {
 				return nil, lookupErr
@@ -466,6 +507,7 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 	}
 	var appendedAmount int64
 	var appendedQuantity int
+	appendedSnapshots := make([]StoreOrderItemSnapshot, 0, len(orderItems))
 	appendedNames := make([]string, 0, len(orderItems))
 	for _, item := range orderItems {
 		product, ok := productMap[item.ProductID]
@@ -485,6 +527,7 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 		}
 		appendedQuantity += item.Quantity
 		appendedNames = append(appendedNames, fmt.Sprintf("%s x%d", product.Name, item.Quantity))
+		appendedSnapshots = append(appendedSnapshots, snapshot)
 		existing = append(existing, snapshot)
 	}
 
@@ -516,6 +559,11 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 		return nil, err
 	}
 	if err := s.orders.Save(order); err != nil {
+		return nil, err
+	}
+	// s.db is the caller's transaction here, so the appended detail rows land
+	// atomically with the updated order totals.
+	if err := writeStoreOrderItems(s.db, order.ID, appendedSnapshots); err != nil {
 		return nil, err
 	}
 	updated, err := s.orders.FindByOrderNo(orderNo)

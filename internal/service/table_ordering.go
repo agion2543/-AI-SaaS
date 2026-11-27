@@ -600,6 +600,9 @@ func (s *TableOrderingService) createTableOrderInTransaction(tx *gorm.DB, store 
 	if err := tx.Create(order).Error; err != nil {
 		return nil, err
 	}
+	if err := writeStoreOrderItems(tx, order.ID, snapshots); err != nil {
+		return nil, err
+	}
 	order.Store = &store
 	order.Merchant = &store.Merchant
 	return order, nil
