@@ -50,10 +50,10 @@
           <small>累计 {{ manualSummaryCount(overview.lifetime_manual_verified_subscription) }} 笔；不并入实收或成本差额</small>
         </article>
         <article class="summary-card warning">
-          <div class="card-label">AI 模型实际成本</div>
-          <strong>暂不可核算</strong>
-          <p>供应商尚未接入，没有可核验的真实用量或账单数据。</p>
-          <small>不把预估值或默认 0 值当作实际成本</small>
+          <div class="card-label">AI 估算成本（估算）</div>
+          <strong>{{ aiStats ? `${money(aiStats.total_estimated_cost_cents)}（估算）` : '暂不可核算' }}</strong>
+          <p>近 30 天调用记录 × 模型价格表重算的估算成本；不是供应商实际账单。</p>
+          <small>实际账单需超管手工录入后在下方核对</small>
         </article>
         <article class="summary-card muted">
           <div class="card-label">平台经营利润</div>
@@ -411,8 +411,8 @@
           </article>
           <article class="basis-item cost">
             <span class="basis-index">02 · AI 成本</span>
-            <strong>当前无可核验数据</strong>
-            <p>{{ overview.ai_usage?.note || '供应商尚未接入，暂不计算 AI 用量与成本。' }}</p>
+            <strong>估算与实际账单分开</strong>
+            <p>估算成本来自调用记录 × 模型价格表重算（按调用日期取当日最晚生效价）；实际账单为超管手工录入的供应商真实金额。两者口径不同，差额仅供核对参考，不代表欠款或退款；门店维度无归属的调用记为“未指定门店”。</p>
           </article>
           <article class="basis-item result">
             <span class="basis-index">03 · 利润结论</span>
@@ -423,33 +423,415 @@
       </DataPanel>
 
       <DataPanel
-        title="商家 AI 用量排行"
-        description="后续可按商家统计真实请求量与 Token 用量，用于比较使用频率；当前不展示未经核验的数据。"
-        eyebrow="MERCHANT AI USAGE"
+        title="AI 成本控制"
+        description="用量统计、模型价格、供应商账单、商家预算、预算预警与紧急关闭。估算成本来自调用记录 × 模型价格表（模型估算），与供应商实际账单严格分开；估算不是账单。"
+        eyebrow="AI COST CONTROL"
       >
         <el-alert
-          class="usage-alert"
-          type="warning"
+          v-if="emergencySwitch?.disabled"
+          class="ai-emergency-banner"
+          type="error"
           show-icon
           :closable="false"
-          title="AI 服务尚未接入，商家用量和排名暂不可用"
-          description="当前不会调用任何模型服务，也不会从日志中的估算值或默认零值推算 Token 消耗。轻量/精细模型分配留待后续阶段。"
+          title="AI 已由超管紧急关闭：所有商家 AI 调用会直接拒绝"
+          :description="emergencySwitch?.switch?.reason ? `关闭原因：${emergencySwitch.switch.reason}` : '恢复后立即恢复调用。'"
         />
-        <el-table
-          v-if="overview.ai_usage?.data_available && overview.ai_usage?.merchant_ranking?.length"
-          :data="overview.ai_usage.merchant_ranking"
-          class="usage-table"
-          stripe
-        >
-          <el-table-column prop="merchant_name" label="商家" min-width="180" />
-          <el-table-column prop="request_count" label="请求次数" min-width="120" />
-          <el-table-column prop="total_tokens" label="Token 总量" min-width="140" />
-          <el-table-column label="实际成本" min-width="140">
-            <template #default="{ row }">{{ money(row.cost_cents) }}</template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-else description="暂无可核验的商家 AI 用量数据" :image-size="72" />
+        <el-tabs v-model="aiTab" @tab-change="onAiTabChange">
+          <el-tab-pane label="用量统计" name="usage">
+            <div class="period-toolbar">
+              <el-date-picker
+                v-model="aiDateRange"
+                type="daterange"
+                range-separator="至"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                format="YYYY-MM-DD"
+                value-format="YYYY-MM-DD"
+                :disabled-date="disableFutureDate"
+                :clearable="false"
+                unlink-panels
+              />
+              <el-button type="primary" plain :loading="aiStatsLoading" @click="loadAiUsageStats">查看期间</el-button>
+              <span class="currency-hint">默认最近 30 天 · 最多 366 天 · 金额单位：人民币 CNY</span>
+            </div>
+            <el-alert v-if="aiStatsError" class="page-alert" type="error" show-icon :closable="false" :title="aiStatsError" />
+            <el-skeleton v-else-if="aiStatsLoading && !aiStats" :rows="5" animated />
+            <template v-else-if="aiStats">
+              <div class="period-grid ai-stats-grid">
+                <article class="period-stat"><span>调用次数</span><strong>{{ aiStats.total_requests || 0 }}</strong></article>
+                <article class="period-stat"><span>输入 Token</span><strong>{{ aiStats.total_prompt_tokens || 0 }}</strong></article>
+                <article class="period-stat"><span>输出 Token</span><strong>{{ aiStats.total_completion_tokens || 0 }}</strong></article>
+                <article class="period-stat"><span>缓存 Token</span><strong>{{ aiStats.total_cached_tokens || 0 }}</strong></article>
+                <article class="period-stat"><span>Token 总量</span><strong>{{ aiStats.total_tokens || 0 }}</strong></article>
+                <article class="period-stat cost"><span>估算成本（估算）</span><strong>{{ money(aiStats.total_estimated_cost_cents) }}</strong></article>
+              </div>
+              <div class="plan-note">
+                <strong>估算成本来源</strong>
+                <span>{{ aiStats.estimated_cost_source || '调用记录 × 模型价格表重算。' }}</span>
+                <span v-if="aiStats.unpriced_fallback_estimated_cost_cents">其中 {{ money(aiStats.unpriced_fallback_estimated_cost_cents) }} 无生效价，回落到调用记录上的估算成本。</span>
+              </div>
+              <div class="ai-dimension-toolbar">
+                <el-radio-group v-model="aiStatsDimension" size="default">
+                  <el-radio-button v-for="item in aiUsageDimensions" :key="item.value" :label="item.value">{{ item.label }}</el-radio-button>
+                </el-radio-group>
+                <span class="currency-hint">成本列均为估算成本（估算），不是供应商实际账单</span>
+              </div>
+              <el-table :data="aiStatsRows" row-key="rowKey" stripe class="expense-table">
+                <el-table-column :label="aiDimensionLabel" min-width="180">
+                  <template #default="{ row }">{{ row.displayName }}</template>
+                </el-table-column>
+                <el-table-column prop="request_count" label="调用次数" min-width="100" align="right" />
+                <el-table-column label="成功 / 失败" min-width="120" align="center">
+                  <template #default="{ row }">{{ row.success_count }} / {{ row.failed_count }}</template>
+                </el-table-column>
+                <el-table-column prop="prompt_tokens" label="输入 Token" min-width="120" align="right" />
+                <el-table-column prop="completion_tokens" label="输出 Token" min-width="120" align="right" />
+                <el-table-column prop="cached_tokens" label="缓存 Token" min-width="120" align="right" />
+                <el-table-column prop="total_tokens" label="Token 总量" min-width="120" align="right" />
+                <el-table-column label="估算成本（估算）" min-width="150" align="right">
+                  <template #default="{ row }">{{ money(row.estimated_cost_cents) }}</template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-if="!aiStatsRows.length" description="本期暂无 AI 调用记录；这不代表成本为零" :image-size="72" />
+              <div class="table-footnote">门店维度无归属的调用记为“未指定门店”，不虚构归属。{{ aiStats.period_start }} 至 {{ aiStats.period_end }}。</div>
+            </template>
+          </el-tab-pane>
+
+          <el-tab-pane label="模型价格表" name="prices">
+            <div class="ai-form-note">
+              <strong>调价请新增一行</strong>
+              <span>同一模型 + 供应商 + 生效时间重复提交会原地更新单价；历史调用的估算成本仍按调用时间的生效价重算，不改写历史行。</span>
+            </div>
+            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitModelPrice">
+              <div class="form-row ai-price-form-row">
+                <el-form-item label="模型" required>
+                  <el-input v-model="priceForm.model" maxlength="120" placeholder="例如 gpt-4o-mini" />
+                </el-form-item>
+                <el-form-item label="供应商">
+                  <el-input v-model="priceForm.provider" maxlength="80" placeholder="例如 openai（可空）" />
+                </el-form-item>
+                <el-form-item label="生效时间" required>
+                  <el-date-picker
+                    v-model="priceForm.effectiveFrom"
+                    type="datetime"
+                    class="full-width"
+                    format="YYYY-MM-DD HH:mm:ss"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    placeholder="选择生效时间"
+                  />
+                </el-form-item>
+              </div>
+              <div class="form-row ai-price-form-row">
+                <el-form-item label="输入单价（元 / 百万 Token）" required>
+                  <el-input-number v-model="priceForm.inputPriceYuan" class="full-width" :min="0" :max="1000000" :precision="2" :step="0.1" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="输出单价（元 / 百万 Token）" required>
+                  <el-input-number v-model="priceForm.outputPriceYuan" class="full-width" :min="0" :max="1000000" :precision="2" :step="0.1" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="缓存单价（元 / 百万 Token）" required>
+                  <el-input-number v-model="priceForm.cachedPriceYuan" class="full-width" :min="0" :max="1000000" :precision="2" :step="0.1" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="状态">
+                  <el-switch v-model="priceForm.isActive" active-text="在用" inactive-text="已停用" />
+                </el-form-item>
+              </div>
+              <div class="form-actions">
+                <span class="audit-note">仅 super_admin 可维护；操作会写入审计。币种固定 CNY。</span>
+                <el-button type="primary" :loading="submittingPrice" @click="submitModelPrice">保存价格</el-button>
+              </div>
+            </el-form>
+            <el-table v-if="modelPrices.length" :data="modelPrices" row-key="id" stripe class="expense-table ai-table-gap">
+              <el-table-column prop="model" label="模型" min-width="170" />
+              <el-table-column prop="provider" label="供应商" min-width="110">
+                <template #default="{ row }">{{ row.provider || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="输入单价" min-width="150" align="right">
+                <template #default="{ row }">{{ formatPricePerMillion(row.input_price_cents_per_million) }}</template>
+              </el-table-column>
+              <el-table-column label="输出单价" min-width="150" align="right">
+                <template #default="{ row }">{{ formatPricePerMillion(row.output_price_cents_per_million) }}</template>
+              </el-table-column>
+              <el-table-column label="缓存单价" min-width="150" align="right">
+                <template #default="{ row }">{{ formatPricePerMillion(row.cached_price_cents_per_million) }}</template>
+              </el-table-column>
+              <el-table-column label="生效时间" min-width="180">
+                <template #default="{ row }">{{ formatDateTime(row.effective_from) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" min-width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">{{ row.is_active ? '在用' : '已停用' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" min-width="110" align="center">
+                <template #default="{ row }">
+                  <el-button type="primary" link @click="toggleModelPrice(row)">{{ row.is_active ? '停用' : '启用' }}</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无模型价格；无生效价的调用按记录上的估算成本回落" :image-size="72" />
+          </el-tab-pane>
+
+          <el-tab-pane label="供应商账单" name="bills">
+            <div class="period-toolbar">
+              <el-date-picker
+                v-model="aiDateRange"
+                type="daterange"
+                range-separator="至"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                format="YYYY-MM-DD"
+                value-format="YYYY-MM-DD"
+                :disabled-date="disableFutureDate"
+                :clearable="false"
+                unlink-panels
+              />
+              <el-button type="primary" plain :loading="reconciliationLoading" @click="loadVendorBills">查看期间</el-button>
+              <span class="currency-hint">核对周期与用量统计共用同一日期范围</span>
+            </div>
+            <template v-if="reconciliation">
+              <div class="period-grid ai-recon-grid">
+                <article class="period-stat cost"><span>估算成本（估算）</span><strong>{{ money(reconciliation.estimated_cost_cents) }}</strong></article>
+                <article class="period-stat manual"><span>实际账单合计（实际账单 · {{ reconciliation.actual_bill_count || 0 }} 笔）</span><strong>{{ money(reconciliation.actual_bill_total_cents) }}</strong></article>
+                <article class="period-stat balance"><span>差额（实际 − 估算）</span><strong>{{ money(reconciliation.difference_cents_actual_minus_estimated) }}</strong></article>
+              </div>
+              <div class="plan-note">
+                <strong>核对口径</strong>
+                <span>{{ reconciliation.note || '估算成本来自调用记录 × 价格表（模型估算），实际账单为超管手工录入的供应商真实金额；两者口径不同，差额仅供核对参考，不代表欠款或退款。' }}</span>
+                <span v-if="reconciliation.unpriced_fallback_estimated_cost_cents">估算成本中 {{ money(reconciliation.unpriced_fallback_estimated_cost_cents) }} 无生效价，回落到调用记录上的估算成本。</span>
+              </div>
+            </template>
+            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitVendorBill">
+              <div class="form-row ai-bill-form-row">
+                <el-form-item label="供应商" required>
+                  <el-input v-model="billForm.vendor" maxlength="120" placeholder="例如 OpenAI / DeepSeek" />
+                </el-form-item>
+                <el-form-item label="账单周期" required>
+                  <el-date-picker
+                    v-model="billForm.period"
+                    type="daterange"
+                    range-separator="至"
+                    start-placeholder="开始日期"
+                    end-placeholder="结束日期"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :disabled-date="disableFutureDate"
+                    :clearable="false"
+                    unlink-panels
+                  />
+                </el-form-item>
+                <el-form-item label="实际账单金额（人民币元）" required>
+                  <el-input-number v-model="billForm.amountYuan" class="full-width" :min="0.01" :max="1000000000" :precision="2" :step="1" controls-position="right" />
+                </el-form-item>
+              </div>
+              <el-form-item label="备注">
+                <el-input v-model="billForm.note" maxlength="500" show-word-limit placeholder="例如：2026-11 OpenAI 月账单；录错请在备注说明并重录，本页不提供修改" />
+              </el-form-item>
+              <div class="form-actions">
+                <span class="audit-note">录入的是供应商真实账单金额，不是估算；录入后不可修改，录错请重录并在备注中说明。</span>
+                <el-button type="primary" :loading="submittingBill" @click="submitVendorBill">录入实际账单</el-button>
+              </div>
+            </el-form>
+            <el-table v-if="vendorBills.length" :data="vendorBills" row-key="id" stripe class="expense-table ai-table-gap">
+              <el-table-column prop="vendor" label="供应商" min-width="150" />
+              <el-table-column label="账单周期" min-width="210">
+                <template #default="{ row }">{{ row.period_start }} 至 {{ row.period_end }}</template>
+              </el-table-column>
+              <el-table-column label="实际账单金额（实际账单）" min-width="170" align="right">
+                <template #default="{ row }">{{ money(row.amount_cents) }}</template>
+              </el-table-column>
+              <el-table-column prop="note" label="备注" min-width="200" show-overflow-tooltip />
+              <el-table-column label="录入时间" min-width="170">
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="本期暂无录入的供应商实际账单；无账单不代表实际成本为零" :image-size="72" />
+          </el-tab-pane>
+
+          <el-tab-pane label="商家预算" name="budgets">
+            <div class="ai-form-note">
+              <strong>0 表示不限额</strong>
+              <span>每日 / 月度预算任一为 0 即该周期不限额。无单独预算的商家适用全局默认行；全局默认也未设置时不限额。超额策略由后端在 AI 调用入口强制执行。</span>
+            </div>
+            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitBudget">
+              <div class="form-row ai-budget-form-row">
+                <el-form-item label="商家" required>
+                  <el-select v-model="budgetForm.merchantId" class="full-width" placeholder="选择商家或全局默认" filterable>
+                    <el-option :value="0" label="全局默认（无单独预算的商家）" />
+                    <el-option v-for="item in merchantsForBudget" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="每日预算（元，0 不限额）" required>
+                  <el-input-number v-model="budgetForm.dailyBudgetYuan" class="full-width" :min="0" :max="1000000000" :precision="2" :step="10" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="月度预算（元，0 不限额）" required>
+                  <el-input-number v-model="budgetForm.monthlyBudgetYuan" class="full-width" :min="0" :max="1000000000" :precision="2" :step="10" controls-position="right" />
+                </el-form-item>
+                <el-form-item label="超额策略" required>
+                  <el-select v-model="budgetForm.overLimitAction" class="full-width">
+                    <el-option v-for="item in overLimitActions" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+              </div>
+              <div class="form-actions">
+                <span class="audit-note">保存后立即生效；达到预算后按所选策略处理，后端校验，不绕过。</span>
+                <el-button @click="resetBudgetForm">清空</el-button>
+                <el-button type="primary" :loading="submittingBudget" @click="submitBudget">保存预算</el-button>
+              </div>
+            </el-form>
+            <el-table v-if="aiBudgets.length" :data="aiBudgets" row-key="id" stripe class="expense-table ai-table-gap">
+              <el-table-column label="商家" min-width="200">
+                <template #default="{ row }">{{ budgetMerchantLabel(row.merchant_id, merchantNameOf(row.merchant_id)) }}</template>
+              </el-table-column>
+              <el-table-column label="每日预算" min-width="130" align="right">
+                <template #default="{ row }">{{ row.daily_budget_cents > 0 ? money(row.daily_budget_cents) : '不限额' }}</template>
+              </el-table-column>
+              <el-table-column label="月度预算" min-width="130" align="right">
+                <template #default="{ row }">{{ row.monthly_budget_cents > 0 ? money(row.monthly_budget_cents) : '不限额' }}</template>
+              </el-table-column>
+              <el-table-column label="超额策略" min-width="150">
+                <template #default="{ row }">{{ overLimitActionLabel(row.over_limit_action) }}</template>
+              </el-table-column>
+              <el-table-column label="更新时间" min-width="170">
+                <template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" min-width="170" align="center">
+                <template #default="{ row }">
+                  <el-button type="primary" link @click="editBudget(row)">编辑</el-button>
+                  <el-button v-if="row.merchant_id !== 0" type="primary" link @click="loadBudgetStatus(row.merchant_id)">查看状态</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无商家预算；未设置预算的商家不限额" :image-size="72" />
+            <div v-if="budgetStatus" class="ai-budget-status">
+              <div class="ai-budget-status-head">
+                <strong>{{ budgetMerchantLabel(budgetStatus.status.merchant_id, merchantNameOf(budgetStatus.status.merchant_id)) }} · 当前预算状态</strong>
+                <el-tag v-if="budgetStatus.status.global_default" type="info" effect="light">适用全局默认</el-tag>
+                <el-tag v-if="budgetStatus.status.over_limit" type="danger" effect="light">已超预算</el-tag>
+                <el-tag v-else-if="budgetStatus.status.has_budget" type="success" effect="light">预算内</el-tag>
+                <el-tag v-else type="info" effect="light">未设置预算</el-tag>
+              </div>
+              <div class="ai-budget-status-grid">
+                <article>
+                  <span>今日已用（估算成本） / 每日预算</span>
+                  <strong>{{ money(budgetStatus.status.daily_used_cost_cents) }} / {{ budgetStatus.status.daily_budget_cents > 0 ? money(budgetStatus.status.daily_budget_cents) : '不限额' }}</strong>
+                  <el-progress v-if="budgetStatus.status.daily_budget_cents > 0" :percentage="Math.min(100, budgetStatus.status.daily_ratio_percent)" :status="budgetStatus.status.daily_ratio_percent >= 100 ? 'exception' : ''" />
+                  <small>今日 {{ budgetStatus.status.daily_used_tokens || 0 }} Token</small>
+                </article>
+                <article>
+                  <span>本月已用（估算成本） / 月度预算</span>
+                  <strong>{{ money(budgetStatus.status.monthly_used_cost_cents) }} / {{ budgetStatus.status.monthly_budget_cents > 0 ? money(budgetStatus.status.monthly_budget_cents) : '不限额' }}</strong>
+                  <el-progress v-if="budgetStatus.status.monthly_budget_cents > 0" :percentage="Math.min(100, budgetStatus.status.monthly_ratio_percent)" :status="budgetStatus.status.monthly_ratio_percent >= 100 ? 'exception' : ''" />
+                  <small>本月 {{ budgetStatus.status.monthly_used_tokens || 0 }} Token</small>
+                </article>
+              </div>
+              <small v-if="budgetStatus.status.has_budget" class="ai-budget-status-note">超额策略：{{ overLimitActionLabel(budgetStatus.status.effective_action) }}。已用金额为调用记录上的估算成本累计（预算执行口径），与统计页按价格表重算的口径来源不同。</small>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="预算预警" name="alerts">
+            <div class="period-toolbar">
+              <el-select v-model="alertFilter.merchantId" placeholder="全部商家" clearable class="ai-filter-select" @change="loadBudgetAlerts">
+                <el-option v-for="item in merchantsForBudget" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
+              </el-select>
+              <el-select v-model="alertFilter.threshold" placeholder="全部阈值" clearable class="ai-filter-select" @change="loadBudgetAlerts">
+                <el-option v-for="item in budgetAlertThresholds" :key="item" :label="`${item}%`" :value="item" />
+              </el-select>
+              <el-select v-model="alertFilter.periodType" placeholder="全部周期" clearable class="ai-filter-select" @change="loadBudgetAlerts">
+                <el-option value="daily" label="每日" />
+                <el-option value="monthly" label="每月" />
+              </el-select>
+              <el-button type="primary" plain :loading="alertsLoading" @click="loadBudgetAlerts">刷新预警</el-button>
+              <span class="currency-hint">预警在用量首次达到阈值时产生一条，不重复产生</span>
+            </div>
+            <el-table v-if="budgetAlerts.length" :data="budgetAlerts" row-key="id" stripe class="expense-table">
+              <el-table-column label="商家" min-width="180">
+                <template #default="{ row }">{{ merchantDisplayName(row.merchant_id, merchantNameOf(row.merchant_id)) }}</template>
+              </el-table-column>
+              <el-table-column label="周期" min-width="90" align="center">
+                <template #default="{ row }">{{ periodTypeLabel(row.period_type) }}</template>
+              </el-table-column>
+              <el-table-column label="周期开始" min-width="120">
+                <template #default="{ row }">{{ row.period_start }}</template>
+              </el-table-column>
+              <el-table-column label="阈值" min-width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.threshold >= 100 ? 'danger' : row.threshold >= 90 ? 'warning' : 'info'" effect="light">{{ row.threshold }}%</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="used_tokens" label="当时用量（Token）" min-width="150" align="right" />
+              <el-table-column label="当时估算成本（估算）" min-width="160" align="right">
+                <template #default="{ row }">{{ money(row.estimated_cost_cents) }}</template>
+              </el-table-column>
+              <el-table-column label="产生时间" min-width="170">
+                <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无预算预警记录" :image-size="72" />
+          </el-tab-pane>
+
+          <el-tab-pane label="紧急关闭" name="emergency">
+            <div class="ai-emergency-panel">
+              <div class="ai-emergency-status">
+                <span>当前状态</span>
+                <strong v-if="emergencySwitch?.disabled" class="ai-emergency-off">AI 已紧急关闭</strong>
+                <strong v-else class="ai-emergency-on">AI 正常开放</strong>
+                <small v-if="emergencySwitch?.switch?.reason">最近一次原因：{{ emergencySwitch.switch.reason }}</small>
+                <small v-if="emergencySwitch?.switch?.updated_at">更新于 {{ formatDateTime(emergencySwitch.switch.updated_at) }}</small>
+              </div>
+              <el-alert
+                class="ai-emergency-note"
+                type="warning"
+                show-icon
+                :closable="false"
+                title="关闭后，所有商家 AI 调用会在入口直接拒绝；恢复后立即恢复调用。"
+                description="该开关是全平台紧急手段，变更会写入操作审计。日常限额请用商家预算与超额策略，不要长期依赖紧急关闭。"
+              />
+              <div class="form-actions">
+                <span class="audit-note">切换前会二次确认，并要求填写原因（关闭时必填）。</span>
+                <el-button
+                  :type="emergencySwitch?.disabled ? 'success' : 'danger'"
+                  :loading="submittingEmergency"
+                  @click="openEmergencyDialog"
+                >{{ emergencySwitch?.disabled ? '恢复 AI 调用' : '紧急关闭 AI' }}</el-button>
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
       </DataPanel>
+
+      <el-dialog v-model="emergencyDialogVisible" :title="emergencyTargetDisabled ? '确认紧急关闭 AI' : '确认恢复 AI 调用'" width="min(560px, 94vw)" top="3vh" :close-on-click-modal="false">
+        <el-alert
+          v-if="emergencyTargetDisabled"
+          type="error"
+          show-icon
+          :closable="false"
+          title="关闭后，所有商家 AI 调用会直接拒绝，包括营销文案、分享复盘等全部功能。"
+          description="请确认已通知相关商家或已有替代安排；恢复后立即恢复调用。"
+        />
+        <el-alert
+          v-else
+          type="success"
+          show-icon
+          :closable="false"
+          title="恢复后，所有商家 AI 调用立即恢复（仍受商家预算与超额策略约束）。"
+        />
+        <el-form label-position="top" class="ai-dialog-form">
+          <el-form-item :label="emergencyTargetDisabled ? '关闭原因（必填）' : '恢复原因（可选）'" :required="emergencyTargetDisabled">
+            <el-input
+              v-model="emergencyReason"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+              show-word-limit
+              placeholder="例如：供应商账单异常，暂停 AI 调用排查"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="emergencyDialogVisible = false">取消</el-button>
+          <el-button :type="emergencyTargetDisabled ? 'danger' : 'success'" :loading="submittingEmergency" @click="submitEmergencySwitch">确认{{ emergencyTargetDisabled ? '关闭' : '恢复' }}</el-button>
+        </template>
+      </el-dialog>
 
       <el-dialog v-model="reversalDialogVisible" title="登记费用冲正" width="min(560px, 94vw)" top="3vh" :close-on-click-modal="false">
         <template v-if="selectedExpense">
@@ -513,12 +895,44 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getPlatformCostPeriodValidationError } from '../../utils/platformCostPeriod.js'
 import { calculatePlatformCostScenario } from '../../utils/platformCostScenario.js'
+import {
+  AI_USAGE_DIMENSIONS,
+  BUDGET_ALERT_THRESHOLDS,
+  OVER_LIMIT_ACTIONS,
+  budgetMerchantLabel,
+  centsToYuan,
+  formatPricePerMillion,
+  localDateTimeString,
+  merchantDisplayName,
+  newUUID,
+  overLimitActionLabel,
+  periodTypeLabel,
+  scenarioLabel,
+  storeDisplayName,
+  yuanToCents,
+} from '../../utils/aiCostControl.js'
 import DataPanel from '../../components/design/DataPanel.vue'
 import PageHero from '../../components/design/PageHero.vue'
-import { createAdminPlatformExpense, createAdminPlatformExpenseReversal, fetchAdminPlatformCostOverview } from '../../api/modules'
+import {
+  createAdminAIVendorBill,
+  createAdminPlatformExpense,
+  createAdminPlatformExpenseReversal,
+  fetchAdminAIBillReconciliation,
+  fetchAdminAIBudgetAlerts,
+  fetchAdminAIBudgets,
+  fetchAdminAIBudgetStatus,
+  fetchAdminAIEmergencySwitch,
+  fetchAdminAIModelPrices,
+  fetchAdminAIUsageStats,
+  fetchAdminPlatformCostOverview,
+  fetchMerchants,
+  saveAdminAIBudget,
+  saveAdminAIEmergencySwitch,
+  saveAdminAIModelPrice,
+} from '../../api/modules'
 
 const loading = ref(false)
 const submittingExpense = ref(false)
@@ -563,6 +977,68 @@ const expenseForm = ref({
 })
 const reversalForm = ref({ reversalDate: todayString, amountYuan: null, reason: '', idempotencyKey: newIdempotencyKey() })
 const selectedPeriod = computed(() => overview.value?.selected_period || {})
+
+// --- AI 成本控制（P1 MVP）---
+const aiTab = ref('usage')
+const aiUsageDimensions = AI_USAGE_DIMENSIONS
+const overLimitActions = OVER_LIMIT_ACTIONS
+const budgetAlertThresholds = BUDGET_ALERT_THRESHOLDS
+const aiStats = ref(null)
+const aiStatsLoading = ref(false)
+const aiStatsError = ref('')
+const aiStatsDimension = ref('merchant')
+const aiDateRange = ref([localDateString(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29)), todayString])
+const modelPrices = ref([])
+const modelPricesLoading = ref(false)
+const submittingPrice = ref(false)
+const priceForm = ref({
+  model: '',
+  provider: '',
+  inputPriceYuan: null,
+  outputPriceYuan: null,
+  cachedPriceYuan: null,
+  effectiveFrom: `${todayString} 00:00:00`,
+  isActive: true,
+})
+const vendorBills = ref([])
+const reconciliation = ref(null)
+const reconciliationLoading = ref(false)
+const submittingBill = ref(false)
+const billForm = ref({ vendor: '', period: [localDateString(new Date(today.getFullYear(), today.getMonth(), 1)), todayString], amountYuan: null, note: '' })
+const aiBudgets = ref([])
+const merchantsForBudget = ref([])
+const merchantsLoaded = ref(false)
+const submittingBudget = ref(false)
+const budgetForm = ref({ merchantId: 0, dailyBudgetYuan: 0, monthlyBudgetYuan: 0, overLimitAction: 'stop' })
+const budgetStatus = ref(null)
+const budgetAlerts = ref([])
+const alertsLoading = ref(false)
+const alertFilter = ref({ merchantId: '', threshold: '', periodType: '' })
+const emergencySwitch = ref(null)
+const submittingEmergency = ref(false)
+const emergencyDialogVisible = ref(false)
+const emergencyTargetDisabled = ref(false)
+const emergencyReason = ref('')
+
+const aiDimensionLabel = computed(() => aiUsageDimensions.find((item) => item.value === aiStatsDimension.value)?.label || '按商家')
+const aiStatsRows = computed(() => {
+  if (!aiStats.value) return []
+  const dimension = aiStatsDimension.value
+  const rows = dimension === 'store'
+    ? aiStats.value.by_store || []
+    : dimension === 'model'
+      ? aiStats.value.by_model || []
+      : dimension === 'scenario'
+        ? aiStats.value.by_scenario || []
+        : aiStats.value.by_merchant || []
+  return rows.map((row, index) => {
+    if (dimension === 'store') return { ...row, rowKey: `store-${row.store_id || 0}`, displayName: storeDisplayName(row.store_id) }
+    if (dimension === 'model') return { ...row, rowKey: `model-${row.model || index}`, displayName: row.model || '未注明' }
+    if (dimension === 'scenario') return { ...row, rowKey: `scenario-${row.scenario || index}`, displayName: scenarioLabel(row.scenario) }
+    return { ...row, rowKey: `merchant-${row.merchant_id}`, displayName: merchantDisplayName(row.merchant_id, row.merchant_name) }
+  })
+})
+const merchantNameOf = (merchantId) => merchantsForBudget.value.find((item) => item.id === merchantId)?.name || ''
 const scenarioCalculation = computed(() => {
   const values = Object.values(scenarioAssumptions.value)
   if (values.some((value) => value === null || typeof value !== 'number' || !Number.isFinite(value))) return null
@@ -698,7 +1174,306 @@ const submitReversal = async () => {
   }
 }
 
-onMounted(loadOverview)
+const aiPeriodParams = () => (aiDateRange.value?.length === 2
+  ? { start_date: aiDateRange.value[0], end_date: aiDateRange.value[1] }
+  : undefined)
+const aiPeriodError = () => getPlatformCostPeriodValidationError(aiDateRange.value?.[0], aiDateRange.value?.[1], todayString)
+
+const loadAiUsageStats = async () => {
+  aiStatsError.value = ''
+  const periodError = aiPeriodError()
+  if (periodError) {
+    aiStatsError.value = periodError
+    ElMessage.warning(periodError)
+    return
+  }
+  aiStatsLoading.value = true
+  try {
+    const response = await fetchAdminAIUsageStats(aiPeriodParams())
+    aiStats.value = response?.data || null
+    if (!aiStats.value) throw new Error('AI 用量统计暂不可用')
+  } catch (err) {
+    aiStatsError.value = err?.response?.data?.message || err?.message || '加载 AI 用量统计失败'
+    ElMessage.error(aiStatsError.value)
+  } finally {
+    aiStatsLoading.value = false
+  }
+}
+
+const loadModelPrices = async () => {
+  modelPricesLoading.value = true
+  try {
+    const response = await fetchAdminAIModelPrices()
+    modelPrices.value = response?.data || []
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载模型价格表失败')
+  } finally {
+    modelPricesLoading.value = false
+  }
+}
+
+const submitModelPrice = async () => {
+  const inputCents = yuanToCents(priceForm.value.inputPriceYuan)
+  const outputCents = yuanToCents(priceForm.value.outputPriceYuan)
+  const cachedCents = yuanToCents(priceForm.value.cachedPriceYuan)
+  if (!priceForm.value.model.trim() || !priceForm.value.effectiveFrom) {
+    ElMessage.warning('请填写模型与生效时间')
+    return
+  }
+  if (inputCents === null || outputCents === null || cachedCents === null) {
+    ElMessage.warning('三项单价必须为不小于 0 的金额（元 / 百万 Token）')
+    return
+  }
+  submittingPrice.value = true
+  try {
+    await saveAdminAIModelPrice({
+      model: priceForm.value.model.trim(),
+      provider: priceForm.value.provider.trim(),
+      input_price_cents_per_million: inputCents,
+      output_price_cents_per_million: outputCents,
+      cached_price_cents_per_million: cachedCents,
+      currency: 'CNY',
+      effective_from: priceForm.value.effectiveFrom,
+      is_active: priceForm.value.isActive,
+    })
+    ElMessage.success('模型价格已保存')
+    priceForm.value = { model: '', provider: '', inputPriceYuan: null, outputPriceYuan: null, cachedPriceYuan: null, effectiveFrom: `${todayString} 00:00:00`, isActive: true }
+    await loadModelPrices()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '模型价格未保存，请检查数据后重试')
+  } finally {
+    submittingPrice.value = false
+  }
+}
+
+const toggleModelPrice = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      row.is_active ? `停用 ${row.model}（${row.provider || '未指定供应商'}）${localDateTimeString(new Date(row.effective_from))} 生效的价格？停用后新调用不再按该价估算。` : `重新启用 ${row.model} 的该条价格？`,
+      row.is_active ? '确认停用模型价格' : '确认启用模型价格',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await saveAdminAIModelPrice({
+      model: row.model,
+      provider: row.provider || '',
+      input_price_cents_per_million: row.input_price_cents_per_million,
+      output_price_cents_per_million: row.output_price_cents_per_million,
+      cached_price_cents_per_million: row.cached_price_cents_per_million,
+      currency: 'CNY',
+      effective_from: localDateTimeString(new Date(row.effective_from)),
+      is_active: !row.is_active,
+    })
+    ElMessage.success(row.is_active ? '模型价格已停用' : '模型价格已启用')
+    await loadModelPrices()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '模型价格状态未更新')
+  }
+}
+
+const loadVendorBills = async () => {
+  const periodError = aiPeriodError()
+  if (periodError) {
+    ElMessage.warning(periodError)
+    return
+  }
+  reconciliationLoading.value = true
+  try {
+    const params = aiPeriodParams()
+    const [billsResponse, reconciliationResponse] = await Promise.all([
+      fetchAdminAIVendorBills(params),
+      fetchAdminAIBillReconciliation(params),
+    ])
+    vendorBills.value = billsResponse?.data || []
+    reconciliation.value = reconciliationResponse?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载供应商账单失败')
+  } finally {
+    reconciliationLoading.value = false
+  }
+}
+
+const submitVendorBill = async () => {
+  const amountCents = yuanToCents(billForm.value.amountYuan)
+  if (!billForm.value.vendor.trim() || billForm.value.period?.length !== 2) {
+    ElMessage.warning('请填写供应商与账单周期')
+    return
+  }
+  if (amountCents === null || amountCents < 1) {
+    ElMessage.warning('实际账单金额必须为正数')
+    return
+  }
+  submittingBill.value = true
+  try {
+    const response = await createAdminAIVendorBill({
+      vendor: billForm.value.vendor.trim(),
+      period_start: billForm.value.period[0],
+      period_end: billForm.value.period[1],
+      amount_cents: amountCents,
+      currency: 'CNY',
+      note: billForm.value.note.trim(),
+      idempotency_key: newUUID(),
+    })
+    ElMessage.success(response?.data?.created === false ? '该账单已存在，未重复录入' : '供应商实际账单已录入')
+    billForm.value = { vendor: '', period: [localDateString(new Date(today.getFullYear(), today.getMonth(), 1)), todayString], amountYuan: null, note: '' }
+    await loadVendorBills()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '账单未保存，请检查数据后重试')
+  } finally {
+    submittingBill.value = false
+  }
+}
+
+const ensureMerchantsLoaded = async () => {
+  if (merchantsLoaded.value) return
+  try {
+    const response = await fetchMerchants({ page: 1, page_size: 500 })
+    merchantsForBudget.value = response?.data?.list || []
+    merchantsLoaded.value = true
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载商家列表失败')
+  }
+}
+
+const loadBudgets = async () => {
+  await ensureMerchantsLoaded()
+  try {
+    const response = await fetchAdminAIBudgets()
+    aiBudgets.value = response?.data || []
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载商家预算失败')
+  }
+}
+
+const resetBudgetForm = () => {
+  budgetForm.value = { merchantId: 0, dailyBudgetYuan: 0, monthlyBudgetYuan: 0, overLimitAction: 'stop' }
+}
+
+const editBudget = (row) => {
+  budgetForm.value = {
+    merchantId: row.merchant_id,
+    dailyBudgetYuan: centsToYuan(row.daily_budget_cents),
+    monthlyBudgetYuan: centsToYuan(row.monthly_budget_cents),
+    overLimitAction: row.over_limit_action,
+  }
+  budgetStatus.value = null
+}
+
+const submitBudget = async () => {
+  if (budgetForm.value.merchantId === null || budgetForm.value.merchantId === undefined || budgetForm.value.merchantId === '') {
+    ElMessage.warning('请选择商家或全局默认')
+    return
+  }
+  const dailyCents = yuanToCents(budgetForm.value.dailyBudgetYuan)
+  const monthlyCents = yuanToCents(budgetForm.value.monthlyBudgetYuan)
+  if (dailyCents === null || monthlyCents === null) {
+    ElMessage.warning('每日 / 月度预算必须为不小于 0 的金额，0 表示不限额')
+    return
+  }
+  submittingBudget.value = true
+  try {
+    await saveAdminAIBudget(budgetForm.value.merchantId, {
+      daily_budget_cents: dailyCents,
+      monthly_budget_cents: monthlyCents,
+      over_limit_action: budgetForm.value.overLimitAction,
+    })
+    ElMessage.success('商家预算已保存，立即生效')
+    await loadBudgets()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '预算未保存，请检查数据后重试')
+  } finally {
+    submittingBudget.value = false
+  }
+}
+
+const loadBudgetStatus = async (merchantId) => {
+  try {
+    const response = await fetchAdminAIBudgetStatus(merchantId)
+    budgetStatus.value = response?.data || null
+    if (!budgetStatus.value) throw new Error('商家预算状态暂不可用')
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || err?.message || '加载商家预算状态失败')
+  }
+}
+
+const loadBudgetAlerts = async () => {
+  await ensureMerchantsLoaded()
+  alertsLoading.value = true
+  try {
+    const params = { ...aiPeriodParams() }
+    if (alertFilter.value.merchantId !== '' && alertFilter.value.merchantId !== null) params.merchant_id = alertFilter.value.merchantId
+    if (alertFilter.value.threshold !== '' && alertFilter.value.threshold !== null) params.threshold = alertFilter.value.threshold
+    if (alertFilter.value.periodType) params.period_type = alertFilter.value.periodType
+    const response = await fetchAdminAIBudgetAlerts(params)
+    budgetAlerts.value = response?.data || []
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载预算预警失败')
+  } finally {
+    alertsLoading.value = false
+  }
+}
+
+const loadEmergencySwitch = async () => {
+  try {
+    const response = await fetchAdminAIEmergencySwitch()
+    emergencySwitch.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载紧急关闭开关失败')
+  }
+}
+
+const openEmergencyDialog = () => {
+  emergencyTargetDisabled.value = !emergencySwitch.value?.disabled
+  emergencyReason.value = ''
+  emergencyDialogVisible.value = true
+}
+
+const submitEmergencySwitch = async () => {
+  if (emergencyTargetDisabled.value && !emergencyReason.value.trim()) {
+    ElMessage.warning('关闭 AI 请填写原因，原因会随审计记录')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      emergencyTargetDisabled.value
+        ? '关闭后，所有商家 AI 调用会直接拒绝，确认紧急关闭吗？'
+        : '确认恢复所有商家 AI 调用吗？恢复后仍受商家预算与超额策略约束。',
+      emergencyTargetDisabled.value ? '确认紧急关闭 AI' : '确认恢复 AI 调用',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  submittingEmergency.value = true
+  try {
+    await saveAdminAIEmergencySwitch({ disabled: emergencyTargetDisabled.value, reason: emergencyReason.value.trim() })
+    ElMessage.success(emergencyTargetDisabled.value ? 'AI 已紧急关闭' : 'AI 调用已恢复')
+    emergencyDialogVisible.value = false
+    await loadEmergencySwitch()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '紧急开关未更新')
+  } finally {
+    submittingEmergency.value = false
+  }
+}
+
+const onAiTabChange = (tab) => {
+  if (tab === 'usage') loadAiUsageStats()
+  else if (tab === 'prices') loadModelPrices()
+  else if (tab === 'bills') loadVendorBills()
+  else if (tab === 'budgets') loadBudgets()
+  else if (tab === 'alerts') loadBudgetAlerts()
+  else if (tab === 'emergency') loadEmergencySwitch()
+}
+
+onMounted(() => {
+  loadOverview()
+  loadAiUsageStats()
+  loadEmergencySwitch()
+})
 </script>
 
 <style scoped>
@@ -729,4 +1504,40 @@ onMounted(loadOverview)
 .input-hint{margin-top:5px;color:#64748b;font-size:12px;line-height:1.5}
 @media(max-width:1200px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.period-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:640px){.summary-grid,.period-grid{grid-template-columns:1fr}}
+</style>
+
+<style scoped>
+.ai-emergency-banner{margin-bottom:14px}
+.ai-stats-grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+.ai-recon-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ai-dimension-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 12px}
+.ai-form-note{display:grid;gap:4px;margin-bottom:14px;padding:12px 14px;border-radius:12px;background:#f1f6fc;color:#52647b;font-size:12px;line-height:1.55}
+.ai-form-note strong{color:#334155}
+.ai-inline-form{display:grid;gap:2px;margin-top:4px}
+.ai-price-form-row{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ai-price-form-row + .ai-price-form-row{grid-template-columns:repeat(4,minmax(0,1fr))}
+.ai-bill-form-row{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr)}
+.ai-budget-form-row{grid-template-columns:repeat(4,minmax(0,1fr))}
+.ai-table-gap{margin-top:16px}
+.ai-filter-select{width:180px}
+.ai-budget-status{display:grid;gap:14px;margin-top:16px;padding:16px;border:1px solid #ccd8f7;border-radius:16px;background:#f7f9ff}
+.ai-budget-status-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ai-budget-status-head strong{color:#0f172a;font-size:15px}
+.ai-budget-status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.ai-budget-status-grid article{display:grid;gap:8px;padding:14px;border:1px solid #e2eaf3;border-radius:12px;background:#fff}
+.ai-budget-status-grid article span{color:#64748b;font-size:12px}
+.ai-budget-status-grid article strong{color:#0f172a;font-size:16px}
+.ai-budget-status-grid article small{color:#64748b;font-size:12px}
+.ai-budget-status-note{color:#64748b;font-size:12px;line-height:1.55}
+.ai-emergency-panel{display:grid;gap:16px}
+.ai-emergency-status{display:grid;gap:8px;padding:18px;border:1px solid #e2eaf3;border-radius:16px;background:#fbfdff}
+.ai-emergency-status span{color:#64748b;font-size:12px}
+.ai-emergency-status strong{font-size:20px}
+.ai-emergency-status small{color:#64748b;font-size:12px;line-height:1.5}
+.ai-emergency-off{color:#dc2626}
+.ai-emergency-on{color:#15803d}
+.ai-emergency-note{margin:0}
+.ai-dialog-form{margin-top:14px}
+@media(max-width:1200px){.ai-stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.ai-recon-grid{grid-template-columns:1fr}.ai-price-form-row,.ai-price-form-row + .ai-price-form-row,.ai-bill-form-row,.ai-budget-form-row{grid-template-columns:repeat(2,minmax(0,1fr))}.ai-budget-status-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.ai-stats-grid{grid-template-columns:1fr}.ai-price-form-row,.ai-price-form-row + .ai-price-form-row,.ai-bill-form-row,.ai-budget-form-row{grid-template-columns:1fr}.ai-filter-select{width:100%}}
 </style>
