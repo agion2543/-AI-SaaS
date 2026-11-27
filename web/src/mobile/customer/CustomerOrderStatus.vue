@@ -115,17 +115,18 @@
       </div>
     </van-dialog>
 
-    <!-- 支付弹窗（模拟支付） -->
+    <!-- 支付弹窗（人工确认：顾客扫商家收款码付款后点确认） -->
     <van-popup v-model:show="showPaymentDialog" position="bottom" style="height: 50%;">
       <div class="payment-dialog">
         <div class="payment-header">
-          <span>确认支付</span>
+          <span>确认已付款</span>
           <van-icon name="cross" @click="showPaymentDialog = false" />
         </div>
         <div class="payment-amount">
           <span class="currency">¥</span>
           <span class="amount">{{ formatPrice(order?.amount || 0) }}</span>
         </div>
+        <div class="payment-tip">请先扫商家收款码完成付款，再点确认；商家会核对到账后接单。</div>
         <div class="payment-methods">
           <van-radio-group v-model="selectedPayMethod">
             <van-cell-group>
@@ -150,7 +151,7 @@
         </div>
         <div class="payment-confirm">
           <van-button type="primary" block :loading="paying" @click="confirmPayment">
-            确认支付
+            我已付款，确认
           </van-button>
         </div>
       </div>
@@ -162,7 +163,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showSuccessToast, showFailToast, showDialog } from 'vant'
-import { fetchCustomerOrder, createCustomerStoreOrder } from '@/api/modules'
+import { fetchCustomerOrder, createCustomerStoreOrder, markCustomerOrderPaid } from '@/api/modules'
 
 const route = useRoute()
 const router = useRouter()
@@ -318,16 +319,15 @@ function handlePayment() {
 async function confirmPayment() {
   paying.value = true
   try {
-    // 模拟支付成功
-    // 实际项目中这里应该调用微信/支付宝 SDK
-    await new Promise(resolve => setTimeout(resolve, 1500))
+    // 人工确认：顾客已扫商家收款码付款，这里只做服务端标记，商家随后核对到账
+    await markCustomerOrderPaid(orderNo)
 
-    showSuccessToast('支付成功')
+    showSuccessToast('已标记为已付款，等待商家核对')
     showPaymentDialog.value = false
     await loadOrderData()
     startPolling()
   } catch (e) {
-    showFailToast('支付失败，请重试')
+    showFailToast('确认失败，请重试')
   } finally {
     paying.value = false
   }

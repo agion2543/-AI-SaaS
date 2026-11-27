@@ -47,7 +47,7 @@ func Load() (*Config, error) {
 		JWTSecret:          getEnv("JWT_SECRET", "replace-with-a-very-strong-secret"),
 		AESSecret:          getEnv("AES_SECRET", "0123456789abcdef0123456789abcdef"),
 		InitialAdminUser:   getEnv("INITIAL_ADMIN_USERNAME", "admin"),
-		InitialAdminPass:   getEnv("INITIAL_ADMIN_PASSWORD", "SaasAdmin@2026!"),
+		InitialAdminPass:   getEnv("INITIAL_ADMIN_PASSWORD", ""),
 		RateLimitPerMinute: getEnvAsInt("RATE_LIMIT_PER_MINUTE", 120),
 		MySQLDSN:           getEnv("MYSQL_DSN", "root:123456@tcp(127.0.0.1:3306)/saas_billing?charset=utf8mb4&parseTime=True&loc=Local"),
 		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:5173"),

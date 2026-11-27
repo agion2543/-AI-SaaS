@@ -79,9 +79,11 @@ npm run dev
 默认管理员：
 
 ```text
-账号：admin
-密码：SaasAdmin@2026!
+账号：admin（或 INITIAL_ADMIN_USERNAME 指定的账号）
+密码：INITIAL_ADMIN_PASSWORD 环境变量中设置的密码
 ```
+
+> 首次启动前必须在 `.env` 或环境变量中设置 `INITIAL_ADMIN_PASSWORD`（强密码）；未设置时后端会拒绝创建初始管理员账号并退出。生产部署另见 `docs/production-deploy.md`。
 
 ## 生产部署
 

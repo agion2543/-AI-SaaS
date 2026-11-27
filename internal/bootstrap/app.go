@@ -141,7 +141,7 @@ func seedAdminUser(db *gorm.DB, cfg *config.Config, roleID uint) error {
 	}
 	password := strings.TrimSpace(cfg.InitialAdminPass)
 	if password == "" {
-		password = "SaasAdmin@2026!"
+		return errors.New("未配置 INITIAL_ADMIN_PASSWORD，拒绝创建初始管理员账号：请在环境变量中设置强密码后重新启动")
 	}
 
 	var admin model.AdminUser

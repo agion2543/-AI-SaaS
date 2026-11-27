@@ -28,3 +28,6 @@ github-upload-source-*.zip
 # Local temp/cache files
 tmp/
 *.tmp
+
+# Repo-root backup archives (kept outside the repo)
+saas-backup.zip

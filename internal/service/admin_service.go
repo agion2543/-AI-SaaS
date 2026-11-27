@@ -1901,7 +1901,7 @@ func (s *AdminService) checkAdminPassword() SecurityCheckItem {
 	}
 	initialPassword := strings.TrimSpace(s.cfg.InitialAdminPass)
 	if initialPassword == "" {
-		initialPassword = "SaasAdmin@2026!"
+		return securityItem("admin_password", "初始化管理员密码", "warning", "未配置 INITIAL_ADMIN_PASSWORD。", "请在环境变量中设置初始管理员密码，或确认已有独立管理员账号并妥善保管密码。")
 	}
 	if utils.CheckPassword(admin.PasswordHash, initialPassword) {
 		status := "warning"

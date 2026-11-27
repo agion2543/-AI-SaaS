@@ -67,9 +67,9 @@
         </van-cell>
       </van-cell-group>
 
-      <!-- 模拟支付提示 -->
+      <!-- 人工确认提示 -->
       <van-notice-bar v-if="isDevMode" class="dev-notice" left-icon="info-o" scrollable>
-        开发环境：当前为模拟支付，无需真实付款
+        开发环境：付款为人工确认，扫商家收款码后点确认
       </van-notice-bar>
 
       <!-- 底部提交栏 -->
@@ -121,7 +121,7 @@ const coupons = ref([])
 const selectedCoupon = ref(null)
 const chosenCouponIndex = ref(-1)
 const showCouponPicker = ref(false)
-const isDevMode = ref(import.meta.env.DEV || true) // 开发环境默认模拟支付
+const isDevMode = ref(import.meta.env.DEV) // 仅开发构建显示人工确认提示
 
 const defaultProductImg = 'https://via.placeholder.com/100x100?text=商品'
 
