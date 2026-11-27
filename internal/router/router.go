@@ -343,6 +343,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				merchantProtected.PUT("/products/:id", merchantCtl.UpdateStoreProduct)
 				merchantProtected.DELETE("/products/:id", merchantCtl.DeleteStoreProduct)
 				merchantProtected.GET("/orders", orderCtl.MerchantOrders)
+				merchantProtected.GET("/turnover", merchantCtl.Turnover)
 				merchantProtected.GET("/refunds", orderCtl.MerchantRefunds)
 				merchantProtected.GET("/settlements", orderCtl.MerchantSettlements)
 				merchantProtected.GET("/orders/:id", orderCtl.MerchantOrderDetail)

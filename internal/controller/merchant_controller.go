@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +152,29 @@ func (ctl *MerchantController) MaintenanceNotice(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"notice": notice})
+}
+
+func (ctl *MerchantController) Turnover(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var storeID uint
+	if raw := strings.TrimSpace(c.Query("store_id")); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil {
+			utils.Error(c, http.StatusBadRequest, "store_id 无效")
+			return
+		}
+		storeID = uint(parsed)
+	}
+	data, err := ctl.merchant.MerchantTurnover(merchantID, c.Query("start_date"), c.Query("end_date"), storeID)
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, "营业额暂时无法读取")
+		return
+	}
+	utils.Success(c, data)
 }
 
 func (ctl *MerchantController) Subscription(c *gin.Context) {

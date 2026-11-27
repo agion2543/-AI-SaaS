@@ -85,12 +85,12 @@ func TestMySQLPlatformExpenseReversalsV8Migration(t *testing.T) {
 			t.Fatalf("v8 exact rerun before v9: result=%q err=%v", result, err)
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
-			t.Fatalf("latest v10 upgrade from exact v8: result=%q err=%v", result, err)
+			t.Fatalf("latest v11 upgrade from exact v8: result=%q err=%v", result, err)
 		}
 		assertLatestInventory(t, db)
 	})
 
-	t.Run("fresh install reaches v10 with no reversal seed rows", func(t *testing.T) {
+	t.Run("fresh install reaches v11 with no reversal seed rows", func(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("fresh latest install: result=%q err=%v", result, err)

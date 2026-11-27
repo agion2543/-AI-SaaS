@@ -44,7 +44,7 @@ func TestMySQLTableOrderingV9Migration(t *testing.T) {
 	control, baseConfig := openSafeMySQLTestServer(t)
 	ctx := context.Background()
 
-	t.Run("exact v8 upgrades through v10 and preserves existing rows", func(t *testing.T) {
+	t.Run("exact v8 upgrades through v11 and preserves existing rows", func(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		createExactV6PlatformExpensesSchema(t, ctx, db)
 		if result, err := ApplyPlatformExpensesV7(ctx, db); err != nil || result != ResultApplied {
@@ -56,7 +56,7 @@ func TestMySQLTableOrderingV9Migration(t *testing.T) {
 		merchantID, orderID, orderNo := insertSyntheticV1MerchantOrder(t, db)
 
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
-			t.Fatalf("upgrade exact v8 through v10: result=%q err=%v", result, err)
+			t.Fatalf("upgrade exact v8 through v11: result=%q err=%v", result, err)
 		}
 		if got := countWhere(t, db, "orders", "id = ? AND order_no = ?", orderID, orderNo); got != 1 {
 			t.Fatalf("existing v1 order rows after v9=%d, want 1", got)

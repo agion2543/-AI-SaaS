@@ -2160,11 +2160,11 @@ func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]inte
 	var customerCount int64
 	s.db.Model(&model.Order{}).
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
-		Where("paid_at IS NOT NULL AND total_amount > 0").
+		Where(ValidTradeAmountCondition).
 		Count(&orderCount)
 	s.db.Model(&model.Order{}).
 		Where("merchant_id = ? AND order_type = ?", merchantID, "store_order").
-		Where("paid_at IS NOT NULL AND total_amount > 0").
+		Where(ValidTradeAmountCondition).
 		Select("COALESCE(SUM(total_amount),0)").Scan(&tradeAmount)
 	s.db.Model(&model.RefundRecord{}).
 		Where("merchant_id = ? AND status = ?", merchantID, "success").
@@ -2178,6 +2178,81 @@ func (s *MerchantService) marketingStatsSummary(merchantID uint) map[string]inte
 		"refund_amount":  refundAmount,
 		"customer_count": customerCount,
 	}
+}
+
+// merchantTurnoverChannelRow is one row of the MerchantTurnover
+// by_channel breakdown (package level so tests can assert on it).
+type merchantTurnoverChannelRow struct {
+	Channel     string `json:"channel"`
+	OrderCount  int64  `json:"order_count"`
+	TradeAmount int64  `json:"trade_amount"`
+}
+
+// MerchantTurnover returns one merchant's own store-order turnover under the
+// frozen valid-trade definition (ValidTradeAmountCondition: paid_at is set
+// and total_amount > 0, i.e. real money received). Only orders of this
+// merchant are counted (merchant_id comes from the JWT, never from a request
+// parameter); an optional storeID narrows to one store of the same merchant
+// and can never widen the scope. The date window filters on order
+// created_at, the same dimension DashboardService.SummaryWithRange uses, so
+// the two can be reconciled. Amounts are cents, as everywhere else in the
+// codebase; net_amount is trade_amount minus successful refunds in the
+// window. by_channel breaks the same valid trades down by orders.channel
+// (store_qr / table / share).
+func (s *MerchantService) MerchantTurnover(merchantID uint, startValue, endValue string, storeID uint) (map[string]interface{}, error) {
+	start, end := dashboardRange(startValue, endValue)
+	tradeQuery := func() *gorm.DB {
+		query := s.db.Table("orders").
+			Where("orders.merchant_id = ? AND orders.order_type = ?", merchantID, "store_order").
+			Where(ValidTradeAmountConditionFor("orders")).
+			Where("orders.created_at BETWEEN ? AND ?", start, end)
+		if storeID > 0 {
+			query = query.Where("orders.store_id = ?", storeID)
+		}
+		return query
+	}
+	var orderCount int64
+	if err := tradeQuery().Count(&orderCount).Error; err != nil {
+		return nil, err
+	}
+	var tradeAmount int64
+	if err := tradeQuery().Select("COALESCE(SUM(orders.total_amount),0)").Scan(&tradeAmount).Error; err != nil {
+		return nil, err
+	}
+	refundQuery := s.db.Model(&model.RefundRecord{}).
+		Where("merchant_id = ? AND status = ? AND created_at BETWEEN ? AND ?", merchantID, "success", start, end)
+	if storeID > 0 {
+		refundQuery = refundQuery.Where("store_id = ?", storeID)
+	}
+	var refundAmount int64
+	if err := refundQuery.Select("COALESCE(SUM(amount),0)").Scan(&refundAmount).Error; err != nil {
+		return nil, err
+	}
+	var byChannel []merchantTurnoverChannelRow
+	if err := tradeQuery().
+		Select("orders.channel AS channel, COUNT(orders.id) AS order_count, COALESCE(SUM(orders.total_amount),0) AS trade_amount").
+		Group("orders.channel").
+		Order("trade_amount desc").
+		Scan(&byChannel).Error; err != nil {
+		return nil, err
+	}
+	if byChannel == nil {
+		byChannel = []merchantTurnoverChannelRow{}
+	}
+	var storeIDValue interface{}
+	if storeID > 0 {
+		storeIDValue = storeID
+	}
+	return map[string]interface{}{
+		"merchant_id":   merchantID,
+		"store_id":      storeIDValue,
+		"range":         map[string]interface{}{"start": start.Format("2006-01-02"), "end": end.Format("2006-01-02")},
+		"order_count":   orderCount,
+		"trade_amount":  tradeAmount,
+		"refund_amount": refundAmount,
+		"net_amount":    tradeAmount - refundAmount,
+		"by_channel":    byChannel,
+	}, nil
 }
 
 func (s *MerchantService) issueMerchantVerificationCode(phone, scene string, userID *uint) error {

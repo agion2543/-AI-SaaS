@@ -224,7 +224,7 @@ func (s *AdminService) ListCustomerProfiles(page, pageSize int, filter CustomerP
 		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
 		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
 		Where("orders.order_type = ? AND orders.customer_phone <> ''", "store_order").
-		Where("orders.paid_at IS NOT NULL AND orders.total_amount > 0")
+		Where(ValidTradeAmountConditionFor("orders"))
 
 	keyword := strings.TrimSpace(filter.Keyword)
 	if keyword != "" {
@@ -313,7 +313,7 @@ func (s *AdminService) ListMerchantCustomerProfiles(merchantID uint, limit int) 
 		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
 		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
 		Where("orders.merchant_id = ? AND orders.order_type = ? AND orders.customer_phone <> ''", merchantID, "store_order").
-		Where("orders.paid_at IS NOT NULL AND orders.total_amount > 0").
+		Where(ValidTradeAmountConditionFor("orders")).
 		Group("orders.customer_phone, orders.merchant_id").
 		Order("total_amount desc, last_order_at desc").
 		Limit(limit).

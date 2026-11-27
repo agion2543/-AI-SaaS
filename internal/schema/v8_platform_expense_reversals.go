@@ -426,6 +426,13 @@ func removeSchemaName(values []string, remove string) []string {
 }
 
 func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, v6 wholesaleRetailV6Definition, v7 platformExpensesV7Definition, v8 platformExpenseReversalsV8Definition, futureTables ...string) error {
+	return verifyPlatformExpenseReversalsV8HistoricalFingerprintsExcludingColumns(ctx, conn, base, v2, v3, v4, v5, v6, v7, v8, nil, futureTables...)
+}
+
+// verifyPlatformExpenseReversalsV8HistoricalFingerprintsExcludingColumns is
+// the column-aware form of the v1-v7 historical fingerprint check, for
+// later migrations that add a column to a pre-existing table.
+func verifyPlatformExpenseReversalsV8HistoricalFingerprintsExcludingColumns(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, v6 wholesaleRetailV6Definition, v7 platformExpensesV7Definition, v8 platformExpenseReversalsV8Definition, excludedColumns []schemaColumn, futureTables ...string) error {
 	v7Tables := []string{"platform_expenses"}
 	v7Triggers := []string{"trg_platform_expenses_no_delete", "trg_platform_expenses_no_update"}
 	v8Tables := []string{"platform_expense_reversals"}
@@ -433,7 +440,7 @@ func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context,
 	v7ExcludedTables := append(append([]string(nil), v8Tables...), futureTables...)
 	allNewTables := append(append(append([]string(nil), v7Tables...), v8Tables...), futureTables...)
 	allNewTriggers := append(append([]string(nil), v7Triggers...), v8Triggers...)
-	if err := verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx, conn, base, v2, v3, v4, v5, allNewTables, allNewTriggers); err != nil {
+	if err := verifyWholesaleRetailHistoricalFingerprintsExcludingColumns(ctx, conn, base, v2, v3, v4, v5, allNewTables, allNewTriggers, excludedColumns); err != nil {
 		return err
 	}
 	for _, check := range []struct {
@@ -444,7 +451,7 @@ func verifyPlatformExpenseReversalsV8HistoricalFingerprints(ctx context.Context,
 		{version: v6.version, checksum: v6.checksum, label: "v6", excludedTables: allNewTables, excludedTriggers: allNewTriggers},
 		{version: v7.version, checksum: v7.checksum, label: "v7", excludedTables: v7ExcludedTables, excludedTriggers: v8Triggers},
 	} {
-		actual, err := schemaFingerprintExcluding(ctx, conn, check.excludedTables, check.excludedTriggers)
+		actual, err := schemaFingerprintExcludingColumns(ctx, conn, check.excludedTables, check.excludedTriggers, excludedColumns)
 		if err != nil {
 			return fmt.Errorf("compute immutable %s schema fingerprint: %w", check.label, err)
 		}

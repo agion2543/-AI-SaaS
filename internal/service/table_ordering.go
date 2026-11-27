@@ -574,6 +574,7 @@ func (s *TableOrderingService) createTableOrderInTransaction(tx *gorm.DB, store 
 		Items:                   string(itemsJSON),
 		Status:                  status,
 		PaymentChannel:          channel,
+		Channel:                 model.OrderChannelTable,
 		ShareCode:               strings.TrimSpace(req.ShareCode),
 		CustomerAccessTokenHash: hashCustomerOrderAccessToken(req.AccessToken),
 		CustomerAccessToken:     req.AccessToken,

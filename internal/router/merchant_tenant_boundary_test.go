@@ -251,4 +251,21 @@ func TestMerchantCannotReadOrWriteAnotherMerchantsResources(t *testing.T) {
 	if storedCouponB.Status != "unused" || strings.Contains(storedCouponB.Remark, "被 A 篡改") {
 		t.Errorf("merchant B coupon was changed by merchant A: status=%q remark=%q", storedCouponB.Status, storedCouponB.Remark)
 	}
+
+	// Merchant turnover: only merchant A's own valid trades count. orderA
+	// was paid (100) and orderConfirm was confirmed paid above (100);
+	// orderB belongs to merchant B and is unpaid, so it must not leak in.
+	// The successful 25 refund is deducted from the 200 trade amount.
+	if response := request(http.MethodGet, "/api/v1/merchant/turnover?start_date=2000-01-01&end_date=2999-01-01", ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"trade_amount":200`) || !strings.Contains(response.Body.String(), `"order_count":2`) || !strings.Contains(response.Body.String(), `"refund_amount":25`) || !strings.Contains(response.Body.String(), `"net_amount":175`) || !strings.Contains(response.Body.String(), `"channel":"store_qr"`) {
+		t.Errorf("merchant turnover must report own valid trades only: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/api/v1/merchant/turnover?start_date=2000-01-01&end_date=2999-01-01&store_id="+strconv.FormatUint(uint64(storeB.ID), 10), ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"trade_amount":0`) || !strings.Contains(response.Body.String(), `"order_count":0`) {
+		t.Errorf("merchant turnover with another merchant's store must stay empty: status=%d body=%s", response.Code, response.Body.String())
+	}
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/merchant/turnover", nil)
+	unauthenticatedResponse := httptest.NewRecorder()
+	engine.ServeHTTP(unauthenticatedResponse, unauthenticated)
+	if unauthenticatedResponse.Code != http.StatusUnauthorized {
+		t.Errorf("merchant turnover without a token must be rejected: status=%d, want %d", unauthenticatedResponse.Code, http.StatusUnauthorized)
+	}
 }

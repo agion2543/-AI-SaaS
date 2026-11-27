@@ -226,6 +226,7 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		status = "submitted"
 	}
 
+	shareCode := strings.TrimSpace(req.ShareCode)
 	order := &model.Order{
 		OrderNo:        fmt.Sprintf("SORD%d", time.Now().UnixNano()),
 		OrderType:      "store_order",
@@ -239,7 +240,8 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 		Items:          string(itemsJSON),
 		Status:         status,
 		PaymentChannel: channel,
-		ShareCode:      strings.TrimSpace(req.ShareCode),
+		Channel:        OrderChannelForShareCode(shareCode),
+		ShareCode:      shareCode,
 	}
 	if req.RequestKey != "" {
 		order.OrderNo = customerOrderNoForRequestKey(req.RequestKey)

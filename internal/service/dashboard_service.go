@@ -42,7 +42,7 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 	s.db.Model(&model.PaymentRecord{}).Count(&paymentCount)
 	s.db.Model(&model.PaymentRecord{}).Where("status = ?", "success").Select("COALESCE(SUM(amount),0)").Scan(&totalRevenue)
 	s.db.Model(&model.Order{}).Where("status = ? AND paid_at IS NOT NULL AND order_type = ?", "paid", "merchant_subscription").Select("COALESCE(SUM(total_amount),0)").Scan(&platformSubscriptionRevenue)
-	s.db.Model(&model.Order{}).Where("paid_at IS NOT NULL AND total_amount > 0 AND order_type = ?", "store_order").Select("COALESCE(SUM(total_amount),0)").Scan(&customerTradeRevenue)
+	s.db.Model(&model.Order{}).Where(ValidTradeAmountCondition+" AND order_type = ?", "store_order").Select("COALESCE(SUM(total_amount),0)").Scan(&customerTradeRevenue)
 	s.db.Model(&model.RefundRecord{}).Where("status = ?", "success").Select("COALESCE(SUM(amount),0)").Scan(&totalRefundAmount)
 	s.db.Model(&model.RefundRecord{}).Where("status = ? AND created_at BETWEEN ? AND ?", "success", start, end).Select("COALESCE(SUM(amount),0)").Scan(&rangeRefundAmount)
 	s.db.Model(&model.MerchantSettlement{}).Where("status = ?", "pending").Count(&pendingSettlementCount)
@@ -93,9 +93,9 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 			merchants.status AS status,
 			merchants.subscription_status AS subscription_status,
 			COUNT(orders.id) AS order_count,
-			COALESCE(SUM(CASE WHEN orders.paid_at IS NOT NULL AND orders.total_amount > 0 THEN orders.total_amount ELSE 0 END),0) AS trade_amount,
+			`+ValidTradeAmountSumExpression("orders")+` AS trade_amount,
 			COALESCE((SELECT SUM(refund_records.amount) FROM refund_records WHERE refund_records.merchant_id = merchants.id AND refund_records.status = 'success' AND refund_records.created_at BETWEEN ? AND ?),0) AS refund_amount,
-			COALESCE(AVG(CASE WHEN orders.paid_at IS NOT NULL AND orders.total_amount > 0 THEN orders.total_amount ELSE NULL END),0) AS avg_order_amount,
+			`+ValidTradeAmountAvgExpression("orders")+` AS avg_order_amount,
 			COALESCE(SUM(CASE WHEN orders.status IN ('accepted','completed') THEN 1 ELSE 0 END),0) AS accepted_count,
 			COALESCE(SUM(CASE WHEN orders.status = 'closed' THEN 1 ELSE 0 END),0) AS closed_count`, start, end).
 		Joins("LEFT JOIN orders ON orders.merchant_id = merchants.id AND orders.order_type = ? AND orders.created_at BETWEEN ? AND ?", "store_order", start, end).
@@ -107,7 +107,7 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 	var revenueMix []map[string]interface{}
 	s.db.Table("orders").
 		Select("order_type, COALESCE(SUM(total_amount),0) AS amount, COUNT(id) AS count").
-		Where("paid_at IS NOT NULL AND total_amount > 0 AND created_at BETWEEN ? AND ?", start, end).
+		Where(ValidTradeAmountCondition+" AND created_at BETWEEN ? AND ?", start, end).
 		Group("order_type").
 		Order("amount desc").
 		Scan(&revenueMix)
@@ -123,7 +123,7 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 	var storeOrderTrend []map[string]interface{}
 	s.db.Table("orders").
 		Select("DATE(created_at) AS date, COALESCE(SUM(total_amount),0) AS amount, COUNT(id) AS count").
-		Where("order_type = ? AND paid_at IS NOT NULL AND total_amount > 0 AND created_at BETWEEN ? AND ?", "store_order", start, end).
+		Where("order_type = ? AND "+ValidTradeAmountCondition+" AND created_at BETWEEN ? AND ?", "store_order", start, end).
 		Group("DATE(created_at)").
 		Order("date asc").
 		Scan(&storeOrderTrend)
@@ -135,7 +135,7 @@ func (s *DashboardService) SummaryWithRange(startValue, endValue string) (map[st
 			merchants.status AS status,
 			COUNT(orders.id) AS order_count,
 			COALESCE(SUM(CASE WHEN orders.status = 'closed' THEN 1 ELSE 0 END),0) AS closed_count,
-			COALESCE(SUM(CASE WHEN orders.paid_at IS NOT NULL AND orders.total_amount > 0 THEN orders.total_amount ELSE 0 END),0) AS trade_amount`).
+			`+ValidTradeAmountSumExpression("orders")+` AS trade_amount`).
 		Joins("LEFT JOIN orders ON orders.merchant_id = merchants.id AND orders.order_type = ? AND orders.created_at BETWEEN ? AND ?", "store_order", start, end).
 		Group("merchants.id, merchants.name, merchants.status").
 		Having("COUNT(orders.id) > 0").

@@ -6,6 +6,17 @@ import "time"
 // arrived after the order became ineligible for automatic fulfillment.
 const PaymentStatusPaidReviewRequired = "paid_review_required"
 
+// OrderChannel records where a store order came from. It is a plain
+// varchar column on orders (v11): no database CHECK constraint, because a
+// CHECK on the v1 orders table would change every pinned historical schema
+// fingerprint. The allowed set is enforced in service code instead
+// (see service.ValidOrderChannel).
+const (
+	OrderChannelStoreQR = "store_qr" // customer scanned the store QR code
+	OrderChannelTable   = "table"    // table-QR checkout (table_order_details)
+	OrderChannelShare   = "share"    // order placed through a share link/code
+)
+
 type Order struct {
 	BaseModel
 	OrderNo                  string                                 `gorm:"size:50;uniqueIndex" json:"order_no"`
@@ -45,6 +56,7 @@ type Order struct {
 	CustomerRating           int                                    `gorm:"default:0" json:"customer_rating"`
 	CustomerReview           string                                 `gorm:"size:1000" json:"customer_review"`
 	ReviewedAt               *time.Time                             `json:"reviewed_at"`
+	Channel                  string                                 `gorm:"size:24;not null;default:store_qr" json:"channel"`
 	ShareCode                string                                 `gorm:"size:40;index" json:"share_code"`
 	OperationLogs            string                                 `gorm:"type:text" json:"operation_logs"`
 	Status                   string                                 `gorm:"size:20;default:pending" json:"status"`
@@ -84,4 +96,23 @@ type RefundRecord struct {
 	OperatorID         uint    `json:"operator_id"`
 	Status             string  `gorm:"size:20;default:success;index" json:"status"`
 	RawPayload         string  `gorm:"type:text" json:"raw_payload"`
+}
+
+// OrderItem is one priced line of a store order (schema v11 table
+// order_items). Amounts are in the same unit as Order.TotalAmount (cents).
+// ProductNameSnapshot freezes the product name at order time; the live
+// product name may change later. The table is the source for per-product
+// sales aggregation. Rows are not yet written by the order-creation paths:
+// populating order_items from the order Items JSON at creation time is the
+// next step; the table itself ships empty for historical orders.
+type OrderItem struct {
+	BaseModel
+	OrderID             uint          `gorm:"not null;index" json:"order_id"`
+	Order               Order         `json:"order,omitempty"`
+	ProductID           uint          `gorm:"not null;index" json:"product_id"`
+	Product             *StoreProduct `json:"product,omitempty"`
+	ProductNameSnapshot string        `gorm:"size:128;not null;default:''" json:"product_name_snapshot"`
+	Quantity            int           `gorm:"not null" json:"quantity"`
+	UnitPrice           int64         `gorm:"not null" json:"unit_price"`
+	Amount              int64         `gorm:"not null" json:"amount"`
 }

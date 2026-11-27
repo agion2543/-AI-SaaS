@@ -57,7 +57,7 @@ func TestMySQLTableLabelsV10Migration(t *testing.T) {
 			t.Fatalf("insert synthetic pre-v10 order detail: %v", err)
 		}
 
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+		if result, err := ApplyTableLabelsV10(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact v9 to v10: result=%q err=%v", result, err)
 		}
 		var storedLabel string
@@ -76,6 +76,9 @@ func TestMySQLTableLabelsV10Migration(t *testing.T) {
 		}
 		if result, err := ApplyTableLabelsV10(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("repeat exact v10 migration: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact v10 to v11: result=%q err=%v", result, err)
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v10 upgrade: result=%q err=%v", result, err)

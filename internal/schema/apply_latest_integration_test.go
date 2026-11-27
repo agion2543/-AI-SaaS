@@ -191,6 +191,9 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyTableLabelsV10(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v9 to v10: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyOrderItemsV11(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v10 to v11: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 	})
 
@@ -226,9 +229,12 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyTableLabelsV10(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v9 to v10: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyOrderItemsV11(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v10 to v11: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
-			t.Fatalf("repeat latest v10 migration: result=%q err=%v", result, err)
+			t.Fatalf("repeat latest v11 migration: result=%q err=%v", result, err)
 		}
 	})
 
@@ -352,7 +358,7 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 
 func assertLatestInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -389,6 +395,9 @@ func assertLatestInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, TableLabelsV10Version, TableLabelsV10Checksum).Scan(&v10Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, OrderItemsV11Version, OrderItemsV11Checksum).Scan(&v11Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='admin_users' AND COLUMN_NAME='auth_version' AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='1'`).Scan(&authVersionColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -413,8 +422,14 @@ func assertLatestInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='store_tables' AND COLUMN_NAME='table_label') OR (TABLE_NAME='table_order_details' AND COLUMN_NAME='table_label_snapshot'))`).Scan(&tableLabelColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 39 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || authVersionColumns != 1 || otpColumns != 2 || emailOTPColumns != 2 || productPricingColumns != 4 || platformExpenseColumns != 10 || platformExpenseReversalColumns != 9 || tableOrderingColumns != 34 || tableLabelColumns != 2 {
-		t.Fatalf("latest inventory tables=%d triggers=%d v1-v10 ledger=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d auth_version=%d sms_otp_columns=%d email_otp_columns=%d product_pricing_columns=%d platform_expense_columns=%d platform_expense_reversal_columns=%d table_ordering_columns=%d label_columns=%d, want 39,10,ten applied rows and 1/2/2/4/10/9/34/2 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='order_items'`).Scan(&orderItemsColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='orders' AND COLUMN_NAME='channel' AND COLUMN_TYPE='varchar(24)' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='store_qr'`).Scan(&orderChannelColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 40 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || authVersionColumns != 1 || otpColumns != 2 || emailOTPColumns != 2 || productPricingColumns != 4 || platformExpenseColumns != 10 || platformExpenseReversalColumns != 9 || tableOrderingColumns != 34 || tableLabelColumns != 2 || orderItemsColumns != 9 || orderChannelColumns != 1 {
+		t.Fatalf("latest inventory tables=%d triggers=%d v1-v11 ledger=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d auth_version=%d sms_otp_columns=%d email_otp_columns=%d product_pricing_columns=%d platform_expense_columns=%d platform_expense_reversal_columns=%d table_ordering_columns=%d label_columns=%d order_items_columns=%d order_channel_columns=%d, want 40,10,eleven applied rows and 1/2/2/4/10/9/34/2/9/1 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns)
 	}
 }
 

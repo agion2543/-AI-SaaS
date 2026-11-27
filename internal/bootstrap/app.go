@@ -95,6 +95,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AdminUser{},
 		&model.MembershipPackage{},
 		&model.Order{},
+		&model.OrderItem{},
 		&model.PaymentRecord{},
 		&model.RefundRecord{},
 		&model.RefundReconciliationAudit{},

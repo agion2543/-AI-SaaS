@@ -241,6 +241,15 @@ func verifyWholesaleRetailHistoricalFingerprints(ctx context.Context, conn *sql.
 }
 
 func verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, additionalTables, additionalTriggers []string) error {
+	return verifyWholesaleRetailHistoricalFingerprintsExcludingColumns(ctx, conn, base, v2, v3, v4, v5, additionalTables, additionalTriggers, nil)
+}
+
+// verifyWholesaleRetailHistoricalFingerprintsExcludingColumns is the
+// column-aware form of the v1-v5 historical fingerprint check. Later
+// migrations that add a column to a pre-existing table (rather than a whole
+// new table) must pass that column here, otherwise the stored v1-v5
+// fingerprints can never match again.
+func verifyWholesaleRetailHistoricalFingerprintsExcludingColumns(ctx context.Context, conn *sql.Conn, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, additionalTables, additionalTriggers []string, additionalColumns []schemaColumn) error {
 	otpColumns := []schemaColumn{
 		{table: "verification_codes", column: "code_hash"},
 		{table: "verification_codes", column: "failed_attempts"},
@@ -265,7 +274,10 @@ func verifyWholesaleRetailHistoricalFingerprintsExcluding(ctx context.Context, c
 		{version: v4.version, checksum: v4.checksum, label: "v4", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: append([]schemaColumn{{table: "email_verification_codes", column: "code_hash"}, {table: "email_verification_codes", column: "failed_attempts"}}, v6Columns...)},
 		{version: v5.version, checksum: v5.checksum, label: "v5", excludedTables: additionalTables, excludedTriggers: additionalTriggers, excludedColumns: v6Columns},
 	} {
-		actual, err := schemaFingerprintExcludingColumns(ctx, conn, check.excludedTables, check.excludedTriggers, check.excludedColumns)
+		// Later columns (e.g. orders.channel from v11) postdate every
+		// fingerprint checked here, so they are excluded from all of them.
+		excludedColumns := append(append([]schemaColumn(nil), check.excludedColumns...), additionalColumns...)
+		actual, err := schemaFingerprintExcludingColumns(ctx, conn, check.excludedTables, check.excludedTriggers, excludedColumns)
 		if err != nil {
 			return fmt.Errorf("compute immutable %s schema fingerprint: %w", check.label, err)
 		}
