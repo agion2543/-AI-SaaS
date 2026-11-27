@@ -440,6 +440,13 @@ func (s *TableOrderingService) Checkout(sessionID uint, tableCode string, req dt
 		if err := tx.Preload("Merchant").First(&store, session.StoreID).Error; err != nil || store.Status != "active" || !store.IsOpen || store.Merchant.Status != "active" {
 			return errors.New("门店当前不接收新点单")
 		}
+		// 维护进行中时拦截新下单（本桌已有结算订单的分支在前面已直接返回，
+		// 在途订单不受影响）。
+		if blocked, plan, err := MaintenanceBlocksModule(tx, MaintenanceModuleOrdering); err != nil {
+			return err
+		} else if blocked {
+			return MaintenanceOrderBlockError(plan)
+		}
 		var cartItems []model.TableCartItem
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("session_id = ?", session.ID).Order("product_id ASC").Find(&cartItems).Error; err != nil {
 			return err

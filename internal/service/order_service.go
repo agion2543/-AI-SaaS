@@ -181,6 +181,12 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 	if store.Status != "active" || !store.IsOpen || store.Merchant.Status != "active" {
 		return nil, errors.New("store is unavailable")
 	}
+	// 维护进行中时拦截新下单（在途订单/支付/退款不受影响，继续完成）。
+	if blocked, plan, err := MaintenanceBlocksModule(s.db, MaintenanceModuleOrdering); err != nil {
+		return nil, err
+	} else if blocked {
+		return nil, MaintenanceOrderBlockError(plan)
+	}
 	if req.CustomerPhone != "" && !isValidMainlandPhone(normalizePhone(req.CustomerPhone)) {
 		return nil, errors.New("customer phone must be 11 digits")
 	}
