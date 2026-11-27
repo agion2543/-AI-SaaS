@@ -168,7 +168,7 @@ func TestValidateRejectsInvalidOrWildcardTrustedProxies(t *testing.T) {
 	}
 }
 
-func TestLoadDBAutoMigrateDefaultsEnabledAndCanBeDisabled(t *testing.T) {
+func TestLoadDBAutoMigrateDefaultsDisabledAndCanBeEnabled(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DB_AUTO_MIGRATE", "")
 
@@ -176,17 +176,17 @@ func TestLoadDBAutoMigrateDefaultsEnabledAndCanBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with default DB_AUTO_MIGRATE: %v", err)
 	}
-	if !cfg.DBAutoMigrate {
-		t.Fatal("DB_AUTO_MIGRATE should default to true")
+	if cfg.DBAutoMigrate {
+		t.Fatal("DB_AUTO_MIGRATE should default to false: the versioned schema migrator is the single schema path")
 	}
 
-	t.Setenv("DB_AUTO_MIGRATE", "false")
+	t.Setenv("DB_AUTO_MIGRATE", "true")
 	cfg, err = Load()
 	if err != nil {
-		t.Fatalf("Load with DB_AUTO_MIGRATE=false: %v", err)
+		t.Fatalf("Load with DB_AUTO_MIGRATE=true: %v", err)
 	}
-	if cfg.DBAutoMigrate {
-		t.Fatal("DB_AUTO_MIGRATE=false should disable app-side AutoMigrate")
+	if !cfg.DBAutoMigrate {
+		t.Fatal("DB_AUTO_MIGRATE=true should enable app-side AutoMigrate")
 	}
 }
 

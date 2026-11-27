@@ -35,6 +35,9 @@ func NewApplication() (*Application, error) {
 		return nil, err
 	}
 
+	// AutoMigrate is off by default (see config): the versioned schema
+	// migrator is the single schema path. This branch runs only when
+	// DB_AUTO_MIGRATE is explicitly set to true for a throwaway local DB.
 	if cfg.DBAutoMigrate {
 		if err := autoMigrate(db); err != nil {
 			return nil, err

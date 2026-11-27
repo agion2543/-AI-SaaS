@@ -86,7 +86,7 @@ python3 scripts/preflight-production-deploy.py
 
 ## 4. 新数据库首次安装
 
-仅将下面的独立 Compose 文件用于**有意创建全新数据库**的安装。它不挂载 `sql/init.sql`，使用专属卷 `saas_fresh_install_v1_mysql_data`，先等待 MySQL 健康，再运行版本化迁移；只有迁移成功后才启动 API。该路径将应用侧 `DB_AUTO_MIGRATE` 设为 `false`，避免 GORM AutoMigrate 成为第二个 schema 管理入口。不要把它指向任何已有数据库或旧数据卷；旧库升级仍不支持。
+仅将下面的独立 Compose 文件用于**有意创建全新数据库**的安装。它不挂载 `sql/init.sql`，使用专属卷 `saas_fresh_install_v1_mysql_data`，先等待 MySQL 健康，再运行版本化迁移；只有迁移成功后才启动 API。该路径将应用侧 `DB_AUTO_MIGRATE` 设为 `false`，避免 GORM AutoMigrate 成为第二个 schema 管理入口。不要把它指向任何已有数据库或旧数据卷；旧库升级仍不支持。本地开发默认 Compose（`docker-compose.yml`）同样先跑 `schema-migrate`、再启动 backend，`DB_AUTO_MIGRATE=false` 且保留初始数据种子；旧默认 Compose 建出的开发卷须删卷重建，详见[数据库迁移现状与安全边界](database-migration-status.md)中的默认开发 Compose 一节。
 
 ```bash
 docker compose -p saas-fresh-v1 -f docker-compose.new-install.yml up -d --build

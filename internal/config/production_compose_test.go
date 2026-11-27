@@ -26,6 +26,68 @@ type composeService struct {
 	} `yaml:"healthcheck"`
 }
 
+// UnmarshalYAML accepts the Compose spellings used across the repo: command
+// as a single string or a list, and depends_on as a list of service names or
+// a map of service to condition. The gate assertions only care about the
+// schema-migrate service command and the backend's dependency condition.
+func (s *composeService) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		Command     yaml.Node      `yaml:"command"`
+		Environment map[string]any `yaml:"environment"`
+		DependsOn   yaml.Node      `yaml:"depends_on"`
+		Healthcheck struct {
+			Test []string `yaml:"test"`
+		} `yaml:"healthcheck"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	s.Environment = raw.Environment
+	s.Healthcheck = raw.Healthcheck
+
+	if raw.Command.Kind != 0 {
+		switch raw.Command.Kind {
+		case yaml.ScalarNode:
+			var command string
+			if err := raw.Command.Decode(&command); err != nil {
+				return err
+			}
+			s.Command = []string{command}
+		case yaml.SequenceNode:
+			if err := raw.Command.Decode(&s.Command); err != nil {
+				return err
+			}
+		default:
+			return &yaml.TypeError{Errors: []string{"command must be a string or a list of strings"}}
+		}
+	}
+
+	s.DependsOn = map[string]struct {
+		Condition string `yaml:"condition"`
+	}{}
+	if raw.DependsOn.Kind != 0 {
+		switch raw.DependsOn.Kind {
+		case yaml.MappingNode:
+			if err := raw.DependsOn.Decode(&s.DependsOn); err != nil {
+				return err
+			}
+		case yaml.SequenceNode:
+			var names []string
+			if err := raw.DependsOn.Decode(&names); err != nil {
+				return err
+			}
+			for _, name := range names {
+				s.DependsOn[name] = struct {
+					Condition string `yaml:"condition"`
+				}{}
+			}
+		default:
+			return &yaml.TypeError{Errors: []string{"depends_on must be a list or a map"}}
+		}
+	}
+	return nil
+}
+
 func readProductionCompose(t *testing.T, name string) productionCompose {
 	t.Helper()
 
@@ -51,6 +113,7 @@ func readProductionCompose(t *testing.T, name string) productionCompose {
 
 func TestProductionComposeUsesVersionedMigrationGate(t *testing.T) {
 	for _, name := range []string{
+		"docker-compose.yml",
 		"docker-compose.prod.yml",
 		"docker-compose.new-install.yml",
 		"docker-compose.managed.yml",
@@ -66,16 +129,16 @@ func TestProductionComposeUsesVersionedMigrationGate(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s has no backend service", name)
 			}
-				if !isFalse(backend.Environment["DB_AUTO_MIGRATE"]) {
-					t.Fatalf("%s backend must explicitly disable app-side DB_AUTO_MIGRATE", name)
+			if !isFalse(backend.Environment["DB_AUTO_MIGRATE"]) {
+				t.Fatalf("%s backend must explicitly disable app-side DB_AUTO_MIGRATE", name)
+			}
+			if name == "docker-compose.new-install.yml" || name == "docker-compose.yml" {
+				if !isTrue(backend.Environment["INITIAL_DATA_SEED_ENABLED"]) {
+					t.Fatalf("%s backend must explicitly enable initial data seeding", name)
 				}
-				if name == "docker-compose.new-install.yml" {
-					if !isTrue(backend.Environment["INITIAL_DATA_SEED_ENABLED"]) {
-						t.Fatalf("%s backend must explicitly enable initial data seeding", name)
-					}
-				} else if !isFalse(backend.Environment["INITIAL_DATA_SEED_ENABLED"]) {
-					t.Fatalf("%s backend must explicitly disable initial data seeding", name)
-				}
+			} else if !isFalse(backend.Environment["INITIAL_DATA_SEED_ENABLED"]) {
+				t.Fatalf("%s backend must explicitly disable initial data seeding", name)
+			}
 
 			dependency, ok := backend.DependsOn["schema-migrate"]
 			if !ok || dependency.Condition != "service_completed_successfully" {

@@ -1,5 +1,12 @@
 version: "3.9"
 
+# Default (development) Compose. Schema is owned solely by the versioned
+# migrator (v1 -> v10): schema-migrate runs first and backend starts only
+# after it exits successfully. GORM AutoMigrate is explicitly disabled here
+# and is also off by default in the application config. Do not point this
+# file at an existing database or an old AutoMigrate-built volume: the
+# migrator refuses unknown legacy schemas fail-closed. For a fresh start,
+# drop the old dev volume first (docker compose down -v) and start empty.
 services:
   mysql:
     image: mysql:8.0
@@ -12,9 +19,28 @@ services:
       - "3306:3306"
     command:
       - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  schema-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: saas-schema-migrate
+    restart: "no"
+    env_file:
+      - .env
+    command: ["/app/schema-migrate"]
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   backend:
     build:
@@ -23,9 +49,13 @@ services:
     container_name: saas-backend
     restart: unless-stopped
     depends_on:
-      - mysql
+      schema-migrate:
+        condition: service_completed_successfully
     env_file:
       - .env
+    environment:
+      DB_AUTO_MIGRATE: "false"
+      INITIAL_DATA_SEED_ENABLED: "true"
     ports:
       - "8080:8080"
 

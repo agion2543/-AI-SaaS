@@ -8,6 +8,21 @@
 
 这条门禁不代表任意旧库升级已支持或已验证，也不证明历史 SQL 可安全重跑。部署前应备份、停掉旧应用写入，并确认现存数据卷对应的 schema 在受支持范围内；若迁移器拒绝旧库，应保持 API 停止，先取得具体版本的 schema-only 基线并在隔离副本上设计验证方案，不能清账本或套用新安装 Compose。
 
+## 默认开发 Compose：同样走版本化迁移门禁（P0 风险 1 修复）
+
+此前默认 `docker-compose.yml` 是第二条建库路径：它挂载 `sql/init.sql` 并让 backend 以默认开启的 GORM `AutoMigrate` 建 34 张表；之后若同一数据库改走生产/托管 Compose，迁移器会因缺账本、缺触发器、缺 v7/v8 表、多余索引、datetime 精度不同而拒绝，服务无法启动；反向只走 `AutoMigrate` 的部署则根本没有成本表（v7/v8）与退款对账表，相关代码运行时直接报错。此后默认 Compose 与生产/全新安装/托管 Compose 一致，**唯一建库路径是版本化迁移器（v1→v10）**：
+
+- `docker-compose.yml` 增加 `schema-migrate` 服务（与 backend 同一镜像，执行容器内 `/app/schema-migrate`），等待 MySQL healthy 后运行；backend 改为依赖 `schema-migrate` 成功完成（`service_completed_successfully`）后才启动，并显式设置 `DB_AUTO_MIGRATE=false`。同时移除 `sql/init.sql` 挂载（文件保留在仓库中，仅作历史记录，不再由任何 Compose 入口执行），MySQL 增加 healthcheck 与 utf8mb4 字符集/排序规则（与生产 Compose 一致）。
+- 开发种子行为不变：默认 Compose 的 backend 显式设置 `INITIAL_DATA_SEED_ENABLED=true`（与 `docker-compose.new-install.yml` 相同），迁移完成后仍由应用写入初始角色、初始管理员与默认套餐/计划；首次创建管理员仍须在 `.env` 中设置至少 12 位的 `INITIAL_ADMIN_PASSWORD`，未设置时服务拒绝完成新库初始化。
+- 应用配置默认值同步改为 `DB_AUTO_MIGRATE=false`：不经 Compose 直接运行 `./cmd/server` 的裸机启动也不再默认执行 `AutoMigrate`。裸机启动前须先跑一次版本化迁移器（`go run ./cmd/schema-migrate`，读取同一 `MYSQL_DSN`），或仅对一次性本地实验显式设置 `DB_AUTO_MIGRATE=true`；显式开启只适用于可丢弃的本地实验库，绝不用于任何共享或已部署数据库。单元测试内直接调用的 `AutoMigrate`（SQLite 内存夹具）不受此默认值影响。
+- `sql/migrations/*.sql` 与 `migrations/*.sql` 本次未删、未改、未获得任何执行入口：它们仍是历史记录，不是可执行批次；唯一执行建库逻辑的是 `internal/schema/` 迁移器。
+
+**新装流程（默认 Compose）：**空数据卷 → MySQL healthy → `schema-migrate` 按 v1→v10 安装 → backend 启动（`DB_AUTO_MIGRATE=false`）→ 应用种子写入初始数据。`schema-migrate` 与 backend 读取同一个 `.env` 的 `MYSQL_DSN`，Compose 内使用时 DSN 主机须为 `mysql:3306`，密码须与该 Compose 的 MySQL root 密码一致。
+
+**已按 AutoMigrate 建库的老库：明确为旧库升级未支持。**旧默认 Compose 创建的 `mysql_data` 卷（含 `sql/init.sql` 建表或 `AutoMigrate` 建表）属于未知历史结构，迁移器会拒绝，API 保持停止；不提供自动转换、不回填账本、不把旧库静默标成 v1。开发卷只有一条路：确认其中无须保留的业务数据后，`docker compose down -v` 删卷重建（空库全新安装）。任何含真实业务数据的旧库都保持停止，不得删账本、手工补表或强行启动，须按本文“旧数据库升级”一节先取 schema-only 基线、在隔离副本上设计验证方案（另行立项，不属本次修复）。
+
+**失败与回滚：**迁移失败时 `schema-migrate` 容器以非零退出，backend 因 `service_completed_successfully` 依赖绝不启动；fail-closed 不代表自动回滚，DDL 中途失败可能留下 `applying` 账本或部分对象，此时不要删账本、手工补表或强行启动 API，应先停止操作并从已验证备份恢复，或在隔离副本调查（与生产 Compose 相同）。
+
 ## 独立版本化部署入口与支持状态
 
 `docker-compose.managed.yml` 是独立 MySQL 的显式版本化部署入口：它不定义 MySQL 服务、数据卷或 `sql/init.sql`/历史 SQL 挂载，而是使用 `.env.production` 中的 `MYSQL_DSN` 指向已经存在、容器可达的目标数据库。该数据库账号需具备当前迁移所需的 schema DDL 权限。后端设置 `DB_AUTO_MIGRATE=false` 和 `INITIAL_DATA_SEED_ENABLED=false`，并且只有 `/app/schema-migrate` 成功退出后才会启动；默认生产 Compose 也显式关闭这两项。种子关闭阻止启动时更新 `super_admin` 角色、创建管理员或插入默认会员套餐/商家计划。应用配置默认仍开启初始数据种子，因此全新安装仍应使用 `docker-compose.new-install.yml`；managed Compose 虽然接受空 schema，但不会创建初始管理员或默认套餐。

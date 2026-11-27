@@ -27,7 +27,7 @@ type Config struct {
 	InitialAdminPass               string
 	RateLimitPerMinute             int
 	MySQLDSN                       string
-	DBAutoMigrate                  bool
+	DBAutoMigrate                  bool // Defaults to false: the versioned schema migrator is the single schema path.
 	InitialDataSeedEnabled         bool
 	FrontendURL                    string
 	AlipaySandbox                  bool
@@ -49,6 +49,10 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	// DB_AUTO_MIGRATE defaults to false: the versioned schema migrator
+	// (cmd/schema-migrate, internal/schema v1->v10) is the single schema
+	// path. AutoMigrate is an explicit opt-in only (DB_AUTO_MIGRATE=true)
+	// for throwaway local experiments, never for a shared or deployed DB.
 	cfg := &Config{
 		AppName:                        getEnv("APP_NAME", "SaaS Billing Platform"),
 		AppEnv:                         getEnv("APP_ENV", "development"),
@@ -64,7 +68,7 @@ func Load() (*Config, error) {
 		OTPSendRateLimitPerIPPerMinute: getEnvAsInt("OTP_SEND_RATE_LIMIT_PER_IP_PER_MINUTE", DefaultOTPSendRateLimitPerIPPerMinute),
 		TrustedProxies:                 parseTrustedProxyList(getEnv("TRUSTED_PROXIES", "")),
 		MySQLDSN:                       getEnv("MYSQL_DSN", "root:123456@tcp(127.0.0.1:3306)/saas_billing?charset=utf8mb4&parseTime=True&loc=Local"),
-		DBAutoMigrate:                  getEnvAsBool("DB_AUTO_MIGRATE", true),
+		DBAutoMigrate:                  getEnvAsBool("DB_AUTO_MIGRATE", false),
 		InitialDataSeedEnabled:         getEnvAsBool("INITIAL_DATA_SEED_ENABLED", true),
 		FrontendURL:                    getEnv("FRONTEND_URL", "http://localhost:5173"),
 		AlipaySandbox:                  getEnvAsBool("ALIPAY_SANDBOX", true),
