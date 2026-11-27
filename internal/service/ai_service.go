@@ -61,6 +61,8 @@ func (s *AIService) Generate(ctx context.Context, req AIRequest) (*AIResult, err
 type AIRequest struct {
 	SystemPrompt string `json:"system_prompt"`
 	UserPrompt   string `json:"user_prompt"`
+	// Model 非空时覆盖配置默认模型（预算降级策略用）；空则用配置模型。
+	Model string `json:"model,omitempty"`
 }
 
 type AIResult struct {
@@ -71,6 +73,7 @@ type AIResult struct {
 	Fallback           bool              `json:"fallback"`
 	PromptTokens       int               `json:"prompt_tokens"`
 	CompletionTokens   int               `json:"completion_tokens"`
+	CachedTokens       int               `json:"cached_tokens"`
 	TotalTokens        int               `json:"total_tokens"`
 	EstimatedCostCents int64             `json:"estimated_cost_cents"`
 }
@@ -121,7 +124,7 @@ func (p *OpenAICompatibleAIProvider) Generate(ctx context.Context, req AIRequest
 		Model    string        `json:"model"`
 		Messages []chatMessage `json:"messages"`
 	}{
-		Model: strings.TrimSpace(p.cfg.AIModel),
+		Model: modelName(req.Model, p.cfg),
 		Messages: []chatMessage{
 			{Role: "system", Content: strings.TrimSpace(req.SystemPrompt)},
 			{Role: "user", Content: strings.TrimSpace(req.UserPrompt)},
@@ -160,6 +163,7 @@ func (p *OpenAICompatibleAIProvider) Generate(ctx context.Context, req AIRequest
 	content := strings.TrimSpace(decoded.Choices[0].Message.Content)
 	promptTokens := approximateTokens(req.SystemPrompt + "\n" + req.UserPrompt)
 	completionTokens := approximateTokens(content)
+	cachedTokens := 0
 	totalTokens := promptTokens + completionTokens
 	if decoded.Usage != nil {
 		if decoded.Usage.PromptTokens > 0 {
@@ -168,6 +172,9 @@ func (p *OpenAICompatibleAIProvider) Generate(ctx context.Context, req AIRequest
 		if decoded.Usage.CompletionTokens > 0 {
 			completionTokens = decoded.Usage.CompletionTokens
 		}
+		if decoded.Usage.PromptTokensDetails != nil && decoded.Usage.PromptTokensDetails.CachedTokens > 0 {
+			cachedTokens = decoded.Usage.PromptTokensDetails.CachedTokens
+		}
 		if decoded.Usage.TotalTokens > 0 {
 			totalTokens = decoded.Usage.TotalTokens
 		} else {
@@ -175,7 +182,7 @@ func (p *OpenAICompatibleAIProvider) Generate(ctx context.Context, req AIRequest
 		}
 	}
 	provider := p.Name()
-	modelName := strings.TrimSpace(p.cfg.AIModel)
+	modelName := modelName(req.Model, p.cfg)
 	return &AIResult{
 		Provider:           provider,
 		Model:              modelName,
@@ -183,9 +190,21 @@ func (p *OpenAICompatibleAIProvider) Generate(ctx context.Context, req AIRequest
 		Fallback:           false,
 		PromptTokens:       promptTokens,
 		CompletionTokens:   completionTokens,
+		CachedTokens:       cachedTokens,
 		TotalTokens:        totalTokens,
 		EstimatedCostCents: estimateAICostCents(provider, modelName, promptTokens, completionTokens),
 	}, nil
+}
+
+// modelName 返回请求指定的模型（预算降级用），否则返回配置模型。
+func modelName(requestModel string, cfg *config.Config) string {
+	if strings.TrimSpace(requestModel) != "" {
+		return strings.TrimSpace(requestModel)
+	}
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.AIModel)
 }
 
 type chatMessage struct {
@@ -198,9 +217,12 @@ type chatResponse struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`

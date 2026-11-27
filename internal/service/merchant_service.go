@@ -1165,6 +1165,14 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	if err != nil {
 		return nil, errors.New("商家不存在")
 	}
+	scenario := strings.TrimSpace(req.Scenario)
+	if scenario == "" {
+		scenario = "裂变海报"
+	}
+	decision, err := s.checkAIAccess(merchantID, scenario)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
 		return nil, err
@@ -1177,10 +1185,6 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	customerTag := strings.TrimSpace(req.CustomerTag)
 	if customerTag == "" {
 		customerTag = "新客与复购顾客"
-	}
-	scenario := strings.TrimSpace(req.Scenario)
-	if scenario == "" {
-		scenario = "裂变海报"
 	}
 	if isProductAIScenario(scenario) {
 		systemPrompt := "你是本地生活商家的 AI 商品运营顾问，擅长餐饮、零售、服务业商品菜单优化。请输出中文，内容必须克制、真实、适合小商家马上编辑落地。优先返回 JSON，格式为：{\"product_title\":\"商品标题建议\",\"product_description\":\"商品描述草稿\",\"main_reason\":\"主推理由\",\"sort_suggestion\":\"排序与上架建议\",\"bundle_suggestion\":\"套餐或组合建议\",\"steps\":[\"步骤1\",\"步骤2\",\"步骤3\"],\"risk_notes\":\"风险提醒\"}。不要输出朋友圈文案，不要把商品优化写成营销海报。"
@@ -1204,7 +1208,7 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 		defer cancel()
 		start := time.Now()
-		result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+		result, err := s.ai.Generate(ctx, AIRequest{Model: decision.DowngradeModel, SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 		if err != nil {
 			_ = s.recordAIUsage(merchantID, scenario, nil, err, time.Since(start))
 			return nil, err
@@ -1234,7 +1238,7 @@ func (s *MerchantService) GenerateAIMarketingCopy(merchantID uint, req dto.Gener
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
 	start := time.Now()
-	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	result, err := s.ai.Generate(ctx, AIRequest{Model: decision.DowngradeModel, SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
 		_ = s.recordAIUsage(merchantID, scenario, nil, err, time.Since(start))
 		return nil, err
@@ -1248,6 +1252,10 @@ func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.Gene
 	merchant, err := s.merchants.FindByID(merchantID)
 	if err != nil {
 		return nil, errors.New("商家不存在")
+	}
+	decision, err := s.checkAIAccess(merchantID, "referral_multi_copy")
+	if err != nil {
+		return nil, err
 	}
 	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
@@ -1320,7 +1328,7 @@ func (s *MerchantService) GenerateAIReferralCopies(merchantID uint, req dto.Gene
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
 	start := time.Now()
-	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	result, err := s.ai.Generate(ctx, AIRequest{Model: decision.DowngradeModel, SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
 		_ = s.recordAIUsage(merchantID, "referral_multi_copy", nil, err, time.Since(start))
 		return nil, err
@@ -1339,6 +1347,10 @@ func (s *MerchantService) GenerateAIShareReview(merchantID uint, req dto.Generat
 	merchant, err := s.merchants.FindByID(merchantID)
 	if err != nil {
 		return nil, errors.New("商家不存在")
+	}
+	decision, err := s.checkAIAccess(merchantID, "share_campaign_review")
+	if err != nil {
+		return nil, err
 	}
 	_, err = s.ensureAIQuota(merchantID)
 	if err != nil {
@@ -1376,7 +1388,7 @@ func (s *MerchantService) GenerateAIShareReview(merchantID uint, req dto.Generat
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.AITimeoutSeconds)*time.Second)
 	defer cancel()
 	start := time.Now()
-	result, err := s.ai.Generate(ctx, AIRequest{SystemPrompt: systemPrompt, UserPrompt: userPrompt})
+	result, err := s.ai.Generate(ctx, AIRequest{Model: decision.DowngradeModel, SystemPrompt: systemPrompt, UserPrompt: userPrompt})
 	if err != nil {
 		_ = s.recordAIUsage(merchantID, "share_campaign_review", nil, err, time.Since(start))
 		return nil, err
@@ -1431,6 +1443,13 @@ func (s *MerchantService) AIQuota(merchantID uint) (map[string]interface{}, erro
 		"model":                firstNonEmpty(s.cfg.AIModel, policy.Model),
 		"estimated_cost_cents": estimatedCost,
 	}, nil
+}
+
+// checkAIAccess 是商家 AI 调用的后端强制门禁：紧急关闭 → 商家预算 → 超额策略。
+// 三个 GenerateAI* 入口都在次数配额之前先调它；门禁拒绝时不产生用量记录，
+// 不消耗当日次数配额。
+func (s *MerchantService) checkAIAccess(merchantID uint, scenario string) (AIAccessDecision, error) {
+	return NewAICostGuard(s.db).CheckMerchantAIAccess(merchantID, scenario)
 }
 
 func (s *MerchantService) ensureAIQuota(merchantID uint) (map[string]interface{}, error) {
@@ -1548,6 +1567,14 @@ func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result
 	if callErr != nil {
 		errorText = trimRunes(callErr.Error(), 500)
 	}
+	// 估算成本优先按价格表（调用时间当时生效价）计算；价格表无该模型生效价
+	// 时回落到 provider 结果自带的内置费率估算。失败调用不记成本。
+	estimatedCost := aiResultCost(result)
+	if result != nil {
+		if cost, _, priced, err := NewAICostGuard(s.db).EstimateAICostCents(provider, modelName, result.PromptTokens, result.CompletionTokens, result.CachedTokens, time.Now()); err == nil && priced {
+			estimatedCost = cost
+		}
+	}
 	log := &model.MerchantAIUsageLog{
 		MerchantID:         merchantID,
 		Scenario:           strings.TrimSpace(scenario),
@@ -1559,8 +1586,9 @@ func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result
 		DurationMS:         int(duration.Milliseconds()),
 		PromptTokens:       aiResultInt(result, "prompt"),
 		CompletionTokens:   aiResultInt(result, "completion"),
+		CachedTokens:       aiResultInt(result, "cached"),
 		TotalTokens:        aiResultInt(result, "total"),
-		EstimatedCostCents: aiResultCost(result),
+		EstimatedCostCents: estimatedCost,
 		UsedAt:             time.Now(),
 	}
 	return s.db.Create(log).Error
@@ -1588,6 +1616,8 @@ func aiResultInt(result *AIResult, field string) int {
 		return result.PromptTokens
 	case "completion":
 		return result.CompletionTokens
+	case "cached":
+		return result.CachedTokens
 	case "total":
 		return result.TotalTokens
 	default:

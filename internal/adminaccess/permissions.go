@@ -226,6 +226,18 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"GET /admin/platform-costs/overview",
 		"POST /admin/platform-costs/expenses",
 		"POST /admin/platform-costs/expenses/:id/reversals",
+		"GET /admin/ai-cost-control/usage-stats",
+		"GET /admin/ai-cost-control/model-prices",
+		"POST /admin/ai-cost-control/model-prices",
+		"POST /admin/ai-cost-control/vendor-bills",
+		"GET /admin/ai-cost-control/vendor-bills",
+		"GET /admin/ai-cost-control/bills/reconciliation",
+		"GET /admin/ai-cost-control/budgets",
+		"GET /admin/ai-cost-control/budgets/:merchantId/status",
+		"PUT /admin/ai-cost-control/budgets/:merchantId",
+		"GET /admin/ai-cost-control/budget-alerts",
+		"GET /admin/ai-cost-control/emergency-switch",
+		"PUT /admin/ai-cost-control/emergency-switch",
 	)
 	return m
 }

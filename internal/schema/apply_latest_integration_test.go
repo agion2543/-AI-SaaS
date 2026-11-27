@@ -358,7 +358,7 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 
 func assertLatestInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns, aiModelPriceColumns, aiVendorBillColumns, aiBudgetColumns, aiBudgetAlertColumns, aiEmergencySwitchColumns, aiUsageLogNewColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +398,9 @@ func assertLatestInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, OrderItemsV11Version, OrderItemsV11Checksum).Scan(&v11Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, AICostControlV12Version, AICostControlV12Checksum).Scan(&v12Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='admin_users' AND COLUMN_NAME='auth_version' AND COLUMN_TYPE='bigint unsigned' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='1'`).Scan(&authVersionColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -428,8 +431,26 @@ func assertLatestInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='orders' AND COLUMN_NAME='channel' AND COLUMN_TYPE='varchar(24)' AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='store_qr'`).Scan(&orderChannelColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 40 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || authVersionColumns != 1 || otpColumns != 2 || emailOTPColumns != 2 || productPricingColumns != 4 || platformExpenseColumns != 10 || platformExpenseReversalColumns != 9 || tableOrderingColumns != 34 || tableLabelColumns != 2 || orderItemsColumns != 9 || orderChannelColumns != 1 {
-		t.Fatalf("latest inventory tables=%d triggers=%d v1-v11 ledger=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d auth_version=%d sms_otp_columns=%d email_otp_columns=%d product_pricing_columns=%d platform_expense_columns=%d platform_expense_reversal_columns=%d table_ordering_columns=%d label_columns=%d order_items_columns=%d order_channel_columns=%d, want 40,10,eleven applied rows and 1/2/2/4/10/9/34/2/9/1 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_model_prices'`).Scan(&aiModelPriceColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_vendor_bills'`).Scan(&aiVendorBillColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='merchant_ai_budgets'`).Scan(&aiBudgetColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='merchant_ai_budget_alerts'`).Scan(&aiBudgetAlertColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_emergency_switch'`).Scan(&aiEmergencySwitchColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='merchant_ai_usage_logs' AND COLUMN_NAME IN ('store_id', 'cached_tokens')`).Scan(&aiUsageLogNewColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 45 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || authVersionColumns != 1 || otpColumns != 2 || emailOTPColumns != 2 || productPricingColumns != 4 || platformExpenseColumns != 10 || platformExpenseReversalColumns != 9 || tableOrderingColumns != 34 || tableLabelColumns != 2 || orderItemsColumns != 9 || orderChannelColumns != 1 || aiModelPriceColumns != 13 || aiVendorBillColumns != 11 || aiBudgetColumns != 8 || aiBudgetAlertColumns != 9 || aiEmergencySwitchColumns != 6 || aiUsageLogNewColumns != 2 {
+		t.Fatalf("latest inventory tables=%d triggers=%d v1-v12 ledger=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d auth_version=%d sms_otp_columns=%d email_otp_columns=%d product_pricing_columns=%d platform_expense_columns=%d platform_expense_reversal_columns=%d table_ordering_columns=%d label_columns=%d order_items_columns=%d order_channel_columns=%d ai_model_price_columns=%d ai_vendor_bill_columns=%d ai_budget_columns=%d ai_budget_alert_columns=%d ai_emergency_switch_columns=%d ai_usage_log_new_columns=%d, want 45,10,twelve applied rows and 1/2/2/4/10/9/34/2/9/1/13/11/8/9/6/2 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, authVersionColumns, otpColumns, emailOTPColumns, productPricingColumns, platformExpenseColumns, platformExpenseReversalColumns, tableOrderingColumns, tableLabelColumns, orderItemsColumns, orderChannelColumns, aiModelPriceColumns, aiVendorBillColumns, aiBudgetColumns, aiBudgetAlertColumns, aiEmergencySwitchColumns, aiUsageLogNewColumns)
 	}
 }
 

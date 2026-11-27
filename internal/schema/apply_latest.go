@@ -14,9 +14,9 @@ import (
 // subscription manual-review v2, administrator auth-version v3, phone OTP
 // safety v4, email OTP safety v5, light wholesale/retail v6, append-only
 // platform expenses v7, expense reversal v8, shared table-ordering v9,
-// merchant table-label v10, and order-items/channel v11 migrations. Existing
-// schemas are accepted only when they are exact managed versions; legacy and
-// unknown databases stay fail-closed.
+// merchant table-label v10, order-items/channel v11, and AI cost-control
+// v12 migrations. Existing schemas are accepted only when they are exact
+// managed versions; legacy and unknown databases stay fail-closed.
 func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 	type migrationStep struct {
 		version string
@@ -33,6 +33,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 		{TableOrderingV9Version, ApplyTableOrderingV9},
 		{TableLabelsV10Version, ApplyTableLabelsV10},
 		{OrderItemsV11Version, ApplyOrderItemsV11},
+		{AICostControlV12Version, ApplyAICostControlV12},
 	}
 	continueFrom := func(version string, prior Result) (Result, error) {
 		current := -1
@@ -72,6 +73,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 	// source schema before it can write, so failed probes leave the database
 	// untouched; a successful probe is then advanced through every later step.
 	probes := []migrationStep{
+		{AICostControlV12Version, ApplyAICostControlV12},
 		{OrderItemsV11Version, ApplyOrderItemsV11},
 		{TableLabelsV10Version, ApplyTableLabelsV10},
 		{TableOrderingV9Version, ApplyTableOrderingV9},
