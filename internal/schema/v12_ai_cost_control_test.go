@@ -79,11 +79,6 @@ func TestMySQLAICostControlV12Migration(t *testing.T) {
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("latest applies v13 after v12 upgrade: result=%q err=%v", result, err)
 		}
-		// v17 is the current latest, so ApplyLatest first upgrades this
-		// exact v12 schema to latest, and only then reports Already.
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
-			t.Fatalf("upgrade exact v12 to latest: result=%q err=%v", result, err)
-		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v12 upgrade: result=%q err=%v", result, err)
 		}

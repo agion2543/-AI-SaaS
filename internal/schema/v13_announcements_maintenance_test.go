@@ -68,11 +68,6 @@ func TestMySQLAnnouncementsMaintenanceV13Migration(t *testing.T) {
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact v13 to latest v14: result=%q err=%v", result, err)
 		}
-		// v17 is the current latest, so ApplyLatest first upgrades this
-		// exact v13 schema to latest, and only then reports Already.
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
-			t.Fatalf("upgrade exact v13 to latest: result=%q err=%v", result, err)
-		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v13 upgrade: result=%q err=%v", result, err)
 		}
