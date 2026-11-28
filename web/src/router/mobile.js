@@ -15,6 +15,7 @@ const MerchantCoupons = () => import('../mobile/merchant/MerchantCoupons.vue')
 const MerchantAI = () => import('../mobile/merchant/MerchantAI.vue')
 const MerchantGroupBuy = () => import('../mobile/merchant/MerchantGroupBuy.vue')
 const MerchantMine = () => import('../mobile/merchant/MerchantMine.vue')
+const MerchantTickets = () => import('../mobile/merchant/MerchantTickets.vue')
 const MerchantSettings = () => import('../mobile/merchant/MerchantSettings.vue')
 const MerchantSubscription = () => import('../mobile/merchant/MerchantSubscription.vue')
 
@@ -50,6 +51,7 @@ const routes = [
       { path: 'coupons', component: MerchantCoupons, name: 'MerchantCoupons' },
       { path: 'ai', component: MerchantAI, name: 'MerchantAI' },
       { path: 'settings', component: MerchantSettings, name: 'MerchantSettings' },
+      { path: 'tickets', component: MerchantTickets, name: 'MerchantTickets', meta: { allowExpiredReadOnly: true } },
       { path: 'subscription', component: MerchantSubscription, name: 'MerchantSubscription', meta: { allowSubscriptionLanding: true } },
     ]
   },
@@ -91,7 +93,7 @@ router.beforeEach(async (to) => {
       // Pending onboarding: only home, mine and subscription are reachable;
       // everything else goes to Mine, where the review status is shown.
       if (merchant?.status === 'pending') {
-        const pendingAllowed = ['/m/merchant/home', '/m/merchant/mine', '/m/merchant/subscription']
+        const pendingAllowed = ['/m/merchant/home', '/m/merchant/mine', '/m/merchant/subscription', '/m/merchant/tickets']
         if (pendingAllowed.includes(to.path)) return true
         return { path: '/m/merchant/mine', query: { redirect: to.fullPath } }
       }

@@ -34,6 +34,7 @@
           <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
           <el-menu-item index="/merchant/ops-dashboard" :disabled="navigationLocked">{{ text.opsDashboard }}</el-menu-item>
           <el-menu-item index="/merchant/announcements" :disabled="subscriptionPaused">{{ text.announcements }}</el-menu-item>
+          <el-menu-item index="/merchant/tickets" :disabled="subscriptionPaused">{{ text.tickets }}</el-menu-item>
           <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
           <el-menu-item index="/merchant/profile" :disabled="subscriptionPaused">{{ text.profile }}</el-menu-item>
         </el-sub-menu>
@@ -107,6 +108,7 @@ const text = {
   ai: 'AI 经营分析',
   opsDashboard: '经营看板',
   announcements: '平台公告',
+  tickets: '我的工单',
   share: '裂变效果报告',
   subscription: '订阅状态 / 续费',
   paymentSettings: '收款设置',

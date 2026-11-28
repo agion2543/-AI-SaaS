@@ -12,6 +12,12 @@
           to="/m/merchant/subscription"
         />
         <van-cell
+          title="我的工单"
+          label="向平台提交问题，查看处理进度与回复"
+          is-link
+          to="/m/merchant/tickets"
+        />
+        <van-cell
           title="账户与设置"
           label="商家资料、账号安全与其他设置"
           is-link

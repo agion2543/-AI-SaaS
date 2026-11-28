@@ -94,3 +94,26 @@ type MerchantFollowUp struct {
 	OperatorID   uint       `gorm:"index" json:"operator_id"`
 	OperatorRole string     `gorm:"size:30" json:"operator_role"`
 }
+
+// SupportTicket is a lightweight merchant→platform service request (v18).
+// Only the latest super-admin reply is kept inline (Reply / RepliedBy /
+// RepliedAt): there is no replies table and no multi-round conversation,
+// so a merchant follow-up question needs a new ticket and an overwritten
+// reply is no longer visible on the ticket row. The status machine is
+// open → in_progress → resolved → closed (open may jump straight to
+// resolved/closed; resolved may reopen to in_progress); only a super-admin
+// may change the status, a merchant may not. Category is one of
+// order/payment/subscription/store/account/other; there is no priority —
+// tickets are handled first-come first-served by submission time.
+type SupportTicket struct {
+	BaseModel
+	MerchantID uint       `gorm:"index;not null" json:"merchant_id"`
+	Merchant   Merchant   `json:"merchant,omitempty"`
+	Title      string     `gorm:"size:120;not null" json:"title"`
+	Content    string     `gorm:"size:1000;not null" json:"content"`
+	Category   string     `gorm:"size:30;not null" json:"category"`
+	Status     string     `gorm:"size:20;default:open;index" json:"status"`
+	Reply      string     `gorm:"size:1000" json:"reply"`
+	RepliedBy  uint       `json:"replied_by"`
+	RepliedAt  *time.Time `json:"replied_at"`
+}

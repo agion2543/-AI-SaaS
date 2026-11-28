@@ -106,6 +106,7 @@ const visibleSections = computed(() => {
     if (isSuperAdmin) items.push(item('/admin/maintenance-plans', '维护计划', '排期维护窗口与在途订单安全'))
     if (isSuperAdmin) items.push(item('/admin/refund-reviews', '退款复核', '超阈值退款通过 / 拒绝与阈值'))
     if (isSuperAdmin) items.push(item('/admin/merchant-reviews', '商家入驻审核', '待审核商家通过 / 拒绝'))
+    if (isSuperAdmin) items.push(item('/admin/support-tickets', '服务工单', '商家服务请求处理与回复'))
     if (isSuperAdmin) items.push(item('/admin/access', '账号与权限', '管理员账号、角色与权限组'))
     sections.push({ title: '系统管理', items })
   } else if (isSuperAdmin) {

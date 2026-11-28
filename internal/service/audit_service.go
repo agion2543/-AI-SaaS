@@ -206,6 +206,12 @@ func auditPurposeForAction(action string) string {
 		return "拒绝商家入驻审核"
 	case "merchant_onboarding_resubmitted":
 		return "重新提交商家入驻审核"
+	case "support_ticket_create":
+		return "商家提交服务工单"
+	case "support_ticket_reply":
+		return "超管回复服务工单"
+	case "support_ticket_status_update":
+		return "更新服务工单状态"
 	case "merchant_subscription_open":
 		return "开通商家订阅"
 	case "merchant_subscription_stop":

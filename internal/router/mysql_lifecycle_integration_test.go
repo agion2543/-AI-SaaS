@@ -324,7 +324,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, v17Rows, v18Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns, supportTicketColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -379,6 +379,12 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.CustomerProfilesV16Version, schema.CustomerProfilesV16Checksum).Scan(&v16Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.MerchantOnboardingV17Version, schema.MerchantOnboardingV17Checksum).Scan(&v17Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.SupportTicketsV18Version, schema.SupportTicketsV18Checksum).Scan(&v18Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -394,8 +400,11 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_profiles'`).Scan(&customerProfileColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 54 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || v14Rows != 1 || v15Rows != 1 || v16Rows != 1 || productPricingColumns != 4 || expenseColumns != 16 || expenseReversalColumns != 9 || tableOrderingColumns != 34 || customerProfileColumns != 15 {
-		t.Fatalf("managed schema inventory tables/triggers/v1-v16=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; customer profile columns=%d; want 54/10/sixteen applied rows and 4/16/9/34/15 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='support_tickets'`).Scan(&supportTicketColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 55 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || v14Rows != 1 || v15Rows != 1 || v16Rows != 1 || v17Rows != 1 || v18Rows != 1 || productPricingColumns != 4 || expenseColumns != 16 || expenseReversalColumns != 9 || tableOrderingColumns != 34 || customerProfileColumns != 15 || supportTicketColumns != 11 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v18=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; customer profile columns=%d; support ticket columns=%d; want 55/10/eighteen applied rows and 4/16/9/34/15/11 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, v17Rows, v18Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns, supportTicketColumns)
 	}
 }
 

@@ -97,6 +97,11 @@ func TestMySQLMerchantOnboardingV17Migration(t *testing.T) {
 		if result, err := ApplyMerchantOnboardingV17(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("repeat exact v17 migration: result=%q err=%v", result, err)
 		}
+		// v18 is the current latest, so ApplyLatest first upgrades this
+		// exact v17 schema to latest, and only then reports Already.
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact v17 to latest: result=%q err=%v", result, err)
+		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v17 upgrade: result=%q err=%v", result, err)
 		}

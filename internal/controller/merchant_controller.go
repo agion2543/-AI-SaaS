@@ -391,6 +391,65 @@ func (ctl *MerchantController) ResubmitOnboarding(c *gin.Context) {
 	utils.Success(c, gin.H{"merchant": merchant, "resubmitted": true})
 }
 
+// CreateSupportTicket files a merchant service request (P3-2, v18). The
+// merchant identity comes from the token only; the route sits outside the
+// subscription-protected group so an expired merchant can still reach
+// support when it needs help most.
+func (ctl *MerchantController) CreateSupportTicket(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	var req dto.CreateSupportTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ticket, err := ctl.merchant.CreateSupportTicket(merchantID, req, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "support_ticket_create", TargetType: "support_ticket", MerchantID: &merchantID},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ticket": ticket})
+}
+
+// ListSupportTickets returns the merchant's own tickets, newest first
+// (P3-2, v18). The scope is forced in the service layer.
+func (ctl *MerchantController) ListSupportTickets(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
+	rows, total, err := ctl.merchant.ListSupportTickets(merchantID, page, pageSize)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": rows, "total": total})
+}
+
+// GetSupportTicket returns one of the merchant's own tickets (P3-2,
+// v18). A ticket of another merchant reads as "工单不存在".
+func (ctl *MerchantController) GetSupportTicket(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	ticket, err := ctl.merchant.GetSupportTicket(merchantID, uint(atoi(c.Param("id"))))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ticket": ticket})
+}
+
 func (ctl *MerchantController) PaymentConfig(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {

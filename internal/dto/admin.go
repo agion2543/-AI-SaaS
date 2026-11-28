@@ -137,3 +137,15 @@ type CreateMerchantFollowUpRequest struct {
 type UpdateMerchantFollowUpStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=open closed"`
 }
+
+// UpdateSupportTicketStatusRequest is a super-admin-only ticket transition
+// (P3-2, v18). The allowed transitions are enforced in the service layer.
+type UpdateSupportTicketStatusRequest struct {
+	Status string `json:"status" binding:"required"`
+}
+
+// ReplySupportTicketRequest is a super-admin-only reply to a ticket
+// (P3-2, v18). Only the latest reply is stored on the ticket row.
+type ReplySupportTicketRequest struct {
+	Reply string `json:"reply" binding:"required"`
+}

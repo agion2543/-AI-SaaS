@@ -148,3 +148,12 @@ type ReviewMerchantPaymentConfigRequest struct {
 	AuditStatus string `json:"audit_status" binding:"required,oneof=pending approved rejected"`
 	AuditRemark string `json:"audit_remark"`
 }
+
+// CreateSupportTicketRequest is a merchant service request (P3-2, v18).
+// Category is validated against the whitelist in the service layer;
+// title/content length limits are enforced there too (rune counts).
+type CreateSupportTicketRequest struct {
+	Title    string `json:"title" binding:"required"`
+	Content  string `json:"content" binding:"required"`
+	Category string `json:"category" binding:"required"`
+}

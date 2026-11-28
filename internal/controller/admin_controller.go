@@ -600,6 +600,70 @@ func (ctl *AdminController) UpdateMerchantFollowUpStatus(c *gin.Context) {
 	utils.Success(c, gin.H{"follow_up": row, "updated": true})
 }
 
+// ListSupportTickets returns the super-admin work queue, oldest first
+// (P3-2, v18). Super-admin only; optional status / merchant_id filters.
+func (ctl *AdminController) ListSupportTickets(c *gin.Context) {
+	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
+	rows, total, err := ctl.admin.ListSupportTickets(c.Query("status"), c.Query("category"), uint(atoi(c.Query("merchant_id"))), page, pageSize)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"list": rows, "total": total})
+}
+
+// GetSupportTicket returns one ticket with its merchant (P3-2, v18).
+func (ctl *AdminController) GetSupportTicket(c *gin.Context) {
+	ticket, err := ctl.admin.GetSupportTicket(uint(atoi(c.Param("id"))))
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ticket": ticket})
+}
+
+// UpdateSupportTicketStatus moves a ticket along the super-admin-only
+// status machine (P3-2, v18).
+func (ctl *AdminController) UpdateSupportTicketStatus(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.UpdateSupportTicketStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ticket, err := ctl.admin.UpdateSupportTicketStatus(id, req.Status, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "support_ticket_status_update", TargetType: "support_ticket"},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ticket": ticket, "updated": true})
+}
+
+// ReplySupportTicket stores the latest super-admin reply on the ticket
+// row (P3-2, v18). Only one reply is kept; a new reply overwrites the
+// previous one, and the overwritten text is not recoverable from the
+// audit log (the audit minimization design stores only a purpose).
+func (ctl *AdminController) ReplySupportTicket(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.ReplySupportTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ticket, err := ctl.admin.ReplySupportTicket(id, req.Reply, c.GetUint("user_id"), service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "support_ticket_reply", TargetType: "support_ticket"},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"ticket": ticket, "replied": true})
+}
+
 func (ctl *AdminController) OpenMerchantSubscription(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
 	var req dto.OpenMerchantSubscriptionRequest

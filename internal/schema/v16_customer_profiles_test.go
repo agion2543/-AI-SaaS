@@ -125,7 +125,7 @@ func TestMySQLCustomerProfilesV16Migration(t *testing.T) {
 		if result, err := ApplyCustomerProfilesV16(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("repeat exact v16 migration: result=%q err=%v", result, err)
 		}
-		// v17 is the current latest, so ApplyLatest first upgrades this
+		// v18 is the current latest, so ApplyLatest first upgrades this
 		// exact v16 schema to latest, and only then reports Already.
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact v16 to latest: result=%q err=%v", result, err)
