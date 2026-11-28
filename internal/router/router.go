@@ -112,6 +112,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantLegacy.POST("/subscription/orders/:orderNo/paid", merchantCtl.MarkSubscriptionOrderPaid)
 			merchantLegacy.POST("/subscription/cards/redeem", merchantCtl.RedeemSubscriptionCard)
 			merchantLegacy.PUT("/password", merchantCtl.ChangePassword)
+			merchantLegacy.PUT("/onboarding/resubmit", merchantCtl.ResubmitOnboarding)
 			merchantProtected := merchantLegacy.Group("")
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
@@ -184,6 +185,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminLegacy.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
 			adminLegacy.PUT("/merchants/:id/payment-config", merchantCtl.ReviewPaymentConfig)
 			adminLegacy.PUT("/merchants/:id/status", adminCtl.UpdateMerchantStatus)
+			adminLegacy.POST("/merchants/:id/review", adminCtl.ReviewMerchantOnboarding)
 			adminLegacy.POST("/merchants/:id/subscription/open", adminCtl.OpenMerchantSubscription)
 			adminLegacy.POST("/merchants/:id/subscription/pause", adminCtl.PauseMerchantSubscription)
 			adminLegacy.POST("/merchants/:id/subscription/resume", adminCtl.ResumeMerchantSubscription)
@@ -324,6 +326,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			merchantGroup.POST("/subscription/orders/:orderNo/paid", merchantCtl.MarkSubscriptionOrderPaid)
 			merchantGroup.POST("/subscription/cards/redeem", merchantCtl.RedeemSubscriptionCard)
 			merchantGroup.PUT("/password", merchantCtl.ChangePassword)
+			merchantGroup.PUT("/onboarding/resubmit", merchantCtl.ResubmitOnboarding)
 			merchantProtected := merchantGroup.Group("")
 			merchantProtected.Use(middleware.MerchantSubscriptionMiddleware(db))
 			{
@@ -471,6 +474,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
 			adminGroup.PUT("/merchants/:id/payment-config", merchantCtl.ReviewPaymentConfig)
 			adminGroup.PUT("/merchants/:id/status", adminCtl.UpdateMerchantStatus)
+			adminGroup.POST("/merchants/:id/review", adminCtl.ReviewMerchantOnboarding)
 			adminGroup.POST("/merchants/:id/subscription/open", adminCtl.OpenMerchantSubscription)
 			adminGroup.POST("/merchants/:id/subscription/pause", adminCtl.PauseMerchantSubscription)
 			adminGroup.POST("/merchants/:id/subscription/resume", adminCtl.ResumeMerchantSubscription)

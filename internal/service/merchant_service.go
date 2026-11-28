@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
@@ -118,7 +119,7 @@ func (s *MerchantService) Register(req dto.MerchantRegisterRequest) (*model.Merc
 		merchant = &model.Merchant{
 			Name:         req.Name,
 			ContactPhone: req.ContactPhone,
-			Status:       "active",
+			Status:       "pending",
 		}
 		if err := merchantRepo.Create(merchant); err != nil {
 			return err
@@ -139,6 +140,23 @@ func (s *MerchantService) Register(req dto.MerchantRegisterRequest) (*model.Merc
 			return err
 		}
 
+		// The registration itself is the onboarding submission: it is
+		// recorded in the same transaction as the merchant/user rows.
+		merchantID := merchant.ID
+		if err := AppendAuditTx(tx, AuditEvent{
+			Actor: AuditActor{ID: user.ID, Type: "merchant_admin"},
+			Input: AuditRecordInput{
+				Action:     "merchant_onboarding_submitted",
+				TargetType: "merchant",
+				TargetID:   merchant.ID,
+				TargetName: merchant.Name,
+				MerchantID: &merchantID,
+				Detail:     map[string]interface{}{"status": "pending"},
+			},
+		}); err != nil {
+			return err
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -147,6 +165,54 @@ func (s *MerchantService) Register(req dto.MerchantRegisterRequest) (*model.Merc
 
 	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return merchant, user, token, err
+}
+
+// ResubmitOnboarding clears a rejection back to a clean pending state. It
+// is only callable while the merchant is pending AND carries a rejection
+// record (non-empty review reason with a review time); editing merchant
+// info does not resubmit. NOTE: AppendAuditTx stores only the audit
+// purpose, not the event Detail, so the previous reason is not recoverable
+// from the audit row after it is cleared here — only the rejection and the
+// resubmission (actor, time, merchant) remain on record. The service still
+// passes previous_reason in the audit event Detail, matching the refund
+// review precedent.
+func (s *MerchantService) ResubmitOnboarding(merchantID uint, audit ...AuditEvent) (*model.Merchant, error) {
+	var merchant model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&merchant, merchantID).Error; err != nil {
+			return errors.New("商家信息不存在")
+		}
+		if merchant.Status != "pending" {
+			return errors.New("当前商家不是待审核状态，无需重新提交")
+		}
+		if strings.TrimSpace(merchant.ReviewReason) == "" || merchant.ReviewedAt == nil {
+			return errors.New("当前没有被拒绝的审核记录，无需重新提交")
+		}
+		previousReason := merchant.ReviewReason
+		merchant.ReviewReason = ""
+		merchant.ReviewedBy = 0
+		merchant.ReviewedAt = nil
+		if err := tx.Save(&merchant).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant"
+			event.Input.TargetID = merchant.ID
+			event.Input.TargetName = merchant.Name
+			event.Input.MerchantID = &merchant.ID
+			if event.Input.Detail == nil {
+				event.Input.Detail = map[string]interface{}{}
+			}
+			event.Input.Detail["previous_reason"] = previousReason
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &merchant, nil
 }
 
 func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, *model.User, string, error) {
@@ -263,6 +329,9 @@ func (s *MerchantService) RedeemSubscriptionCard(userID, merchantID uint, req dt
 	merchant, err := s.merchants.FindByID(merchantID)
 	if err != nil {
 		return nil, nil, errors.New("商家信息不存在")
+	}
+	if merchant.Status == "pending" {
+		return nil, nil, errors.New("商家正在审核中，审核通过后才能兑换卡密开通订阅")
 	}
 	durationDays := card.Package.DurationDays
 	if durationDays <= 0 && card.Package.IsLifetime {
@@ -449,6 +518,9 @@ func (s *MerchantService) CreateSubscriptionOrder(userID, merchantID uint, req d
 	}
 	if merchant.Status == "suspended" {
 		return nil, errors.New("\u5546\u5bb6\u5df2\u88ab\u7981\u7528")
+	}
+	if merchant.Status == "pending" {
+		return nil, errors.New("商家正在审核中，审核通过后才能开通订阅")
 	}
 	plan, err := s.plans.FindByID(req.PlanID)
 	if err != nil {
@@ -705,8 +777,12 @@ func (s *MerchantService) CreateStore(merchantID uint, req dto.CreateStoreReques
 		return nil, errors.New("\u8054\u7cfb\u7535\u8bdd\u5fc5\u987b\u4e3a 11 \u4f4d\u6570\u5b57")
 	}
 
-	if _, err := s.merchants.FindByID(merchantID); err != nil {
-		return nil, errors.New("\u5546\u5bb6\u4fe1\u606f\u4e0d\u5b58\u5728")
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家信息不存在")
+	}
+	if merchant.Status != "active" {
+		return nil, errors.New("商家正在审核中，审核通过后才能创建门店")
 	}
 	if _, err := s.stores.FindByMerchantAndName(merchantID, name); err == nil {
 		return nil, errors.New("\u540c\u4e00\u5546\u5bb6\u4e0b\u95e8\u5e97\u540d\u79f0\u4e0d\u80fd\u91cd\u590d")
@@ -848,6 +924,13 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 	if status != "active" && status != "inactive" {
 		return nil, errors.New("\u5546\u54c1\u72b6\u6001\u65e0\u6548")
 	}
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家信息不存在")
+	}
+	if merchant.Status != "active" {
+		return nil, errors.New("商家正在审核中，审核通过后才能新建或修改商品")
+	}
 	if _, err := s.stores.FindByMerchantAndID(merchantID, req.StoreID); err != nil {
 		return nil, errors.New("\u95e8\u5e97\u4e0d\u5b58\u5728")
 	}
@@ -885,7 +968,7 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 			priceTiers = append(priceTiers, model.ProductPriceTier{MinQuantity: tier.MinQuantity, Price: tier.Price})
 		}
 	}
-	salesUnit, specification, minimumOrderQuantity, priceTiers, err := normalizeStoreProductPricing(salesUnit, specification, minimumOrderQuantity, priceTiers, req.Price)
+	salesUnit, specification, minimumOrderQuantity, priceTiers, err = normalizeStoreProductPricing(salesUnit, specification, minimumOrderQuantity, priceTiers, req.Price)
 	if err != nil {
 		return nil, err
 	}
@@ -966,6 +1049,13 @@ func (s *MerchantService) SavePromotion(merchantID, promotionID uint, req dto.Sa
 	}
 	if promotionType == "discount" && (req.DiscountRate <= 0 || req.DiscountRate >= 100) {
 		return nil, errors.New("\u6298\u6263\u6d3b\u52a8\u9700\u8981\u586b\u5199 1-99 \u4e4b\u95f4\u7684\u6298\u7387")
+	}
+	merchant, err := s.merchants.FindByID(merchantID)
+	if err != nil {
+		return nil, errors.New("商家信息不存在")
+	}
+	if merchant.Status != "active" {
+		return nil, errors.New("商家正在审核中，审核通过后才能新建或修改活动")
 	}
 	if req.StoreID != nil {
 		if _, err := s.stores.FindByMerchantAndID(merchantID, *req.StoreID); err != nil {

@@ -21,6 +21,14 @@ type UpdateMerchantStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=active suspended pending"`
 }
 
+// MerchantOnboardingReviewRequest is the super-admin decision on a pending
+// merchant (P3-1). Approving activates the merchant; rejecting keeps it
+// pending with a reason. A rejection reason is required.
+type MerchantOnboardingReviewRequest struct {
+	Approve bool   `json:"approve"`
+	Reason  string `json:"reason"`
+}
+
 type AdminSaveStoreRequest struct {
 	Name          string `json:"name" binding:"required"`
 	Address       string `json:"address"`

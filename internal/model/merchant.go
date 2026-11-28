@@ -17,6 +17,12 @@ type Merchant struct {
 	SubscriptionExpireAt    *time.Time    `json:"subscription_expire_at"`
 	SubscriptionPauseReason string        `gorm:"size:255" json:"subscription_pause_reason,omitempty"`
 	SubscriptionPausedAt    *time.Time    `json:"subscription_paused_at,omitempty"`
+	// Onboarding review (v17): a rejected merchant stays status=pending
+	// with a non-empty ReviewReason and a non-NULL ReviewedAt; resubmission
+	// clears all three columns back to a clean pending state.
+	ReviewReason string     `gorm:"size:255" json:"review_reason"`
+	ReviewedBy   uint       `json:"reviewed_by"`
+	ReviewedAt   *time.Time `json:"reviewed_at"`
 }
 
 func (m Merchant) HasActiveSubscriptionAt(now time.Time) bool {

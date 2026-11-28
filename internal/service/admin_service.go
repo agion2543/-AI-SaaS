@@ -847,6 +847,58 @@ func (s *AdminService) UpdateMerchantStatus(id uint, status string, audit ...Aud
 	})
 }
 
+// ReviewMerchantOnboarding decides a pending merchant's onboarding (P3-1).
+// Approving activates the merchant and clears any earlier rejection;
+// rejecting keeps status=pending and records the reason, reviewer and time.
+// Only a pending merchant can be reviewed: the generic
+// UpdateMerchantStatus path is deliberately not reused here, so the audit
+// can tell "review approved" apart from a manual status change.
+func (s *AdminService) ReviewMerchantOnboarding(id uint, approve bool, reason string, reviewerID uint, audit ...AuditEvent) (*model.Merchant, error) {
+	reason = strings.TrimSpace(reason)
+	if !approve {
+		if reason == "" {
+			return nil, errors.New("拒绝入驻审核需要填写原因")
+		}
+		if len([]rune(reason)) > 255 {
+			return nil, errors.New("拒绝原因不能超过 255 字")
+		}
+	}
+	var merchant model.Merchant
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&merchant, id).Error; err != nil {
+			return errors.New("商家信息不存在")
+		}
+		if merchant.Status != "pending" {
+			return fmt.Errorf("商家当前状态为 %q，不是待审核", merchant.Status)
+		}
+		now := time.Now()
+		merchant.ReviewedBy = reviewerID
+		merchant.ReviewedAt = &now
+		if approve {
+			merchant.Status = "active"
+			merchant.ReviewReason = ""
+		} else {
+			merchant.ReviewReason = reason
+		}
+		if err := tx.Save(&merchant).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "merchant"
+			event.Input.TargetID = merchant.ID
+			event.Input.TargetName = merchant.Name
+			event.Input.MerchantID = &merchant.ID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &merchant, nil
+}
+
 func (s *AdminService) ListMerchantFollowUps(merchantID uint) ([]model.MerchantFollowUp, error) {
 	var rows []model.MerchantFollowUp
 	if err := s.db.Where("merchant_id = ?", merchantID).Order("status desc, id desc").Find(&rows).Error; err != nil {

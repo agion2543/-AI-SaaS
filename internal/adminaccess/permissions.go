@@ -243,6 +243,7 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"GET /admin/access/admins",
 		"POST /admin/access/admins",
 		"PUT /admin/access/admins/:id",
+		"POST /admin/merchants/:id/review",
 	)
 	setPlatformFinance(
 		"GET /admin/platform-costs/overview",

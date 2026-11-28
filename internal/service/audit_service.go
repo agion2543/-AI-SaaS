@@ -198,6 +198,14 @@ func auditPurposeForAction(action string) string {
 		return "标记商家结算已付款"
 	case "merchant_status_update":
 		return "调整商家状态"
+	case "merchant_onboarding_submitted":
+		return "提交商家入驻审核"
+	case "merchant_onboarding_approved":
+		return "通过商家入驻审核"
+	case "merchant_onboarding_rejected":
+		return "拒绝商家入驻审核"
+	case "merchant_onboarding_resubmitted":
+		return "重新提交商家入驻审核"
 	case "merchant_subscription_open":
 		return "开通商家订阅"
 	case "merchant_subscription_stop":

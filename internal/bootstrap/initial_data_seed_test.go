@@ -199,7 +199,7 @@ func TestSeedInitialDataPreservesEditsCreatesMissingPackagesAndDoesNotRecreateMe
 	}
 }
 
-func TestSeedAutoActivationRequiresExplicitDevelopment(t *testing.T) {
+func TestSeedNeverAutoActivatesPendingMerchants(t *testing.T) {
 	db := openInitialDataSeedTestDB(t)
 	if err := db.AutoMigrate(&model.Merchant{}, &model.Store{}, &model.MerchantGroupBuyLink{}, &model.MerchantGroupBuyLinkAudit{}); err != nil {
 		t.Fatalf("migrate synthetic seed merchant tables: %v", err)
@@ -229,17 +229,19 @@ func TestSeedAutoActivationRequiresExplicitDevelopment(t *testing.T) {
 		t.Fatalf("implicit development default auto-activated merchant: status=%q", kept.Status)
 	}
 
-	// Explicit APP_ENV=development keeps the old local-dev behaviour.
+	// P3-1: seeding never auto-activates pending merchants, not even with
+	// explicit APP_ENV=development. Onboarding review is the only path
+	// from pending to active; demo merchants must be created active.
 	explicit := *base
 	explicit.DevPasswordResetEnabled = true
 	if err := seedInitialData(db, &explicit); err != nil {
 		t.Fatalf("seed with explicit development: %v", err)
 	}
-	var activated model.Merchant
-	if err := db.First(&activated, pending.ID).Error; err != nil {
+	var keptExplicit model.Merchant
+	if err := db.First(&keptExplicit, pending.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if activated.Status != "active" {
-		t.Fatalf("explicit development should auto-activate pending merchants: status=%q", activated.Status)
+	if keptExplicit.Status != "pending" {
+		t.Fatalf("explicit development auto-activated merchant: status=%q", keptExplicit.Status)
 	}
 }

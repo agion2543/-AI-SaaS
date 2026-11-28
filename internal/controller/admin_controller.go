@@ -513,6 +513,36 @@ func (ctl *AdminController) UpdateMerchantStatus(c *gin.Context) {
 	utils.Success(c, gin.H{"updated": true})
 }
 
+// ReviewMerchantOnboarding records a super-admin decision on a pending
+// merchant (P3-1). Route is super-admin only.
+func (ctl *AdminController) ReviewMerchantOnboarding(c *gin.Context) {
+	id := uint(atoi(c.Param("id")))
+	var req dto.MerchantOnboardingReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	actor := service.AuditActorFromContext(c)
+	action := "merchant_onboarding_rejected"
+	status := "pending"
+	if req.Approve {
+		action = "merchant_onboarding_approved"
+		status = "active"
+	}
+	merchant, err := ctl.admin.ReviewMerchantOnboarding(id, req.Approve, req.Reason, c.GetUint("user_id"), service.AuditEvent{
+		Actor: actor,
+		Input: service.AuditRecordInput{Action: action, TargetType: "merchant", MerchantID: &id, Detail: gin.H{
+			"status_before": "pending", "status": status,
+			"reviewer_id": c.GetUint("user_id"), "reviewer_role": actor.Type, "reason": req.Reason,
+		}},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"merchant": merchant, "reviewed": true, "approved": req.Approve})
+}
+
 func (ctl *AdminController) MerchantFollowUps(c *gin.Context) {
 	id := uint(atoi(c.Param("id")))
 	rows, err := ctl.admin.ListMerchantFollowUps(id)

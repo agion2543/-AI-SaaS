@@ -370,6 +370,27 @@ func (ctl *MerchantController) UpdateInfo(c *gin.Context) {
 	utils.Success(c, gin.H{"merchant": merchant, "updated": true})
 }
 
+// ResubmitOnboarding clears a rejection back to a clean pending state
+// (P3-1). Only a pending merchant with a rejection record can resubmit.
+func (ctl *MerchantController) ResubmitOnboarding(c *gin.Context) {
+	merchantID, ok := currentMerchantID(c)
+	if !ok {
+		utils.Error(c, http.StatusForbidden, "merchant context missing")
+		return
+	}
+	merchant, err := ctl.merchant.ResubmitOnboarding(merchantID, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_onboarding_resubmitted", TargetType: "merchant", MerchantID: &merchantID, Detail: gin.H{
+			"status": "pending",
+		}},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"merchant": merchant, "resubmitted": true})
+}
+
 func (ctl *MerchantController) PaymentConfig(c *gin.Context) {
 	merchantID, ok := currentMerchantID(c)
 	if !ok {
