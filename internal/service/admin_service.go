@@ -144,19 +144,32 @@ type AIUsageOverview struct {
 	Suggestion         string                `json:"suggestion"`
 }
 
+// MerchantListRow 是 GET /admin/merchants 一行的瘦身结构：只含列表页
+// 需要的 9 个商家字段 + 14 个聚合/支付字段，不再内嵌整个 model.Merchant。
+// 删掉的商家字段（updated_at / contact_email / subscription_note /
+// subscription_plan_id / merchant_plan / subscription_pause_reason /
+// subscription_paused_at）与聚合字段（pending_order_count /
+// last_follow_up_at）没有任何前端调用点读取；详情页走 GetMerchant
+// 返回裸 *model.Merchant，与本结构无关。
 type MerchantListRow struct {
-	model.Merchant
+	ID                     uint       `json:"id"`
+	CreatedAt              time.Time  `json:"created_at"`
+	Name                   string     `json:"name"`
+	ContactPhone           string     `json:"contact_phone"`
+	Status                 string     `json:"status"`
+	SubscriptionPlan       string     `json:"subscription_plan"`
+	SubscriptionStatus     string     `json:"subscription_status"`
+	SubscriptionExpiredAt  *time.Time `json:"subscription_expired_at"`
+	SubscriptionExpireAt   *time.Time `json:"subscription_expire_at"`
 	OrderCount             int64      `json:"order_count"`
 	TradeAmount            int64      `json:"trade_amount"`
 	RefundAmount           int64      `json:"refund_amount"`
-	PendingOrderCount      int64      `json:"pending_order_count"`
 	FailedOrderCount       int64      `json:"failed_order_count"`
 	ReceivedOrderCount     int64      `json:"received_order_count"`
 	ClosedOrderCount       int64      `json:"closed_order_count"`
 	UnsettledOrderCount    int64      `json:"unsettled_order_count"`
 	PendingSettlementCount int64      `json:"pending_settlement_count"`
 	OpenFollowUpCount      int64      `json:"open_follow_up_count"`
-	LastFollowUpAt         *time.Time `json:"last_follow_up_at"`
 	PaymentConfigStatus    string     `json:"payment_config_status"`
 	PaymentConfigAudit     string     `json:"payment_config_audit"`
 	PaymentConfigMode      string     `json:"payment_config_mode"`
@@ -404,8 +417,12 @@ func (s *AdminService) loadMerchantListAggregates(ids []uint) (*merchantListAggr
 		agg.follows[item.MerchantID] = row
 	}
 
+	// 只取派生值需要的列：不再整行读 QR 码原文（最长 1000 字符）与
+	// 账号等敏感字段。agg.payments 的全部消费方（行拼装、风险分、
+	// 风险筛查、MerchantStats）只读 status / audit_status / mode /
+	// alipay_qr_code / wechat_qr_code 五列。
 	var paymentConfigs []model.MerchantPaymentConfig
-	if err := s.db.Where("merchant_id IN ?", ids).Find(&paymentConfigs).Error; err != nil {
+	if err := s.db.Select("merchant_id", "status", "audit_status", "mode", "alipay_qr_code", "wechat_qr_code").Where("merchant_id IN ?", ids).Find(&paymentConfigs).Error; err != nil {
 		return nil, err
 	}
 	for _, item := range paymentConfigs {
@@ -429,12 +446,21 @@ func parseMerchantFollowUpTime(value string) (time.Time, error) {
 func merchantListRowsFromAggregates(merchants []model.Merchant, agg *merchantListAggregates) []MerchantListRow {
 	rows := make([]MerchantListRow, 0, len(merchants))
 	for _, merchant := range merchants {
-		row := MerchantListRow{Merchant: merchant}
+		row := MerchantListRow{
+			ID:                    merchant.ID,
+			CreatedAt:             merchant.CreatedAt,
+			Name:                  merchant.Name,
+			ContactPhone:          merchant.ContactPhone,
+			Status:                merchant.Status,
+			SubscriptionPlan:      merchant.SubscriptionPlan,
+			SubscriptionStatus:    merchant.SubscriptionStatus,
+			SubscriptionExpiredAt: merchant.SubscriptionExpiredAt,
+			SubscriptionExpireAt:  merchant.SubscriptionExpireAt,
+		}
 		if item, ok := agg.orders[merchant.ID]; ok {
 			row.OrderCount = item.OrderCount
 			row.TradeAmount = item.TradeAmount
 			row.RefundAmount = item.RefundAmount
-			row.PendingOrderCount = item.PendingOrderCount
 			row.FailedOrderCount = item.FailedOrderCount
 			row.ReceivedOrderCount = item.ReceivedOrderCount
 			row.ClosedOrderCount = item.ClosedOrderCount
@@ -443,7 +469,6 @@ func merchantListRowsFromAggregates(merchants []model.Merchant, agg *merchantLis
 		row.PendingSettlementCount = agg.settlements[merchant.ID]
 		if item, ok := agg.follows[merchant.ID]; ok {
 			row.OpenFollowUpCount = item.OpenCount
-			row.LastFollowUpAt = item.LastFollowUpAt
 		}
 		if config, ok := agg.payments[merchant.ID]; ok {
 			row.PaymentConfigStatus = config.Status
