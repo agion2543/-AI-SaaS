@@ -23,6 +23,15 @@
       description="暂停期间不开放经营数据读取或业务操作；此页保留订阅状态、续费付款和卡密兑换等恢复入口。"
     />
 
+    <el-alert
+      v-if="isPendingOnboarding"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="入驻审核中"
+      description="账号正在审核中，通过后可开通订阅并营业；审核通过前无法生成订阅付款单或兑换卡密。"
+    />
+
     <el-alert v-if="notice" :title="notice" type="warning" show-icon :closable="false" />
 
     <section class="flow-strip">
@@ -66,7 +75,7 @@
       </div>
       <div class="redeem-form">
         <el-input v-model="cardCode" placeholder="请输入订阅卡密，例如 CARD-xxxx" clearable />
-        <el-button type="primary" :loading="redeeming" @click="redeemCard">兑换订阅</el-button>
+        <el-button type="primary" :loading="redeeming" :disabled="isPendingOnboarding" @click="redeemCard">兑换订阅</el-button>
       </div>
     </section>
 
@@ -86,7 +95,7 @@
           <li v-for="feature in planFeatures(plan)" :key="feature">{{ feature }}</li>
         </ul>
         <div class="pay-actions">
-          <el-button type="primary" :loading="payingPlanId === plan.id" @click="subscribe(plan)">生成订阅付款单</el-button>
+          <el-button type="primary" :loading="payingPlanId === plan.id" :disabled="isPendingOnboarding" @click="subscribe(plan)">生成订阅付款单</el-button>
         </div>
       </article>
     </section>
@@ -172,6 +181,7 @@ sessionStorage.removeItem('merchant_subscription_message')
 const merchantExpiry = computed(() => merchantSubscriptionExpiry(merchant.value))
 const isActive = computed(() => isMerchantSubscriptionActive(merchant.value))
 const isPaused = computed(() => merchant.value.subscription_status === 'paused')
+const isPendingOnboarding = computed(() => merchant.value.status === 'pending')
 const pauseNotice = computed(() => merchant.value.subscription_pause_reason
   ? `平台已暂停商家业务权限。暂停原因：${merchant.value.subscription_pause_reason}`
   : '平台已暂停商家业务权限，请通过平台支持渠道核实暂停原因。')

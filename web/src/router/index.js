@@ -34,6 +34,7 @@ const MerchantsView = () => import('../views/merchants/MerchantsView.vue')
 const GroupBuyLinksView = () => import('../views/platform/GroupBuyLinksView.vue')
 const RefundReconciliationView = () => import('../views/platform/RefundReconciliationView.vue')
 const RefundReviewView = () => import('../views/platform/RefundReviewView.vue')
+const MerchantReviewView = () => import('../views/platform/MerchantReviewView.vue')
 const MerchantDetailView = () => import('../views/merchants/MerchantDetailView.vue')
 const MerchantLoginView = () => import('../views/merchants/MerchantLoginView.vue')
 const MerchantDashboardView = () => import('../views/merchants/MerchantDashboardView.vue')
@@ -81,6 +82,7 @@ const routes = [
       { path: 'orders', component: OrdersView },
       { path: 'refund-reconciliations', component: RefundReconciliationView },
       { path: 'refund-reviews', component: RefundReviewView },
+      { path: 'merchant-reviews', component: MerchantReviewView },
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView },
@@ -164,6 +166,14 @@ router.beforeEach(async (to) => {
     try {
       const res = await fetchMerchantInfo()
       const merchant = res.data?.merchant || res.data || {}
+      // Pending onboarding: only profile, subscription and announcements
+      // are reachable; everything else goes to the profile page, where the
+      // review status and the rejection reason are shown.
+      if (merchant.status === 'pending') {
+        const pendingAllowed = ['/merchant/profile', '/merchant/subscription', '/merchant/announcements']
+        if (pendingAllowed.includes(to.path)) return
+        return { path: '/merchant/profile', query: { redirect: to.fullPath } }
+      }
       const accessState = merchantSubscriptionAccessState(merchant)
       if (accessState === 'active') return
       if (accessState === 'expired' && to.meta.allowExpiredReadOnly) return
@@ -223,6 +233,7 @@ router.beforeEach(async (to) => {
     else if (to.path === '/admin/platform-costs') allowed = isSuperAdmin
     else if (to.path === '/admin/announcements' || to.path === '/admin/maintenance-plans') allowed = isSuperAdmin
     else if (to.path === '/admin/refund-reviews') allowed = isSuperAdmin
+    else if (to.path === '/admin/merchant-reviews') allowed = isSuperAdmin
     else if (to.path === '/admin/dashboard') allowed = hasAny('read_only')
     else if (to.path === '/admin/todos') allowed = hasAny('operations')
     else if (/^\/admin\/(merchants|group-buy-links|users)(\/|$)/.test(to.path)) allowed = hasAny('read_only', 'operations')

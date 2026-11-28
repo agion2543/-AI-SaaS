@@ -88,6 +88,13 @@ router.beforeEach(async (to) => {
       } else {
         localStorage.removeItem('merchant_current')
       }
+      // Pending onboarding: only home, mine and subscription are reachable;
+      // everything else goes to Mine, where the review status is shown.
+      if (merchant?.status === 'pending') {
+        const pendingAllowed = ['/m/merchant/home', '/m/merchant/mine', '/m/merchant/subscription']
+        if (pendingAllowed.includes(to.path)) return true
+        return { path: '/m/merchant/mine', query: { redirect: to.fullPath } }
+      }
       if (state === 'active') return true
       if (state === 'expired' && to.meta.allowExpiredReadOnly) return true
       return { path: '/m/merchant/subscription', query: { redirect: to.fullPath, state } }

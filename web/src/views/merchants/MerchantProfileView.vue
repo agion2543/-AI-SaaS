@@ -3,12 +3,24 @@
     <div class="page-card">
       <h2 class="page-title">{{ text.title }}</h2>
       <el-alert
-        v-if="merchant.status === 'pending'"
+        v-if="isRejected"
+        type="error"
+        :closable="false"
+        class="status-alert"
+        title="审核未通过"
+        :description="`拒绝原因：${merchant.review_reason || '—'}${merchant.reviewed_at ? `（${formatTime(merchant.reviewed_at)}）` : ''}`"
+      />
+      <el-alert
+        v-else-if="merchant.status === 'pending'"
         :title="text.pendingNotice"
         type="warning"
         :closable="false"
         class="status-alert"
       />
+      <div v-if="isRejected" class="resubmit-row">
+        <el-button type="primary" :loading="resubmitting" @click="resubmit">重新提交审核</el-button>
+        <span class="muted">修改上方资料后，点重新提交可再次进入审核队列。</span>
+      </div>
 
       <div class="detail-row"><span>{{ text.name }}</span><strong>{{ merchant.name || '-' }}</strong></div>
       <div class="detail-row"><span>{{ text.phone }}</span><strong>{{ merchant.contact_phone || '-' }}</strong></div>
@@ -53,10 +65,11 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { changeMerchantPassword, fetchMerchantInfo, updateMerchantInfo } from '../../api/modules'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { changeMerchantPassword, fetchMerchantInfo, resubmitMerchantOnboarding, updateMerchantInfo } from '../../api/modules'
 import { useMerchantAuthStore } from '../../stores/merchantAuth'
+import { isMerchantOnboardingRejected } from '../../utils/merchantOnboarding'
 
 const text = {
   title: '\u6211\u7684\u5546\u5bb6',
@@ -80,6 +93,9 @@ const text = {
 
 const authStore = useMerchantAuthStore()
 const merchant = ref({})
+const resubmitting = ref(false)
+const isRejected = computed(() => isMerchantOnboardingRejected(merchant.value))
+const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
 const form = reactive({
   name: '',
   contact_phone: '',
@@ -135,6 +151,29 @@ const submitPassword = async () => {
   }
 }
 
+const resubmit = async () => {
+  if (resubmitting.value) return
+  try {
+    await ElMessageBox.confirm(
+      '重新提交后本次拒绝原因将被清空，商家重新进入审核队列。',
+      '重新提交审核？',
+      { type: 'warning', confirmButtonText: '确认重新提交', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  resubmitting.value = true
+  try {
+    const res = await resubmitMerchantOnboarding()
+    syncForm(res.data.merchant)
+    authStore.merchant = res.data.merchant
+    localStorage.setItem('merchant_current', JSON.stringify(res.data.merchant))
+    ElMessage.success('已重新提交审核，请耐心等待')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '重新提交失败')
+  } finally {
+    resubmitting.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -147,6 +186,17 @@ onMounted(load)
 
 .status-alert {
   margin-bottom: 16px;
+}
+
+.resubmit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.resubmit-row .muted {
+  margin: 0;
 }
 
 .detail-row {

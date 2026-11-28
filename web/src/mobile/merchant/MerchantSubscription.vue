@@ -31,6 +31,19 @@
       </section>
 
       <template v-else>
+        <section v-if="merchant.status === 'pending'" class="state-card pending-note" role="status">
+          <div class="pending-head">
+            <van-icon name="info-o" />
+            <div>
+              <strong>{{ isRejected ? '审核未通过' : '入驻审核中' }}</strong>
+              <p v-if="isRejected">拒绝原因：{{ merchant.review_reason }}。修改商家资料后可重新提交审核。</p>
+              <p v-else>账号正在审核中，通过后可开通订阅并营业；审核通过前无法生成订阅付款单或兑换卡密。</p>
+            </div>
+          </div>
+          <van-button v-if="isRejected" type="primary" round block :loading="resubmitting" @click="resubmitOnboarding">重新提交审核</van-button>
+          <van-button plain round block :loading="loading" @click="loadStatus">重新检查状态</van-button>
+        </section>
+
         <section v-if="state === 'expired'" class="state-card expired-note" role="status">
           <van-icon name="info-o" />
           <div>
@@ -135,9 +148,11 @@ import {
   fetchMerchantSubscription,
   fetchMerchantSubscriptionOrder,
   markMerchantSubscriptionOrderPaid,
-  redeemMerchantSubscriptionCard
+  redeemMerchantSubscriptionCard,
+  resubmitMerchantOnboarding
 } from '@/api/modules'
 import { merchantFromSubscriptionPayload, mobileMerchantSubscriptionState, mobileSubscriptionActions } from '@/utils/mobileMerchantSubscription'
+import { isMerchantOnboardingRejected } from '@/utils/merchantOnboarding'
 
 const router = useRouter()
 const route = useRoute()
@@ -152,11 +167,13 @@ const payingPlanId = ref(null)
 const markingPaid = ref(false)
 const checkingOrder = ref(false)
 const redeeming = ref(false)
+const resubmitting = ref(false)
 const cardCode = ref('')
 let pollTimer = null
 const actions = computed(() => mobileSubscriptionActions(state.value))
+const isRejected = computed(() => isMerchantOnboardingRejected(merchant.value))
 const stateTitle = computed(() => ({
-  loading: '正在核对状态', active: '服务正常', expired: '订阅已到期', paused: '业务访问已锁定', unknown: '订阅状态待确认', error: '暂时无法确认状态'
+  loading: '正在核对状态', active: '服务正常', expired: '订阅已到期', paused: '业务访问已锁定', pending: '入驻审核中', unknown: '订阅状态待确认', error: '暂时无法确认状态'
 }[state.value] || '订阅状态待确认'))
 const stateDescription = computed(() => ({
   loading: '正在向服务端读取最新订阅记录。',
@@ -164,6 +181,7 @@ const stateDescription = computed(() => ({
   expired: '订阅已到期；工作台只允许读取系统明确开放的旧数据。',
   paused: '平台暂停期间，经营数据读取和业务操作均被锁定。',
   unknown: '无法从服务端确认订阅状态，经营功能将保持关闭。',
+  pending: '账号正在审核中，通过后可开通订阅并营业。',
   error: '订阅服务暂时不可用，经营功能将保持关闭。'
 }[state.value] || '经营功能将保持关闭。'))
 const qrItems = computed(() => [
@@ -174,6 +192,9 @@ const qrItems = computed(() => [
 const saveMerchantSnapshot = (value) => {
   merchant.value = value || {}
   state.value = mobileMerchantSubscriptionState({ merchant: merchant.value })
+  // A pending merchant has no active subscription, so the subscription
+  // state alone would read as unknown; keep the onboarding state explicit.
+  if (merchant.value.status === 'pending') state.value = 'pending'
   if (!mobileSubscriptionActions(state.value).canRenew) {
     paymentOrder.value = null
     stopPolling()
@@ -211,6 +232,20 @@ const loadStatus = async () => {
     localStorage.removeItem('merchant_current')
   } finally {
     loading.value = false
+  }
+}
+
+const resubmitOnboarding = async () => {
+  if (resubmitting.value) return
+  resubmitting.value = true
+  try {
+    await resubmitMerchantOnboarding()
+    showSuccessToast('已重新提交审核，请耐心等待')
+    await loadStatus()
+  } catch (error) {
+    showFailToast(error.response?.data?.message || '重新提交失败')
+  } finally {
+    resubmitting.value = false
   }
 }
 
@@ -346,6 +381,11 @@ onUnmounted(stopPolling)
 .notice-card { justify-items: start; }
 .notice-card > .van-icon { color: #b77735; font-size: 25px; }
 .expired-note, .paused-note, .active-note { display: flex; align-items: flex-start; gap: 10px; }
+.pending-note { color: #826021; border-color: #ead8b0; background: #fff9ec; }
+.pending-head { display: flex; align-items: flex-start; gap: 10px; }
+.pending-head > .van-icon { flex: 0 0 auto; margin-top: 1px; font-size: 20px; color: #b77735; }
+.pending-head strong { display: block; font-size: 14px; }
+.pending-head p { margin-top: 5px; color: #6d797b; font-size: 12px; line-height: 1.65; }
 .expired-note { color: #826021; border-color: #ead8b0; background: #fff9ec; }
 .paused-note { color: #8d4146; border-color: #efcfd0; background: #fff4f4; }
 .active-note { color: #24756a; border-color: #cce8df; background: #f0faf6; }

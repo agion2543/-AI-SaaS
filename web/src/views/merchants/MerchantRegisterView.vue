@@ -118,7 +118,7 @@ const submit = async () => {
       password: form.password,
       confirm_password: form.confirm_password
     })
-    await ElMessageBox.alert('注册成功，请登录并完成订阅', '注册成功', {
+    await ElMessageBox.alert('注册成功，已提交审核，通过后可开通订阅并营业', '注册成功', {
       confirmButtonText: '去登录',
       type: 'success'
     })

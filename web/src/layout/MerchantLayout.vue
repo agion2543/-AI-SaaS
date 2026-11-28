@@ -27,20 +27,20 @@
         <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionSubscription }}</div>
         <el-menu-item index="/merchant/subscription">{{ text.subscription }}</el-menu-item>
-        <el-sub-menu index="merchant-more" :disabled="navigationLocked">
+        <el-sub-menu index="merchant-more" :disabled="subscriptionPaused">
           <template #title>{{ text.more }}</template>
           <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
           <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
           <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
           <el-menu-item index="/merchant/ops-dashboard" :disabled="navigationLocked">{{ text.opsDashboard }}</el-menu-item>
-          <el-menu-item index="/merchant/announcements" :disabled="navigationLocked">{{ text.announcements }}</el-menu-item>
+          <el-menu-item index="/merchant/announcements" :disabled="subscriptionPaused">{{ text.announcements }}</el-menu-item>
           <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
-          <el-menu-item index="/merchant/profile" :disabled="navigationLocked">{{ text.profile }}</el-menu-item>
+          <el-menu-item index="/merchant/profile" :disabled="subscriptionPaused">{{ text.profile }}</el-menu-item>
         </el-sub-menu>
       </el-menu>
 
       <div v-if="navigationLocked" class="subscription-lock">
-        {{ text.lockTip }}
+        {{ isPendingOnboarding ? text.pendingLockTip : text.lockTip }}
       </div>
     </aside>
 
@@ -112,6 +112,7 @@ const text = {
   paymentSettings: '收款设置',
   profile: '商家信息',
   lockTip: '平台已暂停商家业务权限，请查看订阅状态和恢复方式',
+  pendingLockTip: '账号正在审核中，通过后可开通订阅并营业',
   title: '商家工作台',
   description: '查看商家信息与后续经营能力的统一入口',
   logout: '退出登录'
@@ -126,7 +127,8 @@ let maintenanceNoticeTimer
 const subscriptionState = computed(() => merchantSubscriptionAccessState(merchant.value))
 const subscriptionExpired = computed(() => subscriptionState.value === 'expired')
 const subscriptionPaused = computed(() => subscriptionState.value === 'paused')
-const navigationLocked = computed(() => subscriptionPaused.value)
+const isPendingOnboarding = computed(() => merchant.value?.status === 'pending')
+const navigationLocked = computed(() => subscriptionPaused.value || isPendingOnboarding.value)
 const routeViewKey = computed(() => route.fullPath)
 const activeMenuPath = computed(() => getMerchantPcActivePath(route.path))
 const maintenanceNoticeDescription = computed(() => {
