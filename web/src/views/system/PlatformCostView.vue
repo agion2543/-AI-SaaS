@@ -52,7 +52,7 @@
         <article class="summary-card warning">
           <div class="card-label">AI 估算成本（估算）</div>
           <strong>{{ aiStats ? `${money(aiStats.total_estimated_cost_cents)}（估算）` : '暂不可核算' }}</strong>
-          <p>近 30 天调用记录 × 模型价格表重算的估算成本；不是供应商实际账单。</p>
+          <p>近 30 天调用记录上存的估算成本累计（写入时按当时生效价或内置费率估算）；不是供应商实际账单。</p>
           <small>实际账单需超管手工录入后在下方核对</small>
         </article>
         <article class="summary-card muted">
@@ -489,7 +489,7 @@
           <article class="basis-item cost">
             <span class="basis-index">02 · AI 成本</span>
             <strong>估算与实际账单分开</strong>
-            <p>估算成本来自调用记录 × 模型价格表重算（按调用日期取当日最晚生效价）；实际账单为超管手工录入的供应商真实金额。两者口径不同，差额仅供核对参考，不代表欠款或退款；2026-11-28 前的调用无门店归属，记为“未指定门店”。</p>
+            <p>估算成本来自调用记录上存的估算成本累计（写入时按当时生效价或内置费率估算）；实际账单为超管手工录入的供应商真实金额。两者口径不同，差额仅供核对参考，不代表欠款或退款；2026-11-28 前的调用无门店归属，记为“未指定门店”。</p>
           </article>
           <article class="basis-item result">
             <span class="basis-index">03 · 利润结论</span>
@@ -544,7 +544,7 @@
               </div>
               <div class="plan-note">
                 <strong>估算成本来源</strong>
-                <span>{{ aiStats.estimated_cost_source || '调用记录 × 模型价格表重算。' }}</span>
+                <span>{{ aiStats.estimated_cost_source || '调用记录上的估算成本累计（写入时按当时生效价或内置费率估算）。' }}</span>
                 <span v-if="aiStats.unpriced_fallback_estimated_cost_cents">其中 {{ money(aiStats.unpriced_fallback_estimated_cost_cents) }} 无生效价，回落到调用记录上的估算成本。</span>
               </div>
               <div class="ai-dimension-toolbar">
@@ -577,7 +577,7 @@
           <el-tab-pane label="模型价格表" name="prices">
             <div class="ai-form-note">
               <strong>调价请新增一行</strong>
-              <span>同一模型 + 供应商 + 生效时间重复提交会原地更新单价；历史调用的估算成本仍按调用时间的生效价重算，不改写历史行。</span>
+              <span>同一模型 + 供应商 + 生效时间重复提交会原地更新单价；历史调用的估算成本以写入时价冻结，改价不影响已记成本。</span>
             </div>
             <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitModelPrice">
               <div class="form-row ai-price-form-row">
@@ -673,7 +673,7 @@
               </div>
               <div class="plan-note">
                 <strong>核对口径</strong>
-                <span>{{ reconciliation.note || '估算成本来自调用记录 × 价格表（模型估算），实际账单为超管手工录入的供应商真实金额；两者口径不同，差额仅供核对参考，不代表欠款或退款。' }}</span>
+                <span>{{ reconciliation.note || '估算成本来自调用记录上存的估算成本累计（写入时按当时生效价或内置费率估算），实际账单为超管手工录入的供应商真实金额；两者口径不同，差额仅供核对参考，不代表欠款或退款。' }}</span>
                 <span v-if="reconciliation.unpriced_fallback_estimated_cost_cents">估算成本中 {{ money(reconciliation.unpriced_fallback_estimated_cost_cents) }} 无生效价，回落到调用记录上的估算成本。</span>
               </div>
             </template>
@@ -801,7 +801,7 @@
                   <small>本月 {{ budgetStatus.status.monthly_used_tokens || 0 }} Token</small>
                 </article>
               </div>
-              <small v-if="budgetStatus.status.has_budget" class="ai-budget-status-note">超额策略：{{ overLimitActionLabel(budgetStatus.status.effective_action) }}。已用金额为调用记录上的估算成本累计（预算执行口径），与统计页按价格表重算的口径来源不同。</small>
+              <small v-if="budgetStatus.status.has_budget" class="ai-budget-status-note">超额策略：{{ overLimitActionLabel(budgetStatus.status.effective_action) }}。已用金额为调用记录上的估算成本累计，与统计页、核对页同一口径。</small>
             </div>
           </el-tab-pane>
 

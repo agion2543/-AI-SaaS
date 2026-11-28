@@ -17,11 +17,12 @@ import (
 	"go-web-gin-health/internal/model"
 )
 
-// AI 成本控制（P1 MVP）后端实现。口径：
-//   - 预算执行口径：调用记录上的 EstimatedCostCents 累计（写入时按当时生效价
-//     或内置费率估算，CNY 分）。价格表事后改价不改写已记成本。
-//   - 统计/核对口径：按调用时间取当时生效的价格表重算估算成本；无生效价的
-//     调用回落到记录上的 EstimatedCostCents。两者在返回里分别标注来源。
+// AI 成本控制（P1 MVP）后端实现。唯一估算口径（2026-11-28 统一）：
+//   - 预算执行与统计/核对共用同一口径：调用记录上存的 EstimatedCostCents
+//     累计（写入时按当时生效价或内置费率估算，CNY 分，写入即冻结）。
+//     价格表事后改价、补录、停用均不改写已记成本，同一调用在预算页、
+//     统计页、核对页显示同一估算成本。
+//   - 价格表回归本来角色：写入时定价 + 未来测算，不再用于事后重算历史统计。
 //   - 估算成本永远不是供应商真实账单；账单只来自超管手工录入的 AIVendorBill。
 //   - 预算、预警、超额策略、紧急关闭全部在后端强制，AI 调用入口先过
 //     “紧急关闭 → 商家预算 → 策略”检查再执行。
@@ -149,7 +150,7 @@ type MerchantAIBudgetStatus struct {
 
 // EvaluateMerchantBudget 计算商家当前日/月预算使用进度，并为已达到的阈值
 // 补记预警记录（同一商家/周期/阈值只记一条）。预算口径为调用记录上
-// EstimatedCostCents 的累计（CNY 分），与统计重算口径的来源不同，见文件头注释。
+// EstimatedCostCents 的累计（CNY 分），与统计/核对口径相同，见文件头注释。
 func (g *AICostGuard) EvaluateMerchantBudget(merchantID uint) (*MerchantAIBudgetStatus, error) {
 	if g == nil || g.db == nil {
 		return nil, errors.New("AI cost control database is unavailable")
@@ -586,8 +587,8 @@ func (s *AdminService) ListAIVendorBills(vendor string, startDate, endDate time.
 }
 
 // AIBillReconciliation 是估算成本与实际账单的核对结果。两者口径不同：
-// 估算成本 = 调用记录 × 价格表（模型估算）；实际账单 = 超管手工录入的供应商
-// 真实金额。差额（实际 − 估算）仅供核对参考，不代表欠款或退款。
+// 估算成本 = 调用记录上存的 EstimatedCostCents 累计（写入时冻结）；实际账单 =
+// 超管手工录入的供应商真实金额。差额（实际 − 估算）仅供核对参考，不代表欠款或退款。
 type AIBillReconciliation struct {
 	PeriodStart            string               `json:"period_start"`
 	PeriodEnd              string               `json:"period_end"`
@@ -632,7 +633,7 @@ func (s *AdminService) ReconcileAIBills(startDate, endDate time.Time) (*AIBillRe
 		DifferenceCents:        actualTotal - stats.TotalEstimatedCostCents,
 		Bills:                  bills,
 		UnpricedEstimatedCents: stats.UnpricedFallbackEstimatedCents,
-		Note:                   "估算成本来自调用记录×价格表（模型估算），实际账单为超管手工录入的供应商真实金额；两者口径不同，差额仅供核对参考，不代表欠款或退款。",
+		Note:                   "估算成本来自调用记录上存的估算成本累计（写入时按当时生效价或内置费率估算），实际账单为超管手工录入的供应商真实金额；两者口径不同，差额仅供核对参考，不代表欠款或退款。",
 	}, nil
 }
 
@@ -867,7 +868,7 @@ func appendAuditForAICostControl(tx *gorm.DB, actor AuditActor, action, targetTy
 // --- 使用量统计 ---
 
 // AIUsageGroupStat 是一组调用记录的聚合：调用次数、输入/输出/缓存/总 Token、
-// 估算成本（CNY 分，价格表重算口径）。
+// 估算成本（CNY 分，调用记录上存的 EstimatedCostCents 累计，写入时冻结）。
 type AIUsageGroupStat struct {
 	MerchantID         uint   `json:"merchant_id,omitempty"`
 	MerchantName       string `json:"merchant_name,omitempty"`
@@ -886,18 +887,21 @@ type AIUsageGroupStat struct {
 }
 
 // AIUsageStats 是按商家/门店/模型/功能四维聚合的使用量统计，全部基于现有的
-// MerchantAIUsageLog，不另起记录。估算成本按调用时间的生效价重算；
-// 无生效价的调用回落到记录上的 EstimatedCostCents，金额汇总进
-// UnpricedFallbackEstimatedCents 以便核对。
+// MerchantAIUsageLog，不另起记录。估算成本直接取调用记录上存的
+// EstimatedCostCents 求和（写入时按当时生效价或内置费率估算，写入即冻结）；
+// 价格表事后改价、补录、停用均不影响已记成本，与预算执行口径相同。
 type AIUsageStats struct {
-	PeriodStart                    string             `json:"period_start"`
-	PeriodEnd                      string             `json:"period_end"`
-	TotalRequests                  int64              `json:"total_requests"`
-	TotalPromptTokens              int64              `json:"total_prompt_tokens"`
-	TotalCompletionTokens          int64              `json:"total_completion_tokens"`
-	TotalCachedTokens              int64              `json:"total_cached_tokens"`
-	TotalTokens                    int64              `json:"total_tokens"`
-	TotalEstimatedCostCents        int64              `json:"total_estimated_cost_cents"`
+	PeriodStart             string `json:"period_start"`
+	PeriodEnd               string `json:"period_end"`
+	TotalRequests           int64  `json:"total_requests"`
+	TotalPromptTokens       int64  `json:"total_prompt_tokens"`
+	TotalCompletionTokens   int64  `json:"total_completion_tokens"`
+	TotalCachedTokens       int64  `json:"total_cached_tokens"`
+	TotalTokens             int64  `json:"total_tokens"`
+	TotalEstimatedCostCents int64  `json:"total_estimated_cost_cents"`
+	// UnpricedFallbackEstimatedCents 保留字段以避免前端 breaking change，
+	// 自 2026-11-28 口径统一后恒为 0：统计不再按价格表重算，已无“无生效价
+	// 回落到记录值”的分支，存量值本身就是统计值。
 	UnpricedFallbackEstimatedCents int64              `json:"unpriced_fallback_estimated_cost_cents"`
 	EstimatedCostSource            string             `json:"estimated_cost_source"`
 	ByMerchant                     []AIUsageGroupStat `json:"by_merchant"`
@@ -959,7 +963,7 @@ func (g *AICostGuard) AIUsageStats(start, end time.Time) (*AIUsageStats, error) 
 	stats := &AIUsageStats{
 		PeriodStart:         start.Format("2006-01-02"),
 		PeriodEnd:           end.AddDate(0, 0, -1).Format("2006-01-02"),
-		EstimatedCostSource: "调用记录×模型价格表重算（按调用日期取当日最晚生效价）；无生效价的调用回落到记录上的估算成本",
+		EstimatedCostSource: "调用记录上的估算成本累计（写入时按当时生效价或内置费率估算）",
 		ByMerchant:          []AIUsageGroupStat{},
 		ByStore:             []AIUsageGroupStat{},
 		ByModel:             []AIUsageGroupStat{},
@@ -980,18 +984,10 @@ func (g *AICostGuard) AIUsageStats(start, end time.Time) (*AIUsageStats, error) 
 		target.EstimatedCostCents += costCents
 	}
 	for _, row := range rows {
-		day, parseErr := time.ParseInLocation("2006-01-02", row.Day, time.Local)
-		if parseErr != nil {
-			day = start
-		}
-		cost, _, priced, err := g.EstimateAICostCents("", row.Model, int(row.PromptTokens), int(row.CompletionTokens), int(row.CachedTokens), day.Add(23*time.Hour+59*time.Minute+59*time.Second))
-		if err != nil {
-			return nil, err
-		}
-		if !priced {
-			cost = row.StoredCostCents
-			stats.UnpricedFallbackEstimatedCents += row.StoredCostCents
-		}
+		// 唯一估算口径：直接用聚合查询已有的存量成本求和，不再按价格表重算。
+		// 存量值是写入时冻结的估算（当时生效价或内置费率），事后改价、补录、
+		// 停用均不影响；逐笔 ceil 的取整差异也随存量值一并保留。
+		cost := row.StoredCostCents
 		merchantStat, ok := byMerchant[row.MerchantID]
 		if !ok {
 			merchantStat = &AIUsageGroupStat{MerchantID: row.MerchantID, MerchantName: merchantNames[row.MerchantID]}

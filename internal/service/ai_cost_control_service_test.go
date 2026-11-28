@@ -146,7 +146,9 @@ func TestAIUsageStatsAggregatesByMerchantModelScenarioStore(t *testing.T) {
 	merchantB := createSyntheticAICostMerchant(t, db, "synthetic-merchant-b")
 	saveSyntheticModelPrice(t, admin, "cheap-model", 100, 200, 10, now.Add(-time.Hour))
 	storeID := uint(7)
-	// A: cheap-model, 1M prompt + 1M completion + 1M cached = 100+200+10 = 310 (priced).
+	// A: cheap-model, 1M prompt + 1M completion + 1M cached, stored 999.
+	// B: unpriced model, stored 555. 口径统一后统计直接用存量和 999+555=1554，
+	// 不再按价格表重算（旧口径为 310+555=865）。
 	insertSyntheticAIUsage(t, db, merchantA.ID, &storeID, "cheap-model", "scenario-one", 1_000_000, 1_000_000, 1_000_000, 3_000_000, 999, now)
 	// B: unpriced model falls back to the stored estimate 555.
 	insertSyntheticAIUsage(t, db, merchantB.ID, nil, "unpriced-model", "scenario-two", 100, 200, 0, 300, 555, now)
@@ -157,16 +159,16 @@ func TestAIUsageStatsAggregatesByMerchantModelScenarioStore(t *testing.T) {
 		t.Fatalf("usage stats: %v", err)
 	}
 	if stats.TotalRequests != 2 || stats.TotalPromptTokens != 1_000_100 || stats.TotalCompletionTokens != 1_000_200 ||
-		stats.TotalCachedTokens != 1_000_000 || stats.TotalTokens != 3_000_300 || stats.TotalEstimatedCostCents != 865 {
-		t.Fatalf("totals mismatch: %+v, want requests=2 prompt=1000100 completion=1000200 cached=1000000 total=3000300 cost=865", stats)
+		stats.TotalCachedTokens != 1_000_000 || stats.TotalTokens != 3_000_300 || stats.TotalEstimatedCostCents != 1554 {
+		t.Fatalf("totals mismatch: %+v, want requests=2 prompt=1000100 completion=1000200 cached=1000000 total=3000300 cost=1554", stats)
 	}
-	if stats.UnpricedFallbackEstimatedCents != 555 {
-		t.Fatalf("unpriced fallback=%d, want 555", stats.UnpricedFallbackEstimatedCents)
+	if stats.UnpricedFallbackEstimatedCents != 0 {
+		t.Fatalf("unpriced fallback=%d, want 0 (stored-cost convention has no fallback branch)", stats.UnpricedFallbackEstimatedCents)
 	}
-	if len(stats.ByMerchant) != 2 || stats.ByMerchant[0].MerchantID != merchantB.ID || stats.ByMerchant[0].EstimatedCostCents != 555 {
+	if len(stats.ByMerchant) != 2 || stats.ByMerchant[0].MerchantID != merchantA.ID || stats.ByMerchant[0].EstimatedCostCents != 999 {
 		t.Fatalf("by-merchant ranking mismatch: %+v", stats.ByMerchant)
 	}
-	if len(stats.ByModel) != 2 || stats.ByModel[0].Model != "unpriced-model" {
+	if len(stats.ByModel) != 2 || stats.ByModel[0].Model != "cheap-model" {
 		t.Fatalf("by-model mismatch: %+v", stats.ByModel)
 	}
 	if len(stats.ByScenario) != 2 {
@@ -424,9 +426,13 @@ func TestAIVendorBillReconciliationSeparatesEstimateFromActual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	// Estimated 310 (price table) vs actual 500 (manual bill): difference +190.
-	if result.EstimatedCostCents != 310 || result.ActualBillTotalCents != 500 || result.DifferenceCents != 190 || result.ActualBillCount != 1 {
+	// Estimated 999 (stored cost on the usage record) vs actual 500 (manual bill):
+	// difference -499. 口径统一后核对侧估算取存量，不再按价格表重算（旧口径为 310）。
+	if result.EstimatedCostCents != 999 || result.ActualBillTotalCents != 500 || result.DifferenceCents != -499 || result.ActualBillCount != 1 {
 		t.Fatalf("reconciliation mismatch: %+v", result)
+	}
+	if result.UnpricedEstimatedCents != 0 {
+		t.Fatalf("unpriced fallback=%d, want 0 (stored-cost convention has no fallback branch)", result.UnpricedEstimatedCents)
 	}
 	_ = guard
 }
@@ -461,5 +467,241 @@ func TestSaveMerchantBudgetValidation(t *testing.T) {
 		DailyBudgetCents: 100, OverLimitAction: model.AIBudgetOverLimitStop,
 	}, syntheticSuperAdmin()); err != nil {
 		t.Fatalf("global default budget must save: %v", err)
+	}
+}
+
+// --- 估算口径统一（2026-11-28）：统计/核对只用调用记录上存的估算成本，
+// 价格表事后改价、补录、停用均不改写已记成本，与预算执行口径一致。 ---
+
+func saveSyntheticModelPriceForProvider(t *testing.T, admin *AdminService, provider, modelName string, input, output, cached int64, effectiveFrom time.Time) {
+	t.Helper()
+	_, _, err := admin.SaveModelPrice(dto.SaveAIModelPriceRequest{
+		Model: modelName, Provider: provider,
+		InputPriceCentsPerMillion: input, OutputPriceCentsPerMillion: output,
+		CachedPriceCentsPerMillion: cached, Currency: "CNY",
+		EffectiveFrom: effectiveFrom.Format("2006-01-02 15:04:05"), IsActive: true,
+	}, syntheticSuperAdmin())
+	if err != nil {
+		t.Fatalf("save synthetic model price %q/%q: %v", provider, modelName, err)
+	}
+}
+
+func syntheticDayStart(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// 场景 1：事后新增更晚生效价，历史统计不变。
+func TestAIUsageStatsIgnoresLaterPriceChange(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-late-price-merchant")
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	// 上午调用：1M 输入 Token，存量估算 100 分。
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 1_000_000, 0, 0, 1_000_000, 100, dayStart.Add(10*time.Hour))
+	// 午后新增更晚生效价 300 分/百万输入 Token：旧重算口径会把该日改为 300 分。
+	saveSyntheticModelPrice(t, admin, "m", 300, 600, 30, dayStart.Add(12*time.Hour))
+
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if stats.TotalEstimatedCostCents != 100 || stats.UnpricedFallbackEstimatedCents != 0 {
+		t.Fatalf("after later price change: total=%d fallback=%d, want 100/0", stats.TotalEstimatedCostCents, stats.UnpricedFallbackEstimatedCents)
+	}
+}
+
+// 场景 2：同生效时间原地改价后统计不变（价格表原地更新行为本身不变）。
+func TestAIUsageStatsIgnoresSameEffectiveTimePriceUpdate(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-inplace-price-merchant")
+	effective := dayStart.AddDate(0, 0, -1)
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, effective)
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 1_000_000, 0, 0, 1_000_000, 100, dayStart.Add(10*time.Hour))
+	// 同 key 原地改价 100 → 150 分/百万输入 Token。
+	saveSyntheticModelPrice(t, admin, "m", 150, 300, 15, effective)
+	var count int64
+	if err := db.Model(&model.AIModelPrice{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("price rows=%d err=%v, want 1 (in-place update, not a new row)", count, err)
+	}
+
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if stats.TotalEstimatedCostCents != 100 {
+		t.Fatalf("after in-place price update: total=%d, want 100", stats.TotalEstimatedCostCents)
+	}
+}
+
+// 场景 3：补录过去生效价后统计不变（无价调用的内置费率存量原样呈现）。
+func TestAIUsageStatsIgnoresBackfilledPrice(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-backfill-merchant")
+	// 无价时写入的调用：内置费率存量 555 分。
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "unpriced-model", "s", 100, 200, 0, 300, 555, dayStart.Add(10*time.Hour))
+	// 事后补录过去日期生效价：旧重算口径会改写该笔为 1 分。
+	saveSyntheticModelPrice(t, admin, "unpriced-model", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if stats.TotalEstimatedCostCents != 555 || stats.UnpricedFallbackEstimatedCents != 0 {
+		t.Fatalf("after backfilled price: total=%d fallback=%d, want 555/0", stats.TotalEstimatedCostCents, stats.UnpricedFallbackEstimatedCents)
+	}
+}
+
+// 场景 4：同一天上午调用、午后改价，预算页与统计页同日数相等。
+func TestAIBudgetAndStatsAgreeWithinDayAfterPriceChange(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-sameday-merchant")
+	setSyntheticBudget(t, admin, merchant.ID, 1000, 0, model.AIBudgetOverLimitStop)
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 1_000_000, 0, 0, 1_000_000, 100, dayStart.Add(9*time.Hour))
+	saveSyntheticModelPrice(t, admin, "m", 300, 600, 30, dayStart.Add(15*time.Hour))
+
+	status, err := guard.EvaluateMerchantBudget(merchant.ID)
+	if err != nil {
+		t.Fatalf("evaluate budget: %v", err)
+	}
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if status.DailyUsedCents != 100 || stats.TotalEstimatedCostCents != 100 {
+		t.Fatalf("budget daily=%d stats total=%d, want both 100", status.DailyUsedCents, stats.TotalEstimatedCostCents)
+	}
+}
+
+// 场景 5a：分组取整差异消除——3 笔各 1 输入 Token，统计 = 存量逐笔 ceil 之和 3 分。
+func TestAIUsageStatsUsesStoredPerCallCeil(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-ceil-merchant")
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	for i := 0; i < 3; i++ {
+		insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 1, 0, 0, 1, 1, dayStart.Add(10*time.Hour))
+	}
+
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if stats.TotalEstimatedCostCents != 3 {
+		t.Fatalf("per-call ceil total=%d, want 3 (grouped ceil would give 1)", stats.TotalEstimatedCostCents)
+	}
+}
+
+// 场景 5b/5c：同模型多供应商、含缓存 Token 的调用，统计 = 存量值。
+func TestAIUsageStatsIgnoresOtherProviderPriceAndCachedTokens(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-multi-provider-merchant")
+	// 写入供应商价：1M 输入 + 1M 输出 + 1M 缓存 = 100+200+10 = 310 分（存量）。
+	saveSyntheticModelPrice(t, admin, "multi-model", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	// 另一供应商同模型更晚生效价 1000+2000+100 = 3100 分：旧重算口径取任一供应商最新价会改写。
+	saveSyntheticModelPriceForProvider(t, admin, "other-provider", "multi-model", 1000, 2000, 100, dayStart.Add(12*time.Hour))
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "multi-model", "s", 1_000_000, 1_000_000, 1_000_000, 3_000_000, 310, dayStart.Add(10*time.Hour))
+
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if stats.TotalEstimatedCostCents != 310 {
+		t.Fatalf("multi-provider/cached total=%d, want 310 (stored)", stats.TotalEstimatedCostCents)
+	}
+}
+
+// 场景 6（核心断言）：同一商家同日，预算状态、统计、核对三处同数。
+func TestAIBudgetStatsAndReconciliationAgree(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-three-way-merchant")
+	setSyntheticBudget(t, admin, merchant.ID, 1000, 0, model.AIBudgetOverLimitStop)
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 1_000_000, 0, 0, 1_000_000, 100, dayStart.Add(10*time.Hour))
+
+	status, _, err := admin.MerchantBudgetStatus(merchant.ID)
+	if err != nil {
+		t.Fatalf("budget status: %v", err)
+	}
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	result, err := admin.ReconcileAIBills(dayStart, dayStart)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var byMerchant int64 = -1
+	for _, row := range stats.ByMerchant {
+		if row.MerchantID == merchant.ID {
+			byMerchant = row.EstimatedCostCents
+		}
+	}
+	if status.DailyUsedCents != 100 || byMerchant != 100 || result.EstimatedCostCents != 100 {
+		t.Fatalf("three-way mismatch: budget daily=%d stats by-merchant=%d reconcile=%d, want all 100",
+			status.DailyUsedCents, byMerchant, result.EstimatedCostCents)
+	}
+}
+
+// 场景 8：触发 70% 预警后改价，预警快照、预算状态、统计三方一致。
+func TestAIBudgetAlertSnapshotSurvivesPriceChange(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-alert-price-merchant")
+	setSyntheticBudget(t, admin, merchant.ID, 100, 0, model.AIBudgetOverLimitStop)
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 100, 100, 0, 200, 75, dayStart.Add(10*time.Hour))
+	if _, err := guard.EvaluateMerchantBudget(merchant.ID); err != nil {
+		t.Fatalf("evaluate budget: %v", err)
+	}
+	// 触发 70% 预警后再改价。
+	saveSyntheticModelPrice(t, admin, "m", 300, 600, 30, dayStart.Add(12*time.Hour))
+
+	alerts, err := admin.ListBudgetAlerts(merchant.ID, "daily", 70, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("list alerts: %v", err)
+	}
+	if len(alerts) != 1 || alerts[0].EstimatedCostCents != 75 {
+		t.Fatalf("alert snapshot mismatch: %+v, want 1 alert at 75", alerts)
+	}
+	status, err := guard.EvaluateMerchantBudget(merchant.ID)
+	if err != nil {
+		t.Fatalf("re-evaluate budget: %v", err)
+	}
+	stats, err := guard.AIUsageStats(dayStart, dayStart.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatalf("usage stats: %v", err)
+	}
+	if status.DailyUsedCents != 75 || stats.TotalEstimatedCostCents != 75 {
+		t.Fatalf("after price change: budget daily=%d stats total=%d, want both 75", status.DailyUsedCents, stats.TotalEstimatedCostCents)
 	}
 }

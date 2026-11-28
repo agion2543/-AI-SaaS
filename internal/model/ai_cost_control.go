@@ -3,7 +3,8 @@ package model
 import "time"
 
 // AI 成本控制（P1 MVP）模型。口径红线：
-//   - 估算成本（estimated）来自调用记录 × 模型价格表，永远不是供应商真实账单；
+//   - 估算成本（estimated）来自调用记录上存的 EstimatedCostCents 累计
+//     （写入时按当时生效价或内置费率估算，写入即冻结），永远不是供应商真实账单；
 //   - 供应商实际账单（AIVendorBill）是超管手工录入的实际金额，两者在接口与
 //     返回字段上严格分开，差异仅供核对参考。
 //   - 金额一律为分（CNY）；价格表单价为“分 / 百万 Token”。
@@ -23,8 +24,9 @@ const (
 )
 
 // AIModelPrice 是超管维护的模型价格表。一条记录只描述一个模型在某个
-// 生效时间点的单价；调价时新增一行（新的 effective_from），不改写历史行，
-// 历史调用的估算成本按调用时间的生效价重算。
+// 生效时间点的单价；调价时新增一行（新的 effective_from），不改写历史行。
+// 价格表用于写入时定价与未来测算；历史调用的估算成本以调用记录上存的值为准，
+// 事后改价不改写已记成本。
 type AIModelPrice struct {
 	BaseModel
 	Model                      string    `gorm:"size:120;not null;index:idx_ai_model_prices_model_effective,priority:1;uniqueIndex:uk_ai_model_prices_model_provider_effective,priority:1" json:"model"`
