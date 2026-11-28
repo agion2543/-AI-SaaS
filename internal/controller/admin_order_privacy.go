@@ -45,7 +45,14 @@ func serializeAdminOrder(order *model.Order, includeContact bool) gin.H {
 		row["user"] = nil
 	}
 	if order.Merchant != nil {
-		row["merchant"] = gin.H{"id": order.Merchant.ID, "name": order.Merchant.Name}
+		// 订阅营收页的服务状态/预计到期依赖商家当前订阅：只补订阅
+		// 状态与到期日，不补联系方式（隐私测试要求联系方式不外泄）。
+		row["merchant"] = gin.H{
+			"id": order.Merchant.ID, "name": order.Merchant.Name,
+			"subscription_status":    order.Merchant.SubscriptionStatus,
+			"subscription_expire_at": order.Merchant.SubscriptionExpireAt,
+			"subscription_expired_at": order.Merchant.SubscriptionExpiredAt,
+		}
 	} else {
 		row["merchant"] = nil
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -264,6 +265,36 @@ func TestParseAdminOrderExportFiltersRejectsInvalidInput(t *testing.T) {
 		ctx.Request = request
 		if _, ok := parseAdminOrderExportFilters(ctx); ok {
 			t.Errorf("parseAdminOrderExportFilters accepted invalid query %q", target)
+		}
+	}
+}
+
+// 2026-11-28 P2 第 2 件 C：订单行嵌套的商家带订阅状态与到期日，
+// 订阅营收页不再靠本地全量商家数组判断“服务中/预计到期”；
+// 联系方式仍不外泄。
+func TestSerializeAdminOrderMerchantCarriesSubscription(t *testing.T) {
+	expire := time.Date(2027, 1, 15, 0, 0, 0, 0, time.Local)
+	order := &model.Order{
+		BaseModel: model.BaseModel{ID: 11},
+		OrderNo:   "SYNTHETIC-ORDER-SUB-001",
+		OrderType: "merchant_subscription",
+		Merchant: &model.Merchant{
+			BaseModel: model.BaseModel{ID: 5}, Name: "合成订阅商家",
+			ContactPhone: "13200003333", ContactEmail: "merchant-private@example.invalid",
+			SubscriptionStatus: "active", SubscriptionExpireAt: &expire,
+		},
+	}
+	encoded, err := json.Marshal(serializeAdminOrder(order, false))
+	if err != nil {
+		t.Fatalf("marshal admin order: %v", err)
+	}
+	body := string(encoded)
+	if !strings.Contains(body, `"subscription_status":"active"`) || !strings.Contains(body, "2027-01-15") {
+		t.Fatalf("admin order merchant should carry subscription status and expiry: %s", body)
+	}
+	for _, secret := range []string{"13200003333", "merchant-private@example.invalid"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("subscription fields leaked contact %q: %s", secret, body)
 		}
 	}
 }

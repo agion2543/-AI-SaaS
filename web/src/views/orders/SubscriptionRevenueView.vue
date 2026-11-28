@@ -415,7 +415,11 @@ const auth = useAuthStore()
 const route = useRoute()
 const confirmingOrderId = ref(null)
 const orders = ref([])
-const merchants = ref([])
+// 不再拉全量商家数组（旧 fetchMerchants page_size=500 实际只回最新 10 家，
+// 老商家订阅数/到期数全漏计）。订阅中商家数与 7 天内到期列表改为调
+// 服务端筛选（见 load），merchantById 只查到期列表缓存作回落。
+const activeMerchantCount = ref(0)
+const expiringMerchants = ref([])
 const manualReviews = ref([])
 const dateRange = ref([])
 const keyword = ref('')
@@ -462,17 +466,6 @@ const paidOrders = computed(() => providerPaidSubscriptionOrders(filteredSubscri
 const manualReviewedOrders = computed(() => manualReviews.value.filter(matchFilters))
 const confirmedIncome = computed(() => providerPaidSubscriptionRevenueCents(paidOrders.value, orderAmount))
 const pendingAmount = computed(() => pendingOrders.value.reduce((sum, item) => sum + orderAmount(item), 0))
-const activeMerchantCount = computed(() => merchants.value.filter(isSubscriptionActive).length)
-const expiringMerchants = computed(() => {
-  const now = Date.now()
-  const end = now + 7 * 24 * 3600000
-  return merchants.value
-    .filter((item) => {
-      const expire = dateValue(item.subscription_expire_at || item.subscription_expired_at)
-      return item.subscription_status === 'active' && expire >= now && expire <= end
-    })
-    .sort((a, b) => dateValue(a.subscription_expire_at || a.subscription_expired_at) - dateValue(b.subscription_expire_at || b.subscription_expired_at))
-})
 const expiringMerchantIds = computed(() => new Set(expiringMerchants.value.map((item) => Number(item.id))))
 const quickFilters = computed(() => [
   { label: '全部订阅', value: '', count: filteredSubscriptionOrders.value.length, hint: '当前筛选范围' },
@@ -488,16 +481,33 @@ const workflowCards = [
   { label: 'STEP 3', title: '确认并开通', text: '点击确认到账后，系统记录订阅收入，并自动开通或续期商家工作台。' }
 ]
 
+const loadExpiringMerchants = async () => {
+  const collected = []
+  let page = 1
+  let total = 0
+  do {
+    const res = await fetchMerchants({ page, page_size: 100, subscription: 'active', expiring_within_days: 7, sort_by: 'subscription_expire_at', sort_order: 'asc' })
+    const list = res.data?.list || []
+    total = res.data?.total ?? 0
+    if (!list.length) break
+    collected.push(...list)
+    page += 1
+  } while (collected.length < total)
+  return collected
+}
+
 const load = async () => {
   loading.value = true
   try {
-    const [ordersRes, merchantsRes, manualReviewsRes] = await Promise.all([
+    const [ordersRes, activeRes, expiring, manualReviewsRes] = await Promise.all([
       fetchOrders(),
-      fetchMerchants({ page: 1, page_size: 500 }),
+      fetchMerchants({ page: 1, page_size: 1, subscription: 'active' }),
+      loadExpiringMerchants(),
       fetchManualSubscriptionReviews()
     ])
     orders.value = ordersRes.data || []
-    merchants.value = merchantsRes.data?.list || merchantsRes.data || []
+    activeMerchantCount.value = activeRes.data?.total ?? 0
+    expiringMerchants.value = expiring
     manualReviews.value = manualReviewsRes.data?.list || []
   } finally {
     loading.value = false
@@ -591,7 +601,9 @@ const exportRevenue = async () => {
 }
 
 const orderAmount = (row) => row?.manual_review?.amount_cents ?? merchantSubscriptionSnapshotPrice(row) ?? Number(row.total_amount ?? row.amount ?? 0)
-const merchantById = (id) => merchants.value.find((item) => Number(item.id) === Number(id)) || null
+// 仅查 7 天内到期列表缓存：主路径是订单自带的 row.merchant
+// （服务端已嵌套订阅状态与到期日），这里只是回落。
+const merchantById = (id) => expiringMerchants.value.find((item) => Number(item.id) === Number(id)) || null
 const hasValidSubscriptionSnapshot = (row) => hasValidMerchantSubscriptionSnapshot(row)
 const isExpiredUnpaidOrder = (row) => row?.order_type === 'merchant_subscription' && row?.payment_channel === 'platform_qr' && row?.expired_unpaid === true && row?.paid_at == null
 const canConfirmSubscription = (row) => hasValidSubscriptionSnapshot(row) && (row?.status === 'pending' || (isExpiredUnpaidOrder(row) && row?.payment_channel === 'platform_qr'))
@@ -709,7 +721,7 @@ const planName = (row) => row?.manual_review?.plan_name
   : merchantSubscriptionSnapshotLabel(row)
 const expectedExpireText = (row) => {
   if (!hasValidSubscriptionSnapshot(row)) return '快照缺失，需人工复核'
-  const merchant = merchantById(row.merchant_id)
+  const merchant = row.merchant || merchantById(row.merchant_id)
   const currentExpire = dateValue(merchant?.subscription_expire_at || merchant?.subscription_expired_at)
   const duration = Number(row.merchant_plan_duration_days_snapshot || 0)
   if (!duration) return '快照缺失，需人工复核'
