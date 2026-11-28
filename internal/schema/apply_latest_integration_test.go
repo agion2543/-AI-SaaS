@@ -200,6 +200,9 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyAnnouncementsMaintenanceV13(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v12 to v13: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyPlatformFinanceV14(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v13 to v14: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 	})
 
@@ -244,9 +247,12 @@ func TestMySQLManualReviewV2Migration(t *testing.T) {
 		if result, err := ApplyAnnouncementsMaintenanceV13(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact managed v12 to v13: result=%q err=%v", result, err)
 		}
+		if result, err := ApplyPlatformFinanceV14(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact managed v13 to v14: result=%q err=%v", result, err)
+		}
 		assertLatestInventory(t, db)
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
-			t.Fatalf("repeat latest v13 migration: result=%q err=%v", result, err)
+			t.Fatalf("repeat latest v14 migration: result=%q err=%v", result, err)
 		}
 	})
 

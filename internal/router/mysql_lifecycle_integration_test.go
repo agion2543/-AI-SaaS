@@ -555,10 +555,10 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 13 || len(right) != 13 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 13/13", len(left), len(right))
+	if len(left) != 14 || len(right) != 14 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 14/14", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version} {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version, schema.PlatformFinanceV14Version} {
 		leftValue, leftOK := left[version]
 		rightValue, rightOK := right[version]
 		if !leftOK || !rightOK || leftValue != rightValue {

@@ -273,15 +273,20 @@ func applyPlatformFinanceV14(ctx context.Context, conn *sql.Conn, base baselineD
 }
 
 func verifyManagedSchemaV14(ctx context.Context, conn *sql.Conn, objects schemaObjects, base baselineDefinition, v2 incrementalMigrationDefinition, v3 adminAuthV3Definition, v4 otpSafetyV4Definition, v5 emailOTPSafetyV5Definition, v6 wholesaleRetailV6Definition, v7 platformExpensesV7Definition, v8 platformExpenseReversalsV8Definition, v9 tableOrderingV9Definition) error {
+	// Historical fingerprints first: verifyPlatformFinanceV14Tables also
+	// re-pins the altered platform_expenses shape (including memo having no
+	// default), so a drift in that old table would otherwise trip the shape
+	// check before the fingerprint check that names the drifted version
+	// (e.g. "v7 schema drift"), which ApplyLatest prefers when refusing.
+	combinedNewColumns := append(append(append([]schemaColumn(nil), orderItemsV11NewColumns...), aiCostControlV12NewColumns...), platformFinanceV14NewColumns...)
+	futureTables := append(append(append(append(append([]string(nil), tableOrderingV9Order...), "order_items"), aiCostControlV12NewTables...), announcementsMaintenanceV13NewTables...), platformFinanceV14NewTables...)
+	if err := verifyPlatformExpenseReversalsV8HistoricalFingerprintsExcludingColumns(ctx, conn, base, v2, v3, v4, v5, v6, v7, v8, combinedNewColumns, futureTables...); err != nil {
+		return err
+	}
 	if err := verifyPlatformFinanceV14Tables(ctx, conn); err != nil {
 		return err
 	}
 	if err := verifyObjectInventoryV14(objects, base, v2, v7, v8, v9); err != nil {
-		return err
-	}
-	combinedNewColumns := append(append(append([]schemaColumn(nil), orderItemsV11NewColumns...), aiCostControlV12NewColumns...), platformFinanceV14NewColumns...)
-	futureTables := append(append(append(append(append([]string(nil), tableOrderingV9Order...), "order_items"), aiCostControlV12NewTables...), announcementsMaintenanceV13NewTables...), platformFinanceV14NewTables...)
-	if err := verifyPlatformExpenseReversalsV8HistoricalFingerprintsExcludingColumns(ctx, conn, base, v2, v3, v4, v5, v6, v7, v8, combinedNewColumns, futureTables...); err != nil {
 		return err
 	}
 	rows, err := conn.QueryContext(ctx, "SELECT version, checksum, state, schema_fingerprint FROM "+ledgerTable+" ORDER BY version")

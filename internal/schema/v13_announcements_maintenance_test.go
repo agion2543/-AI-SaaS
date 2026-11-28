@@ -36,7 +36,10 @@ func TestMySQLAnnouncementsMaintenanceV13Migration(t *testing.T) {
 		db := createTestDatabase(t, control, baseConfig)
 		createExactV12AnnouncementsMaintenanceSchema(t, ctx, db)
 
-		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+		// Apply v13 directly (not via ApplyLatest, which now continues to
+		// v14): the repeat-v13 check below only returns Already while the
+		// database is exactly at v13.
+		if result, err := ApplyAnnouncementsMaintenanceV13(ctx, db); err != nil || result != ResultApplied {
 			t.Fatalf("upgrade exact v12 to v13: result=%q err=%v", result, err)
 		}
 		var announcementColumns, maintenancePlanColumns, campaignTargetColumns, campaignPostmortemColumns, suggestionExecutionColumns, manualRedemptionColumns int
@@ -61,6 +64,9 @@ func TestMySQLAnnouncementsMaintenanceV13Migration(t *testing.T) {
 		}
 		if result, err := ApplyAnnouncementsMaintenanceV13(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("repeat exact v13 migration: result=%q err=%v", result, err)
+		}
+		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultApplied {
+			t.Fatalf("upgrade exact v13 to latest v14: result=%q err=%v", result, err)
 		}
 		if result, err := ApplyLatest(ctx, db); err != nil || result != ResultAlready {
 			t.Fatalf("latest verification after v13 upgrade: result=%q err=%v", result, err)
