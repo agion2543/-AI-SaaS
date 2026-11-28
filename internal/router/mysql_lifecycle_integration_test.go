@@ -324,7 +324,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +370,9 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.AnnouncementsMaintenanceV13Version, schema.AnnouncementsMaintenanceV13Checksum).Scan(&v13Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.PlatformFinanceV14Version, schema.PlatformFinanceV14Checksum).Scan(&v14Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +385,8 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('store_table_configs','store_tables','table_sessions','table_cart_items','table_order_details')`).Scan(&tableOrderingColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 51 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || productPricingColumns != 4 || expenseColumns != 10 || expenseReversalColumns != 9 || tableOrderingColumns != 34 {
-		t.Fatalf("managed schema inventory tables/triggers/v1-v13=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; want 51/10/thirteen applied rows and 4/10/9/34 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns)
+	if tables != 53 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || v14Rows != 1 || productPricingColumns != 4 || expenseColumns != 16 || expenseReversalColumns != 9 || tableOrderingColumns != 34 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v14=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; want 53/10/fourteen applied rows and 4/16/9/34 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns)
 	}
 }
 

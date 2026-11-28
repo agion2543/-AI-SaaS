@@ -84,6 +84,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.CampaignPostmortem{},
 		&model.AISuggestionExecution{},
 		&model.GroupBuyManualRedemption{},
+		&model.PlatformTimeLog{},
+		&model.PlatformIncomeRecord{},
 		&model.AuditLog{},
 		&model.Store{},
 		&model.StoreProduct{},
