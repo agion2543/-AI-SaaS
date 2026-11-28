@@ -489,7 +489,7 @@
           <article class="basis-item cost">
             <span class="basis-index">02 · AI 成本</span>
             <strong>估算与实际账单分开</strong>
-            <p>估算成本来自调用记录 × 模型价格表重算（按调用日期取当日最晚生效价）；实际账单为超管手工录入的供应商真实金额。两者口径不同，差额仅供核对参考，不代表欠款或退款；门店维度无归属的调用记为“未指定门店”。</p>
+            <p>估算成本来自调用记录 × 模型价格表重算（按调用日期取当日最晚生效价）；实际账单为超管手工录入的供应商真实金额。两者口径不同，差额仅供核对参考，不代表欠款或退款；2026-11-28 前的调用无门店归属，记为“未指定门店”。</p>
           </article>
           <article class="basis-item result">
             <span class="basis-index">03 · 利润结论</span>
@@ -570,7 +570,7 @@
                 </el-table-column>
               </el-table>
               <el-empty v-if="!aiStatsRows.length" description="本期暂无 AI 调用记录；这不代表成本为零" :image-size="72" />
-              <div class="table-footnote">门店维度无归属的调用记为“未指定门店”，不虚构归属。{{ aiStats.period_start }} 至 {{ aiStats.period_end }}。</div>
+              <div class="table-footnote">2026-11-28 前的调用无门店归属，记为“未指定门店”，不虚构归属。{{ aiStats.period_start }} 至 {{ aiStats.period_end }}。</div>
             </template>
           </el-tab-pane>
 
@@ -1503,7 +1503,7 @@ const aiStatsRows = computed(() => {
         ? aiStats.value.by_scenario || []
         : aiStats.value.by_merchant || []
   return rows.map((row, index) => {
-    if (dimension === 'store') return { ...row, rowKey: `store-${row.store_id || 0}`, displayName: storeDisplayName(row.store_id) }
+    if (dimension === 'store') return { ...row, rowKey: `store-${row.store_id || 0}`, displayName: storeDisplayName(row.store_id, row.store_name) }
     if (dimension === 'model') return { ...row, rowKey: `model-${row.model || index}`, displayName: row.model || '未注明' }
     if (dimension === 'scenario') return { ...row, rowKey: `scenario-${row.scenario || index}`, displayName: scenarioLabel(row.scenario) }
     return { ...row, rowKey: `merchant-${row.merchant_id}`, displayName: merchantDisplayName(row.merchant_id, row.merchant_name) }

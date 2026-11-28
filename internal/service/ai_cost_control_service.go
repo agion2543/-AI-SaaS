@@ -872,6 +872,7 @@ type AIUsageGroupStat struct {
 	MerchantID         uint   `json:"merchant_id,omitempty"`
 	MerchantName       string `json:"merchant_name,omitempty"`
 	StoreID            uint   `json:"store_id,omitempty"`
+	StoreName          string `json:"store_name,omitempty"`
 	Model              string `json:"model,omitempty"`
 	Scenario           string `json:"scenario,omitempty"`
 	RequestCount       int64  `json:"request_count"`
@@ -946,6 +947,15 @@ func (g *AICostGuard) AIUsageStats(start, end time.Time) (*AIUsageStats, error) 
 			merchantNames[merchant.ID] = merchant.Name
 		}
 	}
+	// 门店名与商家名同法一次查表：用量行只存 store_id，名称现查现填；
+	// 门店已删或无名时 StoreName 为空，前端回落到“门店 #id”。
+	storeNames := make(map[uint]string)
+	var stores []model.Store
+	if err := g.db.Model(&model.Store{}).Select("id, name").Find(&stores).Error; err == nil {
+		for _, store := range stores {
+			storeNames[store.ID] = store.Name
+		}
+	}
 	stats := &AIUsageStats{
 		PeriodStart:         start.Format("2006-01-02"),
 		PeriodEnd:           end.AddDate(0, 0, -1).Format("2006-01-02"),
@@ -994,7 +1004,7 @@ func (g *AICostGuard) AIUsageStats(start, end time.Time) (*AIUsageStats, error) 
 		}
 		storeStat, ok := byStore[storeID]
 		if !ok {
-			storeStat = &AIUsageGroupStat{StoreID: storeID}
+			storeStat = &AIUsageGroupStat{StoreID: storeID, StoreName: storeNames[storeID]}
 			byStore[storeID] = storeStat
 		}
 		accumulate(storeStat, row, cost)

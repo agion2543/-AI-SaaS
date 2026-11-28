@@ -7,8 +7,10 @@ type MerchantAIUsageLog struct {
 	MerchantID uint     `gorm:"index;not null" json:"merchant_id"`
 	Merchant   Merchant `json:"merchant,omitempty"`
 	UserID     *uint    `gorm:"index" json:"user_id"`
-	// StoreID 为调用归属门店；商家 AI 调用目前不带门店上下文时为 NULL，
-	// 按门店统计时归入“未指定门店”，不虚构归属。
+	// StoreID 为调用归属门店；自 2026-11-28 起写入时解析商家的默认门店
+	// （最早创建且在用的那家，见 MerchantService.defaultStoreID），
+	// 商家无门店时仍为 NULL，按门店统计时归入“未指定门店”，不虚构归属。
+	// 历史行（2026-11-28 前写入）的 NULL 保持原样，不回填。
 	StoreID          *uint  `gorm:"index" json:"store_id"`
 	Scenario         string `gorm:"size:120" json:"scenario"`
 	Model            string `gorm:"size:120" json:"model"`

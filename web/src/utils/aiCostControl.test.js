@@ -42,6 +42,14 @@ test('store dimension never invents an owner: NULL store shows 未指定门店',
   assert.equal(storeDisplayName(null), '未指定门店')
   assert.equal(storeDisplayName(undefined), '未指定门店')
   assert.equal(storeDisplayName(12), '门店 #12')
+  assert.equal(storeDisplayName(0, '望京店'), '未指定门店')
+})
+
+test('store dimension prefers the real store name when the backend provides one', () => {
+  assert.equal(storeDisplayName(12, '望京店'), '望京店')
+  assert.equal(storeDisplayName(12, ''), '门店 #12')
+  assert.equal(storeDisplayName(12, '  '), '门店 #12')
+  assert.equal(storeDisplayName('12', '望京店'), '望京店')
 })
 
 test('merchant labels fall back to id and flag the global default row', () => {

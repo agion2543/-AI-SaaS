@@ -53,9 +53,12 @@ export function budgetMerchantLabel(merchantId, merchantName) {
 }
 
 // 门店维度：后端 store_id 为 NULL 时统计归入 0，页面照实显示“未指定门店”；
-// 有门店 id 但无名称时只显示编号，不虚构门店名。
-export function storeDisplayName(storeId) {
+// 有门店 id 且后端给了真名时优先显示真名，无名时只显示编号，不虚构门店名。
+// 自 2026-11-28 起新写入的调用按默认门店归属，历史 NULL 行仍显示“未指定门店”。
+export function storeDisplayName(storeId, storeName) {
   if (!storeId) return '未指定门店'
+  const name = String(storeName || '').trim()
+  if (name) return name
   return `门店 #${storeId}`
 }
 

@@ -1603,6 +1603,24 @@ func (s *MerchantService) aiDailyLimit(merchant *model.Merchant, policy AIConfig
 	return maxInt(baseLimit/2, 10)
 }
 
+// defaultStoreID 解析商家 AI 调用的默认归属门店：最早创建且在用的那家
+// （status = "active"，按 id 升序取首条；ListByMerchant 是 id 倒序，不能
+// 直接复用取首条）。单店商家时归属精确；多店取最早店是一个约定，不是
+// 调用时真实所在的门店。商家无在用门店时返回 nil，调用仍记 StoreID NULL，
+// 统计时归入“未指定门店”。查询失败也不阻断用量记录（返回 nil）。
+// 显式门店透传（调用方传 store_id）是后续增强，本次不做。
+func (s *MerchantService) defaultStoreID(merchantID uint) *uint {
+	if s == nil || s.db == nil || merchantID == 0 {
+		return nil
+	}
+	var store model.Store
+	if err := s.db.Select("id").Where("merchant_id = ? AND status = ?", merchantID, "active").Order("id ASC").First(&store).Error; err != nil {
+		return nil
+	}
+	id := store.ID
+	return &id
+}
+
 func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result *AIResult, callErr error, duration time.Duration) error {
 	provider := strings.TrimSpace(s.cfg.AIProvider)
 	modelName := strings.TrimSpace(s.cfg.AIModel)
@@ -1625,23 +1643,32 @@ func (s *MerchantService) recordAIUsage(merchantID uint, scenario string, result
 			estimatedCost = cost
 		}
 	}
-	log := &model.MerchantAIUsageLog{
-		MerchantID:         merchantID,
-		Scenario:           strings.TrimSpace(scenario),
-		Model:              modelName,
-		Provider:           provider,
-		Fallback:           fallback,
-		Success:            success,
-		Error:              errorText,
-		DurationMS:         int(duration.Milliseconds()),
-		PromptTokens:       aiResultInt(result, "prompt"),
-		CompletionTokens:   aiResultInt(result, "completion"),
-		CachedTokens:       aiResultInt(result, "cached"),
-		TotalTokens:        aiResultInt(result, "total"),
-		EstimatedCostCents: estimatedCost,
-		UsedAt:             time.Now(),
+	// Success=false 是零值：模型上 Success 带 `gorm:"default:true"`，
+	// GORM 按结构体 Create 会把零值 false 覆写为标签默认 true
+	// （gorm v1.25.10 callbacks/create.go），失败调用会被记成成功，
+	// 成功/失败计数随之失真；改用 map 写入，map 值原样入库，不走标签
+	// 默认。标签本身本次不动（见小结遗留）；本函数是全仓唯一生产写入点。
+	now := time.Now()
+	values := map[string]interface{}{
+		"MerchantID":         merchantID,
+		"StoreID":            s.defaultStoreID(merchantID),
+		"Scenario":           strings.TrimSpace(scenario),
+		"Model":              modelName,
+		"Provider":           provider,
+		"Fallback":           fallback,
+		"Success":            success,
+		"Error":              errorText,
+		"DurationMS":         int(duration.Milliseconds()),
+		"PromptTokens":       aiResultInt(result, "prompt"),
+		"CompletionTokens":   aiResultInt(result, "completion"),
+		"CachedTokens":       aiResultInt(result, "cached"),
+		"TotalTokens":        aiResultInt(result, "total"),
+		"EstimatedCostCents": estimatedCost,
+		"UsedAt":             now,
+		"CreatedAt":          now,
+		"UpdatedAt":          now,
 	}
-	return s.db.Create(log).Error
+	return s.db.Model(&model.MerchantAIUsageLog{}).Create(values).Error
 }
 
 func intValue(value interface{}) int {
