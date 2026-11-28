@@ -39,7 +39,12 @@
           </el-table-column>
           <el-table-column label="联系电话" width="150"><template #default="{ row }">{{ row.contact_phone || '—' }}</template></el-table-column>
           <el-table-column label="注册时间" min-width="165"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
-          <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag type="warning" size="small">待审核</el-tag></template></el-table-column>
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }">
+              <el-tag type="warning" size="small">待审核</el-tag>
+              <el-tag v-if="String(row.review_reason || '').trim() !== ''" type="danger" size="small">已拒绝</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button link type="success" :disabled="acting" @click.stop="approve(row)">通过</el-button>

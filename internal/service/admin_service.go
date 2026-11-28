@@ -161,6 +161,11 @@ type MerchantListRow struct {
 	SubscriptionStatus     string     `json:"subscription_status"`
 	SubscriptionExpiredAt  *time.Time `json:"subscription_expired_at"`
 	SubscriptionExpireAt   *time.Time `json:"subscription_expire_at"`
+	// Onboarding review (v17): a rejected merchant stays status=pending
+	// with a non-empty ReviewReason and a non-NULL ReviewedAt; the review
+	// page marks such rows "已拒绝" (P3-2 fix B).
+	ReviewReason           string     `json:"review_reason"`
+	ReviewedAt             *time.Time `json:"reviewed_at"`
 	OrderCount             int64      `json:"order_count"`
 	TradeAmount            int64      `json:"trade_amount"`
 	RefundAmount           int64      `json:"refund_amount"`
@@ -456,6 +461,8 @@ func merchantListRowsFromAggregates(merchants []model.Merchant, agg *merchantLis
 			SubscriptionStatus:    merchant.SubscriptionStatus,
 			SubscriptionExpiredAt: merchant.SubscriptionExpiredAt,
 			SubscriptionExpireAt:  merchant.SubscriptionExpireAt,
+			ReviewReason:          merchant.ReviewReason,
+			ReviewedAt:            merchant.ReviewedAt,
 		}
 		if item, ok := agg.orders[merchant.ID]; ok {
 			row.OrderCount = item.OrderCount

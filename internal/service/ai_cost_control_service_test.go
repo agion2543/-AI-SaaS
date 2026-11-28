@@ -1119,13 +1119,35 @@ func TestMerchantListServerFiltersSortAndStats(t *testing.T) {
 		t.Fatalf("risk_score desc page 1 rows=%+v, want suspended then plain", rows)
 	}
 	_ = expired
+	// Fix B (P3-2): the list row carries the onboarding review fields, so
+	// the review page can mark a rejected pending merchant "已拒绝".
+	pending := mk("filter-pending", "pending", "inactive", nil, "13800000006")
+	if _, err := admin.ReviewMerchantOnboarding(pending.ID, false, "营业执照不清晰", 7, AuditEvent{
+		Actor: AuditActor{ID: 7, Type: "super_admin"},
+		Input: AuditRecordInput{Action: "merchant_onboarding_rejected", TargetType: "merchant", MerchantID: &pending.ID},
+	}); err != nil {
+		t.Fatalf("reject pending merchant: %v", err)
+	}
+	rows, total := list(repository.MerchantListFilter{Status: "pending"}, 1, 10)
+	if total != 1 || len(rows) != 1 || rows[0].Name != "filter-pending" {
+		t.Fatalf("status pending total=%d rows=%+v, want 1 rejected pending", total, rows)
+	}
+	if rows[0].ReviewReason != "营业执照不清晰" || rows[0].ReviewedAt == nil {
+		t.Fatalf("pending list row review=%q/%v, want 营业执照不清晰 and non-NULL reviewed_at", rows[0].ReviewReason, rows[0].ReviewedAt)
+	}
+	rows, _ = list(repository.MerchantListFilter{Status: "active"}, 1, 10)
+	for _, row := range rows {
+		if row.ReviewReason != "" || row.ReviewedAt != nil {
+			t.Fatalf("active list row %q carries review=%q/%v, want empty", row.Name, row.ReviewReason, row.ReviewedAt)
+		}
+	}
 
 	stats, err := admin.MerchantStats()
 	if err != nil {
 		t.Fatalf("merchant stats: %v", err)
 	}
-	if stats.Total != 5 || stats.SubscribedCount != 2 || stats.HighRiskCount != 1 || stats.WatchCount != 1 ||
+	if stats.Total != 6 || stats.SubscribedCount != 2 || stats.HighRiskCount != 1 || stats.WatchCount != 1 ||
 		stats.OpenFollowUpCount != 1 || stats.PaymentMissingQRCount != 1 || stats.PendingSettlementMerchantCount != 2 {
-		t.Fatalf("merchant stats = %+v, want total 5 subscribed 2 high 1 watch 1 follow-ups 1 missing-qr 1 settlement 2 (two paid-but-unsettled orders)", stats)
+		t.Fatalf("merchant stats = %+v, want total 6 subscribed 2 high 1 watch 1 follow-ups 1 missing-qr 1 settlement 2 (two paid-but-unsettled orders)", stats)
 	}
 }
