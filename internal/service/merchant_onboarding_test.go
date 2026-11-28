@@ -187,6 +187,18 @@ func TestPendingMerchantCannotBuildOrBuy(t *testing.T) {
 	if _, _, err := service.RedeemSubscriptionCard(0, pending.ID, dto.MerchantRedeemCardRequest{Code: "ONB-CARD-1"}); err == nil {
 		t.Fatal("pending merchant unexpectedly redeemed a subscription card")
 	}
+	// A suspended merchant cannot redeem either (P3-2 fix A): same gate as
+	// CreateSubscriptionOrder, which already rejects suspended merchants.
+	suspended := &model.Merchant{Name: "已禁用门禁商家", Status: "suspended"}
+	if err := db.Create(suspended).Error; err != nil {
+		t.Fatalf("create suspended merchant: %v", err)
+	}
+	if _, _, err := service.RedeemSubscriptionCard(0, suspended.ID, dto.MerchantRedeemCardRequest{Code: "ONB-CARD-1"}); err == nil || err.Error() != "商家已被禁用" {
+		t.Fatalf("suspended merchant card redeem err=%v, want 商家已被禁用", err)
+	}
+	if _, err := service.CreateSubscriptionOrder(0, suspended.ID, dto.CreateMerchantSubscriptionOrderRequest{PlanID: 1}); err == nil || err.Error() != "商家已被禁用" {
+		t.Fatalf("suspended merchant subscription order err=%v, want 商家已被禁用", err)
+	}
 
 	// The same calls succeed for an active merchant.
 	active := &model.Merchant{Name: "已通过门禁商家", Status: "active"}

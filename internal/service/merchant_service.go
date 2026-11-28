@@ -330,6 +330,9 @@ func (s *MerchantService) RedeemSubscriptionCard(userID, merchantID uint, req dt
 	if err != nil {
 		return nil, nil, errors.New("商家信息不存在")
 	}
+	if merchant.Status == "suspended" {
+		return nil, nil, errors.New("商家已被禁用")
+	}
 	if merchant.Status == "pending" {
 		return nil, nil, errors.New("商家正在审核中，审核通过后才能兑换卡密开通订阅")
 	}
