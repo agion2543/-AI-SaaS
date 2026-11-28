@@ -1,5 +1,11 @@
 /* Mobile Global Styles */
 
+/* Vant 主题（UI 规范 §6 决定 3，已定）：只覆盖主色这一个变量，统一为 PC 端主色 #2563eb。
+   其余 Vant 默认主题不动；.text-primary 的 #1989fa 与移动登录页渐变不在此决定内，不动。 */
+:root {
+  --van-primary-color: #2563eb;
+}
+
 /* Reset & Base */
 * {
   box-sizing: border-box;
