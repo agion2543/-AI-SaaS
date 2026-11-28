@@ -614,7 +614,10 @@ func openSafeCustomerOrderMySQL(t *testing.T) *gorm.DB {
 func createCustomerOrderFixtures(t *testing.T, db *gorm.DB, phone string) (model.Merchant, model.Store, model.StoreProduct, model.ReferralCoupon, model.ReferralCoupon, model.ReferralCoupon, model.ReferralCoupon) {
 	t.Helper()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	merchant := model.Merchant{Name: "synthetic-customer-order-merchant-" + suffix, Status: "active"}
+	// Fixture merchant is normally subscribed: customer order intake is
+	// subscription-gated for new orders.
+	expiry := time.Now().Add(time.Hour)
+	merchant := model.Merchant{Name: "synthetic-customer-order-merchant-" + suffix, Status: "active", SubscriptionStatus: "active", SubscriptionExpireAt: &expiry}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatalf("create synthetic merchant: %v", err)
 	}
