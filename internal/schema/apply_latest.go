@@ -114,6 +114,17 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 			return "", probeErr
 		}
 	}
+	// A corrupted ledger row (e.g. a tampered v2 checksum) makes every
+	// probe fail, but only the newer probes name the ledger problem: the
+	// oldest probe (v2) re-verifies v1 without excluding later versions
+	// and reports a phantom v1 drift instead. Prefer the specific
+	// ledger/checksum error, newest probe first, so the operator is told
+	// the real cause.
+	for _, probeErr := range probeErrors {
+		if strings.Contains(probeErr.Error(), "ledger entry") || strings.Contains(probeErr.Error(), "checksum mismatch") {
+			return "", probeErr
+		}
+	}
 	for i := len(probeErrors) - 1; i >= 0; i-- {
 		message := probeErrors[i].Error()
 		if strings.Contains(message, "schema drift") || strings.Contains(message, "ledger entry") || strings.Contains(message, "checksum mismatch") {

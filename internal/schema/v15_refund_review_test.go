@@ -36,6 +36,11 @@ func TestMySQLRefundReviewV15Migration(t *testing.T) {
 
 		// Pre-v15 rows keep their legacy defaults after the upgrade: no
 		// operator on the payment record, no reviewer on the refund.
+		// The exact v14 orders table has a foreign key to merchants, so
+		// the legacy merchant row must exist first.
+		if _, err := db.Exec(`INSERT INTO merchants (id, name, created_at, updated_at) VALUES (1, 'V15 合成商户', NOW(3), NOW(3))`); err != nil {
+			t.Fatalf("insert legacy v14 merchant: %v", err)
+		}
 		if _, err := db.Exec(`INSERT INTO orders (order_no, order_type, merchant_id, amount, total_amount, status, created_at, updated_at) VALUES ('V15-ORDER-1', 'store_order', 1, 50000, 50000, 'received', NOW(3), NOW(3))`); err != nil {
 			t.Fatalf("insert legacy v14 order: %v", err)
 		}

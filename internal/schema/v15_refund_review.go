@@ -400,7 +400,16 @@ func verifyRefundReviewV15Tables(ctx context.Context, conn *sql.Conn) error {
 			},
 			indexes: []string{
 				"PRIMARY|0|1|id|NULL|BTREE",
-				"fk_refund_records_order|1|1|order_id|NULL|BTREE",
+				// NOTE: the v1 DDL also declares CONSTRAINT
+				// fk_refund_records_order on order_id, but MySQL reuses
+				// the existing KEY idx_refund_records_order_id for the
+				// foreign key instead of creating a second index named
+				// after the constraint, so no fk_refund_records_order
+				// index ever exists in information_schema. The constraint
+				// itself is still covered by the fingerprint's
+				// constraints section. (payment_records is different:
+				// its DDL has no separate order_id KEY, so MySQL does
+				// auto-create fk_payment_records_order there.)
 				"idx_refund_order_idempotency|0|1|order_id|NULL|BTREE",
 				"idx_refund_order_idempotency|0|2|idempotency_key|NULL|BTREE",
 				"idx_refund_records_merchant_id|1|1|merchant_id|NULL|BTREE",
