@@ -687,7 +687,7 @@ func TestAIBudgetAlertSnapshotSurvivesPriceChange(t *testing.T) {
 	// 触发 70% 预警后再改价。
 	saveSyntheticModelPrice(t, admin, "m", 300, 600, 30, dayStart.Add(12*time.Hour))
 
-	alerts, err := admin.ListBudgetAlerts(merchant.ID, "daily", 70, time.Time{}, time.Time{})
+	alerts, _, err := admin.ListBudgetAlerts(merchant.ID, "daily", 70, time.Time{}, time.Time{}, 1, 20)
 	if err != nil {
 		t.Fatalf("list alerts: %v", err)
 	}
@@ -780,7 +780,7 @@ func TestAIBudgetAlertsCarryMerchantName(t *testing.T) {
 		}
 	}
 
-	alerts, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{})
+	alerts, _, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{}, 1, 20)
 	if err != nil {
 		t.Fatalf("list alerts: %v", err)
 	}
@@ -798,7 +798,7 @@ func TestAIBudgetAlertsCarryMerchantName(t *testing.T) {
 	}
 
 	// 按 merchant_id 筛选后名字仍正确。
-	filtered, err := admin.ListBudgetAlerts(merchants[1].ID, "daily", 70, time.Time{}, time.Time{})
+	filtered, _, err := admin.ListBudgetAlerts(merchants[1].ID, "daily", 70, time.Time{}, time.Time{}, 1, 20)
 	if err != nil {
 		t.Fatalf("list filtered alerts: %v", err)
 	}
@@ -842,12 +842,14 @@ func TestAIBudgetStatusCarriesMerchantName(t *testing.T) {
 	}
 }
 
-// 预警表硬上限 aiBudgetAlertListLimit = 500 行是独立于商家名问题的第二个
-// 500 上限，本次不改；此处只确认截断行为并显性化记录。
-func TestAIBudgetAlertListTruncatesAt500(t *testing.T) {
+// 2026-11-28 P2 第 2 件：预警表改服务端分页，旧的 500 行硬上限删除。
+// 501 条预警：total=501，第 1 页 20 行，第 26 页 1 行；带 merchant_id
+// 筛选时 total 为筛选后计数；排序 period_start DESC, id DESC 跨页连续。
+func TestAIBudgetAlertListPaginates(t *testing.T) {
 	db := newSyntheticAICostDB(t)
 	admin := NewAdminService(&config.Config{}, db)
 	merchant := createSyntheticAICostMerchant(t, db, "synthetic-truncate-merchant")
+	other := createSyntheticAICostMerchant(t, db, "synthetic-truncate-other")
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)
 	for i := 0; i < 501; i++ {
 		alert := model.MerchantAIBudgetAlert{
@@ -862,15 +864,70 @@ func TestAIBudgetAlertListTruncatesAt500(t *testing.T) {
 			t.Fatalf("insert alert %d: %v", i, err)
 		}
 	}
-	alerts, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{})
+	if err := db.Create(&model.MerchantAIBudgetAlert{
+		MerchantID: other.ID, PeriodType: "daily",
+		PeriodStart: model.PlatformExpenseDate(base.Format("2006-01-02")),
+		Threshold:   70, UsedTokens: 1, EstimatedCostCents: 1,
+	}).Error; err != nil {
+		t.Fatalf("insert other merchant alert: %v", err)
+	}
+
+	page1, total, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{}, 1, 20)
 	if err != nil {
-		t.Fatalf("list alerts: %v", err)
+		t.Fatalf("list alerts page 1: %v", err)
 	}
-	if len(alerts) != 500 {
-		t.Fatalf("alerts = %d, want 500 (hard limit aiBudgetAlertListLimit)", len(alerts))
+	if total != 502 || len(page1) != 20 {
+		t.Fatalf("page 1: total=%d rows=%d, want total 502 rows 20", total, len(page1))
 	}
-	if alerts[0].MerchantName != merchant.Name {
-		t.Fatalf("truncated alert merchant_name = %q, want %q", alerts[0].MerchantName, merchant.Name)
+	if page1[0].MerchantName != other.Name {
+		t.Fatalf("page 1 first row merchant_name = %q, want %q (newest period_start, highest id)", page1[0].MerchantName, other.Name)
+	}
+	lastPage, total, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{}, 26, 20)
+	if err != nil {
+		t.Fatalf("list alerts page 26: %v", err)
+	}
+	if total != 502 || len(lastPage) != 2 {
+		t.Fatalf("page 26: total=%d rows=%d, want total 502 rows 2 (502 = 25*20 + 2)", total, len(lastPage))
+	}
+
+	// 带 merchant_id 筛选：total 为筛选后计数。
+	filtered, filteredTotal, err := admin.ListBudgetAlerts(merchant.ID, "", 0, time.Time{}, time.Time{}, 1, 20)
+	if err != nil {
+		t.Fatalf("list filtered alerts: %v", err)
+	}
+	if filteredTotal != 501 || len(filtered) != 20 {
+		t.Fatalf("filtered: total=%d rows=%d, want total 501 rows 20", filteredTotal, len(filtered))
+	}
+	filteredLast, _, err := admin.ListBudgetAlerts(merchant.ID, "", 0, time.Time{}, time.Time{}, 26, 20)
+	if err != nil {
+		t.Fatalf("list filtered alerts page 26: %v", err)
+	}
+	if len(filteredLast) != 1 {
+		t.Fatalf("filtered page 26 rows=%d, want 1 (501 = 25*20 + 1)", len(filteredLast))
+	}
+
+	// 跨页连续：逐页收齐 501 条，(period_start, id) 全程非递增且无重复。
+	seen := make(map[uint]bool, 501)
+	prevStart, prevID := "", uint(0)
+	for page := 1; page <= 26; page++ {
+		rows, _, err := admin.ListBudgetAlerts(merchant.ID, "", 0, time.Time{}, time.Time{}, page, 20)
+		if err != nil {
+			t.Fatalf("list filtered alerts page %d: %v", page, err)
+		}
+		for _, row := range rows {
+			if seen[row.ID] {
+				t.Fatalf("alert id %d repeated across pages", row.ID)
+			}
+			seen[row.ID] = true
+			start := string(row.PeriodStart)
+			if prevStart != "" && (start > prevStart || (start == prevStart && row.ID > prevID)) {
+				t.Fatalf("order broke across pages at id %d period_start %s after %s/%d", row.ID, start, prevStart, prevID)
+			}
+			prevStart, prevID = start, row.ID
+		}
+	}
+	if len(seen) != 501 {
+		t.Fatalf("collected %d distinct alerts across pages, want 501", len(seen))
 	}
 }
 
@@ -915,7 +972,7 @@ func TestAIBudgetRowsScale2000Merchants(t *testing.T) {
 			t.Fatalf("budget row merchant %d name = %q, want %q", row.MerchantID, row.MerchantName, wantNames[row.MerchantID])
 		}
 	}
-	alerts, err := admin.ListBudgetAlerts(merchants[0].ID, "daily", 70, time.Time{}, time.Time{})
+	alerts, _, err := admin.ListBudgetAlerts(merchants[0].ID, "daily", 70, time.Time{}, time.Time{}, 1, 20)
 	if err != nil {
 		t.Fatalf("list alerts at scale: %v", err)
 	}

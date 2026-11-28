@@ -184,12 +184,13 @@ func (ctl *AdminController) ListAIBudgetAlerts(c *gin.Context) {
 		}
 		end = parsed
 	}
-	rows, err := ctl.admin.ListBudgetAlerts(merchantID, c.Query("period_type"), threshold, start, end)
+	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
+	rows, total, err := ctl.admin.ListBudgetAlerts(merchantID, c.Query("period_type"), threshold, start, end, page, pageSize)
 	if err != nil {
 		utils.Error(c, http.StatusInternalServerError, "预算预警暂不可用")
 		return
 	}
-	utils.Success(c, rows)
+	utils.Success(c, gin.H{"list": rows, "total": total})
 }
 
 func (ctl *AdminController) GetAIEmergencySwitch(c *gin.Context) {

@@ -807,13 +807,13 @@
 
           <el-tab-pane label="预算预警" name="alerts">
             <div class="period-toolbar">
-              <el-select v-model="alertFilter.merchantId" placeholder="输入商家名搜索" clearable filterable remote :remote-method="searchAlertMerchants" :loading="alertMerchantSearchLoading" class="ai-filter-select" @change="loadBudgetAlerts">
+              <el-select v-model="alertFilter.merchantId" placeholder="输入商家名搜索" clearable filterable remote :remote-method="searchAlertMerchants" :loading="alertMerchantSearchLoading" class="ai-filter-select" @change="reloadBudgetAlerts">
                 <el-option v-for="item in alertMerchantOptions" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
               </el-select>
-              <el-select v-model="alertFilter.threshold" placeholder="全部阈值" clearable class="ai-filter-select" @change="loadBudgetAlerts">
+              <el-select v-model="alertFilter.threshold" placeholder="全部阈值" clearable class="ai-filter-select" @change="reloadBudgetAlerts">
                 <el-option v-for="item in budgetAlertThresholds" :key="item" :label="`${item}%`" :value="item" />
               </el-select>
-              <el-select v-model="alertFilter.periodType" placeholder="全部周期" clearable class="ai-filter-select" @change="loadBudgetAlerts">
+              <el-select v-model="alertFilter.periodType" placeholder="全部周期" clearable class="ai-filter-select" @change="reloadBudgetAlerts">
                 <el-option value="daily" label="每日" />
                 <el-option value="monthly" label="每月" />
               </el-select>
@@ -844,6 +844,18 @@
               </el-table-column>
             </el-table>
             <el-empty v-else description="暂无预算预警记录" :image-size="72" />
+            <div v-if="alertsTotal > 0" class="pager">
+              <el-pagination
+                background
+                layout="total, sizes, prev, pager, next"
+                :total="alertsTotal"
+                :page-size="alertPageSize"
+                :current-page="alertPage"
+                :page-sizes="[10, 20, 50]"
+                @size-change="alertPageSize = $event; alertPage = 1; loadBudgetAlerts()"
+                @current-change="alertPage = $event; loadBudgetAlerts()"
+              />
+            </div>
           </el-tab-pane>
 
           <el-tab-pane label="紧急关闭" name="emergency">
@@ -1492,6 +1504,9 @@ const budgetForm = ref({ merchantId: 0, dailyBudgetYuan: 0, monthlyBudgetYuan: 0
 const budgetStatus = ref(null)
 const budgetAlerts = ref([])
 const alertsLoading = ref(false)
+const alertPage = ref(1)
+const alertPageSize = ref(20)
+const alertsTotal = ref(0)
 const alertFilter = ref({ merchantId: '', threshold: '', periodType: '' })
 const emergencySwitch = ref(null)
 const submittingEmergency = ref(false)
@@ -2204,17 +2219,26 @@ const loadBudgetStatus = async (merchantId) => {
 const loadBudgetAlerts = async () => {
   alertsLoading.value = true
   try {
-    const params = { ...aiPeriodParams() }
+    const params = { ...aiPeriodParams(), page: alertPage.value, page_size: alertPageSize.value }
     if (alertFilter.value.merchantId !== '' && alertFilter.value.merchantId !== null) params.merchant_id = alertFilter.value.merchantId
     if (alertFilter.value.threshold !== '' && alertFilter.value.threshold !== null) params.threshold = alertFilter.value.threshold
     if (alertFilter.value.periodType) params.period_type = alertFilter.value.periodType
     const response = await fetchAdminAIBudgetAlerts(params)
-    budgetAlerts.value = response?.data || []
+    const data = response?.data
+    // 服务端已分页：{list, total}；旧后端若仍返回裸数组则按全量回落。
+    budgetAlerts.value = Array.isArray(data) ? data : (data?.list || [])
+    alertsTotal.value = Array.isArray(data) ? data.length : (data?.total ?? 0)
   } catch (err) {
     ElMessage.error(err?.response?.data?.message || '加载预算预警失败')
   } finally {
     alertsLoading.value = false
   }
+}
+
+// 筛选变化回第 1 页再拉取；单纯翻页/换每页条数保持当前筛选。
+const reloadBudgetAlerts = async () => {
+  alertPage.value = 1
+  await loadBudgetAlerts()
 }
 
 const loadEmergencySwitch = async () => {
@@ -2281,7 +2305,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.platform-cost-page{display:grid;gap:18px}.page-alert{margin:0}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.summary-card{display:grid;align-content:start;gap:9px;min-height:174px;padding:20px;border:1px solid #dce8f5;border-radius:22px;background:rgba(255,255,255,.96);box-shadow:0 16px 38px rgba(15,39,71,.07)}.summary-card.primary{color:#fff;border-color:#2563eb;background:linear-gradient(135deg,#0f2d55 0%,#2563eb 65%,#06b6d4 100%)}.summary-card.warning{background:linear-gradient(145deg,#fff,#fff8eb);border-color:#f3d7a7}.summary-card.muted{background:linear-gradient(145deg,#fff,#f3f6fa)}.card-label{font-size:13px;font-weight:800;color:#64748b}.summary-card.primary .card-label,.summary-card.primary small,.summary-card.primary p{color:rgba(255,255,255,.78)}.summary-card strong{font-size:clamp(22px,2vw,30px);line-height:1.15;letter-spacing:-.04em;color:#0f172a}.summary-card.primary strong{color:#fff}.summary-card p,.summary-card small{margin:0;color:#64748b;font-size:12px;line-height:1.55}.period-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.period-toolbar :deep(.el-date-editor){max-width:360px}.currency-hint{font-size:12px;color:#64748b}.period-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.period-stat{display:grid;gap:8px;padding:15px;border:1px solid #e2eaf3;border-radius:16px;background:#fbfdff;min-height:96px}.period-stat span{color:#64748b;font-size:12px;line-height:1.4}.period-stat strong{font-size:20px;line-height:1.2;color:#0f172a;overflow-wrap:anywhere}.period-stat.income{border-color:#b9e6d3;background:#f2fbf7}.period-stat.refund{border-color:#f6d2d2;background:#fff7f7}.period-stat.cost{border-color:#f1d6ad;background:#fffaf1}.period-stat.balance{border-color:#ccd8f7;background:#f7f9ff}.period-alert{margin-top:14px}.plan-note{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding:12px 14px;border-radius:12px;background:#f7f8fa;color:#64748b;font-size:12px;line-height:1.55}.plan-note strong{flex:none;color:#334155}.work-grid{display:grid;grid-template-columns:minmax(340px,.9fr) minmax(0,1.1fr);gap:18px}.expense-form{display:grid;gap:2px}.form-row{display:grid;gap:14px}.form-row.two-col{grid-template-columns:repeat(2,minmax(0,1fr))}.full-width{width:100%}.immutable-note{margin:2px 0 14px}.form-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.audit-note{max-width:380px;color:#64748b;font-size:12px;line-height:1.5}.expense-table{width:100%}.table-footnote{margin-top:10px;color:#64748b;font-size:12px}.basis-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.basis-item{display:grid;align-content:start;gap:9px;padding:16px;border:1px solid #e1eaf4;border-radius:16px;background:#fbfdff}.basis-item strong{font-size:16px;color:#0f172a}.basis-item p{margin:0;font-size:13px;line-height:1.65;color:#64748b;overflow-wrap:anywhere}.basis-index{font-size:11px;font-weight:900;letter-spacing:.12em;color:#2563eb;text-transform:uppercase}.basis-item.cost .basis-index{color:#b45309}.basis-item.result .basis-index{color:#64748b}.usage-alert{margin-bottom:14px}.usage-table{width:100%}.snapshot-footnote{padding:0 4px;color:#64748b;font-size:12px;line-height:1.6}
+.platform-cost-page{display:grid;gap:18px}.page-alert{margin:0}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.summary-card{display:grid;align-content:start;gap:9px;min-height:174px;padding:20px;border:1px solid #dce8f5;border-radius:22px;background:rgba(255,255,255,.96);box-shadow:0 16px 38px rgba(15,39,71,.07)}.summary-card.primary{color:#fff;border-color:#2563eb;background:linear-gradient(135deg,#0f2d55 0%,#2563eb 65%,#06b6d4 100%)}.summary-card.warning{background:linear-gradient(145deg,#fff,#fff8eb);border-color:#f3d7a7}.summary-card.muted{background:linear-gradient(145deg,#fff,#f3f6fa)}.card-label{font-size:13px;font-weight:800;color:#64748b}.summary-card.primary .card-label,.summary-card.primary small,.summary-card.primary p{color:rgba(255,255,255,.78)}.summary-card strong{font-size:clamp(22px,2vw,30px);line-height:1.15;letter-spacing:-.04em;color:#0f172a}.summary-card.primary strong{color:#fff}.summary-card p,.summary-card small{margin:0;color:#64748b;font-size:12px;line-height:1.55}.period-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.period-toolbar :deep(.el-date-editor){max-width:360px}.currency-hint{font-size:12px;color:#64748b}.period-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.period-stat{display:grid;gap:8px;padding:15px;border:1px solid #e2eaf3;border-radius:16px;background:#fbfdff;min-height:96px}.period-stat span{color:#64748b;font-size:12px;line-height:1.4}.period-stat strong{font-size:20px;line-height:1.2;color:#0f172a;overflow-wrap:anywhere}.period-stat.income{border-color:#b9e6d3;background:#f2fbf7}.period-stat.refund{border-color:#f6d2d2;background:#fff7f7}.period-stat.cost{border-color:#f1d6ad;background:#fffaf1}.period-stat.balance{border-color:#ccd8f7;background:#f7f9ff}.period-alert{margin-top:14px}.plan-note{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding:12px 14px;border-radius:12px;background:#f7f8fa;color:#64748b;font-size:12px;line-height:1.55}.plan-note strong{flex:none;color:#334155}.work-grid{display:grid;grid-template-columns:minmax(340px,.9fr) minmax(0,1.1fr);gap:18px}.expense-form{display:grid;gap:2px}.form-row{display:grid;gap:14px}.form-row.two-col{grid-template-columns:repeat(2,minmax(0,1fr))}.full-width{width:100%}.immutable-note{margin:2px 0 14px}.form-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.audit-note{max-width:380px;color:#64748b;font-size:12px;line-height:1.5}.expense-table{width:100%}.pager{display:flex;justify-content:flex-end;margin-top:18px}.table-footnote{margin-top:10px;color:#64748b;font-size:12px}.basis-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.basis-item{display:grid;align-content:start;gap:9px;padding:16px;border:1px solid #e1eaf4;border-radius:16px;background:#fbfdff}.basis-item strong{font-size:16px;color:#0f172a}.basis-item p{margin:0;font-size:13px;line-height:1.65;color:#64748b;overflow-wrap:anywhere}.basis-index{font-size:11px;font-weight:900;letter-spacing:.12em;color:#2563eb;text-transform:uppercase}.basis-item.cost .basis-index{color:#b45309}.basis-item.result .basis-index{color:#64748b}.usage-alert{margin-bottom:14px}.usage-table{width:100%}.snapshot-footnote{padding:0 4px;color:#64748b;font-size:12px;line-height:1.6}
 @media(max-width:1200px){.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.period-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.work-grid{grid-template-columns:1fr}.basis-grid{grid-template-columns:1fr}}
 @media(max-width:640px){.summary-grid,.period-grid{grid-template-columns:1fr}.summary-card{min-height:150px}.form-row.two-col{grid-template-columns:1fr}.form-actions{align-items:stretch;flex-direction:column}.form-actions :deep(.el-button){width:100%}.plan-note{flex-direction:column}}
 </style>

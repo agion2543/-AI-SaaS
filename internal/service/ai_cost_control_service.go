@@ -32,7 +32,6 @@ const (
 	maxAIModelPriceCents   int64 = 100_000_000 // 分/百万 Token 上限
 	maxAIVendorBillCents   int64 = 100_000_000_000
 	maxAICostNoteRunes           = 500
-	aiBudgetAlertListLimit       = 500
 )
 
 var (
@@ -807,12 +806,18 @@ func (s *AdminService) MerchantBudgetStatus(merchantID uint) (*MerchantAIBudgetS
 }
 
 // ListBudgetAlerts 查询预警记录（可按商家/周期类型/阈值/日期范围筛选），
-// 每行带服务端拼出的 merchant_name。
-// 注意：结果硬上限 aiBudgetAlertListLimit = 500 行（Limit(500)），
-// 这是独立于商家名问题的第二个 500 上限，本次不改，只显性化记录。
-func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, threshold int, startDate, endDate time.Time) ([]MerchantAIBudgetAlertRow, error) {
+// 每行带服务端拼出的 merchant_name。服务端分页：total 是筛选后总数，
+// 每页行数由调用方经 NormalizePage 限定（≤100），旧的 500 行硬上限
+// 已随分页删除——超过 500 行的旧预警不再静默消失。
+func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, threshold int, startDate, endDate time.Time, page, pageSize int) ([]MerchantAIBudgetAlertRow, int64, error) {
 	if s == nil || s.db == nil {
-		return nil, errors.New("AI cost control database is unavailable")
+		return nil, 0, errors.New("AI cost control database is unavailable")
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 10
 	}
 	query := s.db.Model(&model.MerchantAIBudgetAlert{})
 	if merchantID != 0 {
@@ -830,16 +835,20 @@ func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, thre
 	if !endDate.IsZero() {
 		query = query.Where("period_start <= ?", endDate.Format("2006-01-02"))
 	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var models []model.MerchantAIBudgetAlert
-	if err := query.Order("period_start DESC, id DESC").Limit(aiBudgetAlertListLimit).Find(&models).Error; err != nil {
-		return nil, err
+	if err := query.Order("period_start DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&models).Error; err != nil {
+		return nil, 0, err
 	}
 	names := merchantNameMap(s.db)
 	rows := make([]MerchantAIBudgetAlertRow, 0, len(models))
 	for _, row := range models {
 		rows = append(rows, MerchantAIBudgetAlertRow{MerchantAIBudgetAlert: row, MerchantName: names[row.MerchantID]})
 	}
-	return rows, nil
+	return rows, total, nil
 }
 
 // --- 紧急关闭开关 ---
