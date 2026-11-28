@@ -132,8 +132,13 @@ func (g *AICostGuard) CheckMerchantAIAccess(merchantID uint, scenario string) (A
 }
 
 // MerchantAIBudgetStatus 是某商家在当前日/月周期的预算使用快照。
+// MerchantName 由超管端 MerchantBudgetStatus 现查现填（单行按 id 取名，
+// 不走全表扫描）；AI 调用门禁路径（EvaluateMerchantBudget）不填，
+// 该路径每次调用都拼名会给高频调用加不必要的查询，字段 omitempty，
+// 为空时前端按原有“商家 #id”回落展示。
 type MerchantAIBudgetStatus struct {
 	MerchantID          uint   `json:"merchant_id"`
+	MerchantName        string `json:"merchant_name,omitempty"`
 	HasBudget           bool   `json:"has_budget"`
 	GlobalDefault       bool   `json:"global_default"`
 	DailyBudgetCents    int64  `json:"daily_budget_cents"`
@@ -725,23 +730,60 @@ func (s *AdminService) SaveMerchantBudget(merchantID uint, request dto.SaveMerch
 	return &entry, nil
 }
 
-// ListMerchantBudgets 列出全部商家预算行（含 merchant_id=0 的全局默认行）。
-func (s *AdminService) ListMerchantBudgets() ([]model.MerchantAIBudget, error) {
+// merchantNameMap 一次 SELECT id, name 建商家 id→名映射，照抄 AIUsageStats
+// 的做法（:967-972）。预算/预警行数本身很小，该查询是轻量全表 id,name；
+// 查表失败时返回空映射，调用方按无名回落，不因此让主接口报错。
+// 注意：现查现填、无缓存，商家改名后下一次调用即返回新名。
+func merchantNameMap(db *gorm.DB) map[uint]string {
+	names := make(map[uint]string)
+	if db == nil {
+		return names
+	}
+	var merchants []model.Merchant
+	if err := db.Model(&model.Merchant{}).Select("id, name").Find(&merchants).Error; err == nil {
+		for _, merchant := range merchants {
+			names[merchant.ID] = merchant.Name
+		}
+	}
+	return names
+}
+
+// MerchantAIBudgetRow 是预算行 + 服务端拼出的商家名：前端不再二次查询
+// 商家列表补名字，彻底消除“只拉第 1 页（且后端把 page_size 压成 10）
+// 导致老商家无名”的漏显示。模型表结构不动、无迁移；
+// merchant_id=0 的全局默认行 MerchantName 为空，前端按全局默认展示。
+type MerchantAIBudgetRow struct {
+	model.MerchantAIBudget
+	MerchantName string `json:"merchant_name,omitempty"`
+}
+
+// MerchantAIBudgetAlertRow 是预警行 + 服务端拼出的商家名，同上。
+type MerchantAIBudgetAlertRow struct {
+	model.MerchantAIBudgetAlert
+	MerchantName string `json:"merchant_name,omitempty"`
+}
+
+// ListMerchantBudgets 列出全部商家预算行（含 merchant_id=0 的全局默认行），
+// 每行带服务端拼出的 merchant_name。
+func (s *AdminService) ListMerchantBudgets() ([]MerchantAIBudgetRow, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("AI cost control database is unavailable")
 	}
-	var rows []model.MerchantAIBudget
-	if err := s.db.Order("merchant_id ASC").Find(&rows).Error; err != nil {
+	var models []model.MerchantAIBudget
+	if err := s.db.Order("merchant_id ASC").Find(&models).Error; err != nil {
 		return nil, err
 	}
-	if rows == nil {
-		rows = []model.MerchantAIBudget{}
+	names := merchantNameMap(s.db)
+	rows := make([]MerchantAIBudgetRow, 0, len(models))
+	for _, row := range models {
+		rows = append(rows, MerchantAIBudgetRow{MerchantAIBudget: row, MerchantName: names[row.MerchantID]})
 	}
 	return rows, nil
 }
 
 // MerchantBudgetStatus 返回某商家的预算行（商家行优先，否则全局默认行）与
 // 当前日/月使用快照；读取时会补记已达到阈值的预警记录。
+// status.MerchantName 按 id 单行现查现填；merchant_id=0 或商家已删时为空。
 func (s *AdminService) MerchantBudgetStatus(merchantID uint) (*MerchantAIBudgetStatus, *model.MerchantAIBudget, error) {
 	if s == nil || s.db == nil {
 		return nil, nil, errors.New("AI cost control database is unavailable")
@@ -751,6 +793,12 @@ func (s *AdminService) MerchantBudgetStatus(merchantID uint) (*MerchantAIBudgetS
 	if err != nil {
 		return nil, nil, err
 	}
+	if merchantID != 0 {
+		var merchant model.Merchant
+		if err := s.db.Model(&model.Merchant{}).Select("name").First(&merchant, merchantID).Error; err == nil {
+			status.MerchantName = merchant.Name
+		}
+	}
 	budget, _, err := guard.resolveMerchantBudget(merchantID)
 	if err != nil {
 		return nil, nil, err
@@ -758,8 +806,11 @@ func (s *AdminService) MerchantBudgetStatus(merchantID uint) (*MerchantAIBudgetS
 	return status, budget, nil
 }
 
-// ListBudgetAlerts 查询预警记录（可按商家/周期类型/阈值/日期范围筛选）。
-func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, threshold int, startDate, endDate time.Time) ([]model.MerchantAIBudgetAlert, error) {
+// ListBudgetAlerts 查询预警记录（可按商家/周期类型/阈值/日期范围筛选），
+// 每行带服务端拼出的 merchant_name。
+// 注意：结果硬上限 aiBudgetAlertListLimit = 500 行（Limit(500)），
+// 这是独立于商家名问题的第二个 500 上限，本次不改，只显性化记录。
+func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, threshold int, startDate, endDate time.Time) ([]MerchantAIBudgetAlertRow, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("AI cost control database is unavailable")
 	}
@@ -779,12 +830,14 @@ func (s *AdminService) ListBudgetAlerts(merchantID uint, periodType string, thre
 	if !endDate.IsZero() {
 		query = query.Where("period_start <= ?", endDate.Format("2006-01-02"))
 	}
-	var rows []model.MerchantAIBudgetAlert
-	if err := query.Order("period_start DESC, id DESC").Limit(aiBudgetAlertListLimit).Find(&rows).Error; err != nil {
+	var models []model.MerchantAIBudgetAlert
+	if err := query.Order("period_start DESC, id DESC").Limit(aiBudgetAlertListLimit).Find(&models).Error; err != nil {
 		return nil, err
 	}
-	if rows == nil {
-		rows = []model.MerchantAIBudgetAlert{}
+	names := merchantNameMap(s.db)
+	rows := make([]MerchantAIBudgetAlertRow, 0, len(models))
+	for _, row := range models {
+		rows = append(rows, MerchantAIBudgetAlertRow{MerchantAIBudgetAlert: row, MerchantName: names[row.MerchantID]})
 	}
 	return rows, nil
 }

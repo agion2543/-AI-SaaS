@@ -60,6 +60,19 @@ test('merchant labels fall back to id and flag the global default row', () => {
   assert.equal(budgetMerchantLabel(3, '山风咖啡馆'), '山风咖啡馆')
 })
 
+// 2026-11-28 P1 第 5 件：预算/预警行的名字由后端随行返回（row.merchant_name），
+// 前端直接用它，不再靠“只拉第 1 页商家列表”二次查询。旧分页下第 11 家
+// 及更老的商家一定漏名，此处覆盖该分支：有真名显示真名，无名才回落编号。
+test('merchant labels use the server-provided merchant_name, including old merchants', () => {
+  assert.equal(merchantDisplayName(11, '老街面馆'), '老街面馆')
+  assert.equal(merchantDisplayName(11, ''), '商家 #11')
+  assert.equal(merchantDisplayName(600, '第六百家店'), '第六百家店')
+  assert.equal(merchantDisplayName(600, ''), '商家 #600')
+  assert.equal(budgetMerchantLabel(11, '老街面馆'), '老街面馆')
+  assert.equal(budgetMerchantLabel(11, ''), '商家 #11')
+  assert.equal(budgetMerchantLabel(0, '不应出现的名'), '全局默认（无单独预算的商家）')
+})
+
 test('cents formatting keeps the estimated/actual split to the caller', () => {
   assert.equal(formatCents(12345), '¥123.45')
   assert.equal(formatCents(0), '¥0.00')

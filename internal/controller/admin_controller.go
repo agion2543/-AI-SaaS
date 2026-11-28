@@ -172,7 +172,7 @@ func (ctl *AdminController) ExportCustomerProfiles(c *gin.Context) {
 
 func (ctl *AdminController) Merchants(c *gin.Context) {
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
-	merchants, total, err := ctl.admin.ListMerchants(page, pageSize)
+	merchants, total, err := ctl.admin.ListMerchants(page, pageSize, c.Query("keyword"))
 	if err != nil {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return

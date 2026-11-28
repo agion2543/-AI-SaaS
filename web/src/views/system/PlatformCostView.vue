@@ -732,9 +732,9 @@
             <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitBudget">
               <div class="form-row ai-budget-form-row">
                 <el-form-item label="商家" required>
-                  <el-select v-model="budgetForm.merchantId" class="full-width" placeholder="选择商家或全局默认" filterable>
+                  <el-select v-model="budgetForm.merchantId" class="full-width" placeholder="输入商家名搜索" filterable remote :remote-method="searchBudgetMerchants" :loading="budgetMerchantSearchLoading">
                     <el-option :value="0" label="全局默认（无单独预算的商家）" />
-                    <el-option v-for="item in merchantsForBudget" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
+                    <el-option v-for="item in budgetMerchantOptions" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="每日预算（元，0 不限额）" required>
@@ -757,7 +757,7 @@
             </el-form>
             <el-table v-if="aiBudgets.length" :data="aiBudgets" row-key="id" stripe class="expense-table ai-table-gap">
               <el-table-column label="商家" min-width="200">
-                <template #default="{ row }">{{ budgetMerchantLabel(row.merchant_id, merchantNameOf(row.merchant_id)) }}</template>
+                <template #default="{ row }">{{ budgetMerchantLabel(row.merchant_id, row.merchant_name) }}</template>
               </el-table-column>
               <el-table-column label="每日预算" min-width="130" align="right">
                 <template #default="{ row }">{{ row.daily_budget_cents > 0 ? money(row.daily_budget_cents) : '不限额' }}</template>
@@ -781,7 +781,7 @@
             <el-empty v-else description="暂无商家预算；未设置预算的商家不限额" :image-size="72" />
             <div v-if="budgetStatus" class="ai-budget-status">
               <div class="ai-budget-status-head">
-                <strong>{{ budgetMerchantLabel(budgetStatus.status.merchant_id, merchantNameOf(budgetStatus.status.merchant_id)) }} · 当前预算状态</strong>
+                <strong>{{ budgetMerchantLabel(budgetStatus.status.merchant_id, budgetStatus.status.merchant_name) }} · 当前预算状态</strong>
                 <el-tag v-if="budgetStatus.status.global_default" type="info" effect="light">适用全局默认</el-tag>
                 <el-tag v-if="budgetStatus.status.over_limit" type="danger" effect="light">已超预算</el-tag>
                 <el-tag v-else-if="budgetStatus.status.has_budget" type="success" effect="light">预算内</el-tag>
@@ -807,8 +807,8 @@
 
           <el-tab-pane label="预算预警" name="alerts">
             <div class="period-toolbar">
-              <el-select v-model="alertFilter.merchantId" placeholder="全部商家" clearable class="ai-filter-select" @change="loadBudgetAlerts">
-                <el-option v-for="item in merchantsForBudget" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
+              <el-select v-model="alertFilter.merchantId" placeholder="输入商家名搜索" clearable filterable remote :remote-method="searchAlertMerchants" :loading="alertMerchantSearchLoading" class="ai-filter-select" @change="loadBudgetAlerts">
+                <el-option v-for="item in alertMerchantOptions" :key="item.id" :label="item.name || `商家 #${item.id}`" :value="item.id" />
               </el-select>
               <el-select v-model="alertFilter.threshold" placeholder="全部阈值" clearable class="ai-filter-select" @change="loadBudgetAlerts">
                 <el-option v-for="item in budgetAlertThresholds" :key="item" :label="`${item}%`" :value="item" />
@@ -822,7 +822,7 @@
             </div>
             <el-table v-if="budgetAlerts.length" :data="budgetAlerts" row-key="id" stripe class="expense-table">
               <el-table-column label="商家" min-width="180">
-                <template #default="{ row }">{{ merchantDisplayName(row.merchant_id, merchantNameOf(row.merchant_id)) }}</template>
+                <template #default="{ row }">{{ merchantDisplayName(row.merchant_id, row.merchant_name) }}</template>
               </el-table-column>
               <el-table-column label="周期" min-width="90" align="center">
                 <template #default="{ row }">{{ periodTypeLabel(row.period_type) }}</template>
@@ -1477,8 +1477,16 @@ const reconciliationLoading = ref(false)
 const submittingBill = ref(false)
 const billForm = ref({ vendor: '', period: [localDateString(new Date(today.getFullYear(), today.getMonth(), 1)), todayString], amountYuan: null, note: '' })
 const aiBudgets = ref([])
-const merchantsForBudget = ref([])
-const merchantsLoaded = ref(false)
+// 下拉框不再一次性拉商家全量（后端会把 page_size 压成 10，旧做法只剩最新 10 家）：
+// 预算表/预警表的名字由后端随行返回；两个下拉框改为远程搜索，按关键字取。
+const budgetMerchantOptions = ref([])
+const alertMerchantOptions = ref([])
+const budgetMerchantSearchLoading = ref(false)
+const alertMerchantSearchLoading = ref(false)
+// 已选商家的 id→名缓存：远程搜索换一批候选后，已选项仍要显示真名而不是编号。
+const merchantNameCache = ref({})
+let budgetMerchantSearchTimer = null
+let alertMerchantSearchTimer = null
 const submittingBudget = ref(false)
 const budgetForm = ref({ merchantId: 0, dailyBudgetYuan: 0, monthlyBudgetYuan: 0, overLimitAction: 'stop' })
 const budgetStatus = ref(null)
@@ -1509,7 +1517,6 @@ const aiStatsRows = computed(() => {
     return { ...row, rowKey: `merchant-${row.merchant_id}`, displayName: merchantDisplayName(row.merchant_id, row.merchant_name) }
   })
 })
-const merchantNameOf = (merchantId) => merchantsForBudget.value.find((item) => item.id === merchantId)?.name || ''
 const scenarioCalculation = computed(() => {
   const values = Object.values(scenarioAssumptions.value)
   if (values.some((value) => value === null || typeof value !== 'number' || !Number.isFinite(value))) return null
@@ -2082,19 +2089,48 @@ const submitVendorBill = async () => {
   }
 }
 
-const ensureMerchantsLoaded = async () => {
-  if (merchantsLoaded.value) return
+const searchMerchantsRemote = async (keyword, currentId, loadingRef, optionsRef) => {
+  const query = String(keyword || '').trim()
+  if (!query) {
+    // 空关键字不发请求：只保留已选项，避免无意义地拉最新 10 家。
+    const selected = currentId && merchantNameCache.value[currentId]
+      ? [{ id: currentId, name: merchantNameCache.value[currentId] }]
+      : []
+    optionsRef.value = selected
+    return
+  }
+  loadingRef.value = true
   try {
-    const response = await fetchMerchants({ page: 1, page_size: 500 })
-    merchantsForBudget.value = response?.data?.list || []
-    merchantsLoaded.value = true
+    const response = await fetchMerchants({ page: 1, page_size: 20, keyword: query })
+    const list = response?.data?.list || []
+    list.forEach((item) => { merchantNameCache.value[item.id] = item.name })
+    // 已选项不在本批结果里时补回，否则选中态只剩编号。
+    if (currentId && !list.some((item) => item.id === currentId) && merchantNameCache.value[currentId]) {
+      list.unshift({ id: currentId, name: merchantNameCache.value[currentId] })
+    }
+    optionsRef.value = list
   } catch (err) {
-    ElMessage.error(err?.response?.data?.message || '加载商家列表失败')
+    ElMessage.error(err?.response?.data?.message || '搜索商家失败')
+  } finally {
+    loadingRef.value = false
   }
 }
 
+const searchBudgetMerchants = (query) => {
+  clearTimeout(budgetMerchantSearchTimer)
+  budgetMerchantSearchTimer = setTimeout(() => {
+    searchMerchantsRemote(query, budgetForm.value.merchantId, budgetMerchantSearchLoading, budgetMerchantOptions)
+  }, 300)
+}
+
+const searchAlertMerchants = (query) => {
+  clearTimeout(alertMerchantSearchTimer)
+  alertMerchantSearchTimer = setTimeout(() => {
+    searchMerchantsRemote(query, alertFilter.value.merchantId, alertMerchantSearchLoading, alertMerchantOptions)
+  }, 300)
+}
+
 const loadBudgets = async () => {
-  await ensureMerchantsLoaded()
   try {
     const response = await fetchAdminAIBudgets()
     aiBudgets.value = response?.data || []
@@ -2113,6 +2149,15 @@ const editBudget = (row) => {
     dailyBudgetYuan: centsToYuan(row.daily_budget_cents),
     monthlyBudgetYuan: centsToYuan(row.monthly_budget_cents),
     overLimitAction: row.over_limit_action,
+  }
+  // 被编辑的商家可能不在当前搜索候选里（例如老商家）：把行里后端给的真名
+  // 补进下拉框，否则选中态只剩“商家 #id”。
+  if (row.merchant_id) {
+    if (row.merchant_name) merchantNameCache.value[row.merchant_id] = row.merchant_name
+    budgetMerchantOptions.value = [
+      { id: row.merchant_id, name: row.merchant_name || merchantNameCache.value[row.merchant_id] || '' },
+      ...budgetMerchantOptions.value.filter((item) => item.id !== row.merchant_id),
+    ]
   }
   budgetStatus.value = null
 }
@@ -2155,7 +2200,6 @@ const loadBudgetStatus = async (merchantId) => {
 }
 
 const loadBudgetAlerts = async () => {
-  await ensureMerchantsLoaded()
   alertsLoading.value = true
   try {
     const params = { ...aiPeriodParams() }

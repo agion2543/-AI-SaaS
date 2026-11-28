@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -703,5 +704,264 @@ func TestAIBudgetAlertSnapshotSurvivesPriceChange(t *testing.T) {
 	}
 	if status.DailyUsedCents != 75 || stats.TotalEstimatedCostCents != 75 {
 		t.Fatalf("after price change: budget daily=%d stats total=%d, want both 75", status.DailyUsedCents, stats.TotalEstimatedCostCents)
+	}
+}
+
+// 2026-11-28 P1 第 5 件：预算/预警行带服务端拼出的商家名（C 方案），
+// 不再靠前端二次拉商家列表补名字。
+func TestAIBudgetRowsCarryMerchantName(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	names := []string{"synthetic-budget-a", "synthetic-budget-b", "synthetic-budget-c"}
+	merchants := make([]model.Merchant, 0, len(names))
+	for _, name := range names {
+		merchants = append(merchants, createSyntheticAICostMerchant(t, db, name))
+	}
+	setSyntheticBudget(t, admin, 0, 100, 0, model.AIBudgetOverLimitStop)
+	for _, merchant := range merchants {
+		setSyntheticBudget(t, admin, merchant.ID, 100, 0, model.AIBudgetOverLimitStop)
+	}
+
+	rows, err := admin.ListMerchantBudgets()
+	if err != nil {
+		t.Fatalf("list budgets: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("budget rows = %d, want 4 (3 merchants + global default)", len(rows))
+	}
+	byID := make(map[uint]string, len(rows))
+	for _, row := range rows {
+		byID[row.MerchantID] = row.MerchantName
+	}
+	for _, merchant := range merchants {
+		if byID[merchant.ID] != merchant.Name {
+			t.Fatalf("budget row merchant %d name = %q, want %q", merchant.ID, byID[merchant.ID], merchant.Name)
+		}
+	}
+	if byID[0] != "" {
+		t.Fatalf("global default row merchant_name = %q, want empty", byID[0])
+	}
+
+	// 商家改名后接口返回新名：名字现查现填，无缓存。
+	if err := db.Model(&model.Merchant{}).Where("id = ?", merchants[1].ID).Update("name", "synthetic-budget-b-renamed").Error; err != nil {
+		t.Fatalf("rename merchant: %v", err)
+	}
+	rows, err = admin.ListMerchantBudgets()
+	if err != nil {
+		t.Fatalf("list budgets after rename: %v", err)
+	}
+	renamed := ""
+	for _, row := range rows {
+		if row.MerchantID == merchants[1].ID {
+			renamed = row.MerchantName
+		}
+	}
+	if renamed != "synthetic-budget-b-renamed" {
+		t.Fatalf("renamed merchant budget row name = %q, want %q", renamed, "synthetic-budget-b-renamed")
+	}
+}
+
+func TestAIBudgetAlertsCarryMerchantName(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	merchants := []model.Merchant{
+		createSyntheticAICostMerchant(t, db, "synthetic-alert-a"),
+		createSyntheticAICostMerchant(t, db, "synthetic-alert-b"),
+	}
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	for _, merchant := range merchants {
+		setSyntheticBudget(t, admin, merchant.ID, 100, 0, model.AIBudgetOverLimitStop)
+		insertSyntheticAIUsage(t, db, merchant.ID, nil, "m", "s", 100, 100, 0, 200, 75, dayStart.Add(10*time.Hour))
+		if _, err := guard.EvaluateMerchantBudget(merchant.ID); err != nil {
+			t.Fatalf("evaluate budget for merchant %d: %v", merchant.ID, err)
+		}
+	}
+
+	alerts, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("list alerts: %v", err)
+	}
+	if len(alerts) != 2 {
+		t.Fatalf("alerts = %d, want 2", len(alerts))
+	}
+	byID := make(map[uint]string, len(alerts))
+	for _, alert := range alerts {
+		byID[alert.MerchantID] = alert.MerchantName
+	}
+	for _, merchant := range merchants {
+		if byID[merchant.ID] != merchant.Name {
+			t.Fatalf("alert merchant %d name = %q, want %q", merchant.ID, byID[merchant.ID], merchant.Name)
+		}
+	}
+
+	// 按 merchant_id 筛选后名字仍正确。
+	filtered, err := admin.ListBudgetAlerts(merchants[1].ID, "daily", 70, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("list filtered alerts: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].MerchantName != merchants[1].Name {
+		t.Fatalf("filtered alerts = %+v, want 1 row named %q", filtered, merchants[1].Name)
+	}
+}
+
+func TestAIBudgetStatusCarriesMerchantName(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-status-merchant")
+	setSyntheticBudget(t, admin, merchant.ID, 100, 0, model.AIBudgetOverLimitStop)
+
+	status, _, err := admin.MerchantBudgetStatus(merchant.ID)
+	if err != nil {
+		t.Fatalf("budget status: %v", err)
+	}
+	if status.MerchantName != merchant.Name {
+		t.Fatalf("status merchant_name = %q, want %q", status.MerchantName, merchant.Name)
+	}
+
+	// 无单独预算的商家走全局默认，名字也不丢。
+	plain := createSyntheticAICostMerchant(t, db, "synthetic-status-plain")
+	setSyntheticBudget(t, admin, 0, 100, 0, model.AIBudgetOverLimitStop)
+	status, _, err = admin.MerchantBudgetStatus(plain.ID)
+	if err != nil {
+		t.Fatalf("budget status for plain merchant: %v", err)
+	}
+	if !status.GlobalDefault || status.MerchantName != plain.Name {
+		t.Fatalf("plain merchant status = %+v, want global default named %q", status, plain.Name)
+	}
+
+	// merchant_id=0 的全局默认行：不报错，名字为空。
+	status, _, err = admin.MerchantBudgetStatus(0)
+	if err != nil {
+		t.Fatalf("budget status for merchant 0: %v", err)
+	}
+	if status.MerchantName != "" {
+		t.Fatalf("merchant 0 status merchant_name = %q, want empty", status.MerchantName)
+	}
+}
+
+// 预警表硬上限 aiBudgetAlertListLimit = 500 行是独立于商家名问题的第二个
+// 500 上限，本次不改；此处只确认截断行为并显性化记录。
+func TestAIBudgetAlertListTruncatesAt500(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	merchant := createSyntheticAICostMerchant(t, db, "synthetic-truncate-merchant")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local)
+	for i := 0; i < 501; i++ {
+		alert := model.MerchantAIBudgetAlert{
+			MerchantID:         merchant.ID,
+			PeriodType:         "daily",
+			PeriodStart:        model.PlatformExpenseDate(base.AddDate(0, 0, -i).Format("2006-01-02")),
+			Threshold:          70,
+			UsedTokens:         int64(i),
+			EstimatedCostCents: int64(i),
+		}
+		if err := db.Create(&alert).Error; err != nil {
+			t.Fatalf("insert alert %d: %v", i, err)
+		}
+	}
+	alerts, err := admin.ListBudgetAlerts(0, "", 0, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("list alerts: %v", err)
+	}
+	if len(alerts) != 500 {
+		t.Fatalf("alerts = %d, want 500 (hard limit aiBudgetAlertListLimit)", len(alerts))
+	}
+	if alerts[0].MerchantName != merchant.Name {
+		t.Fatalf("truncated alert merchant_name = %q, want %q", alerts[0].MerchantName, merchant.Name)
+	}
+}
+
+// 规模：2000 家商家时预算/预警接口仍一次返回（拼名字只是一次 SELECT id,name）。
+// 600 家是 500 阈值之上的量级，2000 家覆盖之；耗时只记录，不做硬性断言
+// （本机 DDL/IO 波动大，硬阈值易误报）。
+func TestAIBudgetRowsScale2000Merchants(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	admin := NewAdminService(&config.Config{}, db)
+	guard := NewAICostGuard(db)
+	start := time.Now()
+	merchants := make([]model.Merchant, 0, 2000)
+	for i := 0; i < 2000; i++ {
+		merchants = append(merchants, createSyntheticAICostMerchant(t, db, fmt.Sprintf("synthetic-scale-merchant-%04d", i)))
+	}
+	// 预算行只给第 1 家、第 1000 家、第 2000 家（最老与最新都覆盖）。
+	for _, index := range []int{0, 999, 1999} {
+		setSyntheticBudget(t, admin, merchants[index].ID, 100, 0, model.AIBudgetOverLimitStop)
+	}
+	now := time.Now()
+	dayStart := syntheticDayStart(now)
+	saveSyntheticModelPrice(t, admin, "m", 100, 200, 10, dayStart.AddDate(0, 0, -1))
+	// 给最老的一家（第 1 家）造一条 70% 预警：id 最小，旧分页下一定漏名。
+	insertSyntheticAIUsage(t, db, merchants[0].ID, nil, "m", "s", 100, 100, 0, 200, 75, dayStart.Add(10*time.Hour))
+	if _, err := guard.EvaluateMerchantBudget(merchants[0].ID); err != nil {
+		t.Fatalf("evaluate budget for oldest merchant: %v", err)
+	}
+
+	rows, err := admin.ListMerchantBudgets()
+	if err != nil {
+		t.Fatalf("list budgets at scale: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("budget rows = %d, want 3", len(rows))
+	}
+	wantNames := make(map[uint]string, len(merchants))
+	for _, merchant := range merchants {
+		wantNames[merchant.ID] = merchant.Name
+	}
+	for _, row := range rows {
+		if row.MerchantName != wantNames[row.MerchantID] {
+			t.Fatalf("budget row merchant %d name = %q, want %q", row.MerchantID, row.MerchantName, wantNames[row.MerchantID])
+		}
+	}
+	alerts, err := admin.ListBudgetAlerts(merchants[0].ID, "daily", 70, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("list alerts at scale: %v", err)
+	}
+	if len(alerts) != 1 || alerts[0].MerchantName != merchants[0].Name {
+		t.Fatalf("oldest merchant alerts = %+v, want 1 row named %q", alerts, merchants[0].Name)
+	}
+	t.Logf("2000 merchants: budgets+alerts returned in %s (setup included)", time.Since(start))
+}
+
+// 商家列表 keyword 模糊搜：下拉框远程搜索用。ListMerchants 会查
+// orders / merchant_settlements / merchant_follow_ups /
+// merchant_payment_configs 四张聚合表，合成库须一并建表。
+func TestMerchantListKeywordSearch(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	if err := db.AutoMigrate(&model.Order{}, &model.MerchantSettlement{}, &model.MerchantFollowUp{}, &model.MerchantPaymentConfig{}); err != nil {
+		t.Fatalf("migrate merchant list tables: %v", err)
+	}
+	admin := NewAdminService(&config.Config{}, db)
+	for _, name := range []string{"山风咖啡馆", "山风面馆", "江边小店", "百分百%_店"} {
+		createSyntheticAICostMerchant(t, db, name)
+	}
+
+	rows, total, err := admin.ListMerchants(1, 10, "山风")
+	if err != nil {
+		t.Fatalf("list merchants keyword 山风: %v", err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("keyword 山风: total=%d rows=%d, want 2", total, len(rows))
+	}
+	rows, total, err = admin.ListMerchants(1, 10, "江边")
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].Name != "江边小店" {
+		t.Fatalf("keyword 江边: total=%d rows=%+v err=%v, want 1 row 江边小店", total, rows, err)
+	}
+	// % 与 _ 按字面匹配，不当通配符：搜 "%" 只命中名字里真有 % 的一家。
+	rows, total, err = admin.ListMerchants(1, 10, "%")
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].Name != "百分百%_店" {
+		t.Fatalf("keyword %%: total=%d rows=%+v err=%v, want 1 row 百分百%%_店", total, rows, err)
+	}
+	// 空关键字不过滤，全量计数。
+	rows, total, err = admin.ListMerchants(1, 10, "")
+	if err != nil || total != 4 || len(rows) != 4 {
+		t.Fatalf("empty keyword: total=%d rows=%d err=%v, want 4", total, len(rows), err)
+	}
+	// 关键字 + 分页：total 是筛选后计数。
+	rows, total, err = admin.ListMerchants(1, 1, "山风")
+	if err != nil || total != 2 || len(rows) != 1 {
+		t.Fatalf("keyword 山风 page 1 size 1: total=%d rows=%d err=%v, want total 2 rows 1", total, len(rows), err)
 	}
 }

@@ -301,8 +301,8 @@ func buildCustomerInsight(row CustomerProfileRow) (string, string) {
 	return "新顾客", "建议发送首单感谢和二次到店优惠，尽快形成复购。"
 }
 
-func (s *AdminService) ListMerchants(page, pageSize int) ([]MerchantListRow, int64, error) {
-	merchants, total, err := s.merchants.List((page-1)*pageSize, pageSize)
+func (s *AdminService) ListMerchants(page, pageSize int, keyword string) ([]MerchantListRow, int64, error) {
+	merchants, total, err := s.merchants.List((page-1)*pageSize, pageSize, keyword)
 	if err != nil || len(merchants) == 0 {
 		return []MerchantListRow{}, total, err
 	}
