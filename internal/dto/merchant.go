@@ -9,8 +9,14 @@ type MerchantRegisterRequest struct {
 }
 
 type MerchantLoginRequest struct {
-	Phone    string `json:"phone" binding:"required,len=11,numeric"`
-	Password string `json:"password" binding:"required"`
+	Phone     string `json:"phone" binding:"required,len=11,numeric"`
+	Password  string `json:"password"`
+	LoginType string `json:"login_type"`
+	SMSCode   string `json:"sms_code"`
+}
+
+type MerchantSendLoginCodeRequest struct {
+	Phone string `json:"phone" binding:"required,len=11,numeric"`
 }
 
 type MerchantSendPasswordResetCodeRequest struct {

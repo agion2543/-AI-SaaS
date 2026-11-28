@@ -12,6 +12,7 @@ import (
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
+	"go-web-gin-health/internal/utils"
 )
 
 func newMerchantOnboardingTestDB(t *testing.T) *gorm.DB {
@@ -293,5 +294,77 @@ func TestPendingMerchantCannotBuildOrBuy(t *testing.T) {
 	}
 	if _, err := service.CreateStore(active.ID, dto.CreateStoreRequest{Name: "已通过门店", ContactPhone: "13800000001"}); err != nil {
 		t.Fatalf("active merchant create store: %v", err)
+	}
+}
+
+func TestMerchantLoginByCodeAndUnregisteredPhoneHint(t *testing.T) {
+	db := newMerchantOnboardingTestDB(t)
+	service := NewMerchantService(newMerchantOnboardingTestConfig(), db)
+
+	// Seed a merchant + merchant_admin user directly: going through the
+	// register flow would issue a register code for the same phone, and the
+	// shared SMS policy rate-limits any second code within one minute.
+	hash, err := utils.HashPassword("login123")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	merchant := &model.Merchant{Name: "登录方式测试商家", Status: "pending"}
+	if err := db.Create(merchant).Error; err != nil {
+		t.Fatalf("create merchant: %v", err)
+	}
+	user := &model.User{
+		UUID: uuid.NewString(), Email: "login-test@pending.local",
+		Phone: "13800000002", MerchantID: &merchant.ID,
+		Role: "merchant_admin", PasswordHash: hash,
+		DisplayName: "登录方式测试商家", Status: "active",
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("create merchant user: %v", err)
+	}
+
+	// Password login still works without login_type (backward compatible).
+	if _, _, token, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", Password: "login123"}); err != nil {
+		t.Fatalf("password login: %v", err)
+	} else if token == "" {
+		t.Fatal("password login returned an empty token")
+	}
+
+	// Wrong password keeps the generic message.
+	if _, _, _, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", Password: "wrong123"}); err == nil || err.Error() != "账号或密码错误" {
+		t.Fatalf("wrong password err=%v, want 账号或密码错误", err)
+	}
+
+	// An unregistered phone gets a distinct message the UI can act on.
+	if _, _, _, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000003", Password: "login123"}); err == nil || err.Error() != "该手机号未注册，请先注册" {
+		t.Fatalf("unregistered phone err=%v, want 该手机号未注册，请先注册", err)
+	}
+
+	// Unknown login_type is rejected instead of silently falling back.
+	if _, _, _, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", Password: "login123", LoginType: "wechat"}); err == nil || err.Error() != "不支持的登录方式" {
+		t.Fatalf("unknown login_type err=%v, want 不支持的登录方式", err)
+	}
+
+	// Send-code for an unregistered phone reports no merchant account.
+	if err := service.SendLoginCode(dto.MerchantSendLoginCodeRequest{Phone: "13800000003"}); err == nil || err.Error() != "商家账号不存在" {
+		t.Fatalf("send login code to unregistered phone err=%v, want 商家账号不存在", err)
+	}
+
+	// Code login works with the development fixed code; a wrong code fails
+	// first without consuming the issued code.
+	if err := service.SendLoginCode(dto.MerchantSendLoginCodeRequest{Phone: "13800000002"}); err != nil {
+		t.Fatalf("send login code: %v", err)
+	}
+	if _, _, _, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", LoginType: "code", SMSCode: "000000"}); err == nil {
+		t.Fatal("wrong login code unexpectedly succeeded")
+	}
+	if _, _, token, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", LoginType: "code", SMSCode: "123456"}); err != nil {
+		t.Fatalf("code login: %v", err)
+	} else if token == "" {
+		t.Fatal("code login returned an empty token")
+	}
+
+	// A consumed code cannot be reused.
+	if _, _, _, err := service.Login(dto.MerchantLoginRequest{Phone: "13800000002", LoginType: "code", SMSCode: "123456"}); err == nil {
+		t.Fatal("reused login code unexpectedly succeeded")
 	}
 }

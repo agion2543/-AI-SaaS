@@ -220,10 +220,23 @@ func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, 
 	if !isValidMainlandPhone(phone) {
 		return nil, nil, "", errors.New("\u624b\u673a\u53f7\u5fc5\u987b\u4e3a 11 \u4f4d\u6570\u5b57")
 	}
+	// login_type is optional for backward compatibility: older clients send
+	// only phone+password. "code" selects SMS-code login (scene merchant_login).
+	loginType := strings.TrimSpace(req.LoginType)
+	if loginType == "" {
+		loginType = "password"
+	}
+	if loginType != "password" && loginType != "code" {
+		return nil, nil, "", errors.New("不支持的登录方式")
+	}
 
 	user, err := s.users.FindByPhone(phone)
 	if err != nil {
-		return nil, nil, "", errors.New("\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef")
+		// Deliberately distinct from the wrong-password message so the login
+		// page can guide an unregistered phone to registration. The
+		// merchant reset-code endpoint already reveals the same fact
+		// ("商家账号不存在"), so this adds no new enumeration surface.
+		return nil, nil, "", errors.New("该手机号未注册，请先注册")
 	}
 	if user.Role != "merchant_admin" {
 		return nil, nil, "", errors.New("\u8be5\u8d26\u53f7\u4e0d\u662f\u5546\u5bb6\u7ba1\u7406\u5458\u8d26\u53f7")
@@ -231,7 +244,11 @@ func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, 
 	if user.Status != "active" {
 		return nil, nil, "", errors.New("\u8d26\u53f7\u5df2\u88ab\u7981\u7528")
 	}
-	if !utils.CheckPassword(user.PasswordHash, req.Password) {
+	if loginType == "code" {
+		if err := s.consumeMerchantVerificationCode(phone, "merchant_login", strings.TrimSpace(req.SMSCode), &user.ID); err != nil {
+			return nil, nil, "", err
+		}
+	} else if !utils.CheckPassword(user.PasswordHash, req.Password) {
 		return nil, nil, "", errors.New("\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef")
 	}
 	if user.MerchantID == nil {
@@ -248,6 +265,21 @@ func (s *MerchantService) Login(req dto.MerchantLoginRequest) (*model.Merchant, 
 
 	token, err := utils.GenerateUserToken(s.cfg.JWTSecret, *user, 72)
 	return merchant, user, token, err
+}
+
+// SendLoginCode issues a one-time code for merchant SMS-code login
+// (scene merchant_login). Development only: the code is the fixed 123456
+// while mock OTP is allowed; no real SMS is sent.
+func (s *MerchantService) SendLoginCode(req dto.MerchantSendLoginCodeRequest) error {
+	phone := normalizePhone(req.Phone)
+	if !isValidMainlandPhone(phone) {
+		return errors.New("手机号必须为 11 位数字")
+	}
+	user, err := s.users.FindByPhone(phone)
+	if err != nil || user.Role != "merchant_admin" {
+		return errors.New("商家账号不存在")
+	}
+	return s.issueMerchantVerificationCode(phone, "merchant_login", &user.ID)
 }
 
 func (s *MerchantService) SendPasswordResetCode(req dto.MerchantSendPasswordResetCodeRequest) error {

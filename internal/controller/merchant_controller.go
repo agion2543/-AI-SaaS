@@ -90,6 +90,19 @@ func (ctl *MerchantController) Login(c *gin.Context) {
 	})
 }
 
+func (ctl *MerchantController) SendLoginCode(c *gin.Context) {
+	var req dto.MerchantSendLoginCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "请输入 11 位手机号")
+		return
+	}
+	if err := ctl.merchant.SendLoginCode(req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"sent": true, "scene": "merchant_login"})
+}
+
 func (ctl *MerchantController) SendPasswordResetCode(c *gin.Context) {
 	var req dto.MerchantSendPasswordResetCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
