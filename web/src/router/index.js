@@ -22,7 +22,12 @@ const UserPayView = () => import('../views/orders/UserPayView.vue')
 const PaymentReturnView = () => import('../views/orders/PaymentReturnView.vue')
 const CardsView = () => import('../views/cards/CardsView.vue')
 const SystemView = () => import('../views/system/SystemView.vue')
-const PlatformCostView = () => import('../views/system/PlatformCostView.vue')
+const PlatformCostExpensesView = () => import('../views/system/platform-cost/PlatformCostExpensesView.vue')
+const PlatformCostAiUsageView = () => import('../views/system/platform-cost/PlatformCostAiUsageView.vue')
+const PlatformCostAiBudgetView = () => import('../views/system/platform-cost/PlatformCostAiBudgetView.vue')
+const PlatformCostTimeLogsView = () => import('../views/system/platform-cost/PlatformCostTimeLogsView.vue')
+const PlatformCostIncomeView = () => import('../views/system/platform-cost/PlatformCostIncomeView.vue')
+const PlatformCostMrrView = () => import('../views/system/platform-cost/PlatformCostMrrView.vue')
 const AnnouncementsView = () => import('../views/system/AnnouncementsView.vue')
 const MaintenancePlansView = () => import('../views/system/MaintenancePlansView.vue')
 const MerchantAnnouncementsView = () => import('../views/merchants/MerchantAnnouncementsView.vue')
@@ -89,7 +94,13 @@ const routes = [
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView },
-      { path: 'platform-costs', component: PlatformCostView },
+      { path: 'platform-costs', redirect: '/admin/platform-costs/expenses' },
+      { path: 'platform-costs/expenses', component: PlatformCostExpensesView },
+      { path: 'platform-costs/ai-usage', component: PlatformCostAiUsageView },
+      { path: 'platform-costs/ai-budget', component: PlatformCostAiBudgetView },
+      { path: 'platform-costs/time-logs', component: PlatformCostTimeLogsView },
+      { path: 'platform-costs/income', component: PlatformCostIncomeView },
+      { path: 'platform-costs/mrr', component: PlatformCostMrrView },
       { path: 'announcements', component: AnnouncementsView },
       { path: 'maintenance-plans', component: MaintenancePlansView },
       { path: 'access', component: AdminAccessView },
@@ -233,7 +244,7 @@ router.beforeEach(async (to) => {
     let allowed = false
     if (to.path === '/admin/limited-access') allowed = true
     else if (to.path === '/admin/access') allowed = isSuperAdmin
-    else if (to.path === '/admin/platform-costs') allowed = isSuperAdmin
+    else if (/^\/admin\/platform-costs(\/|$)/.test(to.path)) allowed = isSuperAdmin
     else if (to.path === '/admin/announcements' || to.path === '/admin/maintenance-plans') allowed = isSuperAdmin
     else if (to.path === '/admin/refund-reviews') allowed = isSuperAdmin
     else if (to.path === '/admin/merchant-reviews') allowed = isSuperAdmin
