@@ -325,6 +325,30 @@
                 <el-input model-value="CNY · 人民币" disabled />
               </el-form-item>
             </div>
+            <div class="form-row two-col">
+              <el-form-item label="固定 / 变动" required>
+                <el-select v-model="expenseForm.costType" class="full-width" placeholder="选择固定或变动">
+                  <el-option v-for="item in expenseCostTypes" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="供应商">
+                <el-input v-model="expenseForm.vendor" maxlength="120" placeholder="例如：阿里云（可空）" />
+              </el-form-item>
+            </div>
+            <div class="form-row two-col">
+              <el-form-item label="付款状态">
+                <el-select v-model="expenseForm.paymentStatus" class="full-width">
+                  <el-option v-for="item in expensePaymentStatuses" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="成本属性">
+                <div class="cost-flag-row">
+                  <el-checkbox v-model="expenseForm.isRecurring">经常性</el-checkbox>
+                  <el-checkbox v-model="expenseForm.isCashCost">现金成本</el-checkbox>
+                  <el-checkbox v-model="expenseForm.isEconomicCost">经济成本</el-checkbox>
+                </div>
+              </el-form-item>
+            </div>
             <el-form-item label="简短备注" required>
               <el-input
                 v-model="expenseForm.memo"
@@ -360,6 +384,20 @@
               <template #default="{ row }">{{ money(row.amount_cents) }}</template>
             </el-table-column>
             <el-table-column prop="memo" label="备注" min-width="190" show-overflow-tooltip />
+            <el-table-column label="供应商" min-width="120">
+              <template #default="{ row }">{{ row.vendor || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="属性" min-width="220">
+              <template #default="{ row }">
+                <div class="expense-flags">
+                  <el-tag effect="light">{{ expenseCostTypeLabel(row.cost_type) }}</el-tag>
+                  <el-tag effect="light" type="info">{{ expensePaymentStatusLabel(row.payment_status) }}</el-tag>
+                  <el-tag v-if="row.is_recurring" effect="light" type="warning">经常性</el-tag>
+                  <el-tag v-if="row.is_cash_cost" effect="light" type="success">现金</el-tag>
+                  <el-tag v-if="row.is_economic_cost" effect="light">经济</el-tag>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column label="冲正余额" min-width="230" align="center">
               <template #default="{ row }">
                 <div class="reversal-balance">
@@ -396,6 +434,45 @@
         <el-empty v-else description="本期暂无冲正记录" :image-size="72" />
         <div v-if="selectedPeriod.expense_reversal_rows_truncated" class="table-footnote">本期冲正超过 500 笔，表格只显示最近的 500 条；汇总仍统计完整期间。</div>
         <div class="reversal-period-note">冲正只在其登记的发生期间体现抵减，不回溯重算原费用期间。</div>
+      </DataPanel>
+
+      <DataPanel
+        title="费用按类按月统计"
+        description="按费用发生月 × 分类 × 固定/变动汇总；现金与经济两列可重叠（一条费用可同时是现金成本与经济成本），冲正按冲正日期单列到月，不并入分类行。"
+        eyebrow="EXPENSE BY CATEGORY AND MONTH"
+      >
+        <div class="period-toolbar">
+          <el-date-picker v-model="expenseStatsStartMonth" type="month" format="YYYY-MM" value-format="YYYY-MM" placeholder="开始月份" />
+          <span>至</span>
+          <el-date-picker v-model="expenseStatsEndMonth" type="month" format="YYYY-MM" value-format="YYYY-MM" placeholder="结束月份" />
+          <el-button type="primary" plain :loading="expenseStatsLoading" @click="loadExpenseStats">查看统计</el-button>
+          <span class="currency-hint">最多 12 个月 · 金额单位：人民币 CNY</span>
+        </div>
+        <el-table v-if="expenseStats?.rows?.length" :data="expenseStats.rows" :row-key="expenseStatRowKey" stripe class="expense-table">
+          <el-table-column prop="month" label="月份" min-width="100" />
+          <el-table-column label="类别" min-width="150">
+            <template #default="{ row }">{{ categoryLabel(row.category) }}</template>
+          </el-table-column>
+          <el-table-column label="固定 / 变动" min-width="150">
+            <template #default="{ row }">{{ expenseCostTypeLabel(row.cost_type) }}</template>
+          </el-table-column>
+          <el-table-column prop="expense_count" label="笔数" min-width="80" align="right" />
+          <el-table-column label="现金成本" min-width="140" align="right">
+            <template #default="{ row }">{{ money(row.cash_cents) }}</template>
+          </el-table-column>
+          <el-table-column label="经济成本" min-width="140" align="right">
+            <template #default="{ row }">{{ money(row.economic_cents) }}</template>
+          </el-table-column>
+          <el-table-column label="合计" min-width="140" align="right">
+            <template #default="{ row }">{{ money(row.total_cents) }}</template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="所选期间暂无已登记费用" :image-size="72" />
+        <div v-if="expenseStats?.reversal_cents_by_month && Object.keys(expenseStats.reversal_cents_by_month).length" class="table-footnote">
+          当月冲正（按冲正日期归属）：
+          <span v-for="(amount, month) in expenseStats.reversal_cents_by_month" :key="month">{{ month }} -{{ money(amount) }}；</span>
+        </div>
+        <div v-if="expenseStats?.note" class="table-footnote">{{ expenseStats.note }}</div>
       </DataPanel>
 
       <DataPanel
@@ -799,6 +876,368 @@
         </el-tabs>
       </DataPanel>
 
+      <DataPanel
+        title="时间成本与收入台账"
+        description="只记你自己的时间与平台真实收入；测算参数一律标假设，不写入真实记录。全部数据仅超管可见。"
+        eyebrow="TIME COST AND INCOME LEDGER"
+      >
+        <el-tabs v-model="financeTab" @tab-change="onFinanceTabChange">
+          <el-tab-pane label="时间成本" name="time-logs">
+            <el-alert
+              class="ai-form-note"
+              type="info"
+              show-icon
+              :closable="false"
+              title="时间成本只计经济成本，不进现金支出"
+              description="金额由服务端按（小时数 × 参考小时价值）算出；参考小时价值由你自填，系统不推断真实工资。记录只追加不改不删。"
+            />
+            <el-form class="expense-form" label-position="top" @submit.prevent="submitTimeLog">
+              <div class="form-row two-col">
+                <el-form-item label="日期" required>
+                  <el-date-picker
+                    v-model="timeLogForm.logDate"
+                    type="date"
+                    class="full-width"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :disabled-date="disableFutureDate"
+                    placeholder="选择日期"
+                  />
+                </el-form-item>
+                <el-form-item label="工作类型" required>
+                  <el-select v-model="timeLogForm.workType" class="full-width" placeholder="选择工作类型">
+                    <el-option v-for="item in timeLogWorkTypes" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+              </div>
+              <div class="form-row two-col">
+                <el-form-item label="小时数" required>
+                  <el-input-number
+                    v-model="timeLogForm.hours"
+                    class="full-width"
+                    :min="0.01"
+                    :max="24"
+                    :precision="2"
+                    :step="0.5"
+                    controls-position="right"
+                  />
+                </el-form-item>
+                <el-form-item label="参考小时价值（人民币元 / 小时）" required>
+                  <el-input-number
+                    v-model="timeLogForm.referenceHourlyValueYuan"
+                    class="full-width"
+                    :min="0.01"
+                    :max="100000"
+                    :precision="2"
+                    :step="10"
+                    controls-position="right"
+                  />
+                </el-form-item>
+              </div>
+              <el-form-item label="内容" required>
+                <el-input v-model="timeLogForm.content" maxlength="500" show-word-limit placeholder="例如：成本中心 v14 联调" />
+              </el-form-item>
+              <el-form-item label="项目模块">
+                <el-input v-model="timeLogForm.module" maxlength="80" placeholder="例如：成本中心（可空）" />
+              </el-form-item>
+              <div class="form-actions">
+                <span class="audit-note">金额 = 小时数 × 参考小时价值（服务端整数分算出，四舍五入到分）。</span>
+                <el-button type="primary" :loading="submittingTimeLog" @click="submitTimeLog">登记时间成本</el-button>
+              </div>
+            </el-form>
+            <div class="table-footnote">合计 {{ hoursFromScaled(timeLogList?.total_hours_scaled || 0) }} 小时 · 经济成本 {{ money(timeLogList?.total_amount_cents || 0) }}</div>
+            <el-table v-if="timeLogList?.rows?.length" :data="timeLogList.rows" row-key="id" stripe class="expense-table ai-table-gap">
+              <el-table-column prop="log_date" label="日期" min-width="112" />
+              <el-table-column label="工作类型" min-width="130">
+                <template #default="{ row }">{{ timeLogWorkTypeLabel(row.work_type) }}</template>
+              </el-table-column>
+              <el-table-column prop="content" label="内容" min-width="200" show-overflow-tooltip />
+              <el-table-column label="小时数" min-width="90" align="right">
+                <template #default="{ row }">{{ hoursFromScaled(row.hours_scaled) }}</template>
+              </el-table-column>
+              <el-table-column label="参考小时价值" min-width="140" align="right">
+                <template #default="{ row }">{{ money(row.reference_hourly_value_cents) }} / 小时</template>
+              </el-table-column>
+              <el-table-column label="经济成本" min-width="130" align="right">
+                <template #default="{ row }">{{ money(row.amount_cents) }}</template>
+              </el-table-column>
+              <el-table-column prop="module" label="模块" min-width="120">
+                <template #default="{ row }">{{ row.module || '—' }}</template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无时间成本记录" :image-size="72" />
+          </el-tab-pane>
+
+          <el-tab-pane label="收入台账" name="income">
+            <el-alert
+              class="ai-form-note"
+              type="info"
+              show-icon
+              :closable="false"
+              title="订单金额不等于收入"
+              description="只有状态流转到已确认或已收款的记录才算作收入；已退款与已取消不计入 MRR。金额、类型与日期一旦登记不可再改，只能走状态流转。"
+            />
+            <el-form class="expense-form" label-position="top" @submit.prevent="submitIncome">
+              <div class="form-row two-col">
+                <el-form-item label="收入类型" required>
+                  <el-select v-model="incomeForm.incomeType" class="full-width" placeholder="选择收入类型">
+                    <el-option v-for="item in incomeTypes" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="金额（人民币元）" required>
+                  <el-input-number
+                    v-model="incomeForm.amountYuan"
+                    class="full-width"
+                    :min="0.01"
+                    :max="1000000000"
+                    :precision="2"
+                    :step="1"
+                    controls-position="right"
+                  />
+                </el-form-item>
+              </div>
+              <div class="form-row two-col">
+                <el-form-item label="发生日期" required>
+                  <el-date-picker
+                    v-model="incomeForm.occurredDate"
+                    type="date"
+                    class="full-width"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :disabled-date="disableFutureDate"
+                    placeholder="选择发生日期"
+                  />
+                </el-form-item>
+                <el-form-item label="初始状态">
+                  <el-select v-model="incomeForm.status" class="full-width">
+                    <el-option v-for="item in incomeStatuses" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+              </div>
+              <div v-if="incomeForm.status === 'received'" class="form-row two-col">
+                <el-form-item label="收款日期" required>
+                  <el-date-picker
+                    v-model="incomeForm.receivedDate"
+                    type="date"
+                    class="full-width"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :disabled-date="disableFutureDate"
+                    placeholder="选择收款日期"
+                  />
+                </el-form-item>
+                <el-form-item label="商家 ID（可空）">
+                  <el-input-number v-model="incomeForm.merchantId" class="full-width" :min="1" :precision="0" :value-on-clear="null" controls-position="right" placeholder="可空" />
+                </el-form-item>
+              </div>
+              <div v-else class="form-row two-col">
+                <el-form-item label="商家 ID（可空）">
+                  <el-input-number v-model="incomeForm.merchantId" class="full-width" :min="1" :precision="0" :value-on-clear="null" controls-position="right" placeholder="可空" />
+                </el-form-item>
+                <el-form-item label="备注">
+                  <el-input v-model="incomeForm.note" maxlength="500" placeholder="可空" />
+                </el-form-item>
+              </div>
+              <div v-if="isSubscriptionIncomeType(incomeForm.incomeType)" class="form-row two-col">
+                <el-form-item label="订阅开始日期" required>
+                  <el-date-picker
+                    v-model="incomeForm.subscriptionStartDate"
+                    type="date"
+                    class="full-width"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    placeholder="订阅期开始"
+                  />
+                </el-form-item>
+                <el-form-item label="订阅结束日期" required>
+                  <el-date-picker
+                    v-model="incomeForm.subscriptionEndDate"
+                    type="date"
+                    class="full-width"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    placeholder="订阅期结束"
+                  />
+                </el-form-item>
+              </div>
+              <div class="form-row two-col">
+                <el-form-item label="计费周期（月）">
+                  <el-select v-model="incomeForm.billingPeriodMonths" class="full-width">
+                    <el-option :value="1" label="按月（1 个月）" />
+                    <el-option :value="3" label="按季（3 个月）" />
+                    <el-option :value="6" label="半年（6 个月）" />
+                    <el-option :value="12" label="按年（12 个月）" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="备注">
+                  <el-input v-model="incomeForm.note" maxlength="500" placeholder="可空" />
+                </el-form-item>
+              </div>
+              <div class="form-actions">
+                <span class="audit-note">订阅类收入必须填订阅期，MRR 按订阅期摊销；年付按十二分之一摊。</span>
+                <el-button type="primary" :loading="submittingIncome" @click="submitIncome">登记收入</el-button>
+              </div>
+            </el-form>
+            <el-table v-if="incomeList?.rows?.length" :data="incomeList.rows" row-key="id" stripe class="expense-table ai-table-gap">
+              <el-table-column prop="occurred_date" label="发生日期" min-width="112" />
+              <el-table-column label="类型" min-width="120">
+                <template #default="{ row }">{{ incomeTypeLabel(row.income_type) }}</template>
+              </el-table-column>
+              <el-table-column label="金额" min-width="120" align="right">
+                <template #default="{ row }">{{ money(row.amount_cents) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" min-width="110" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="incomeStatusTagType(row.status)" effect="light">{{ incomeStatusLabel(row.status) }}</el-tag>
+                  <el-tag v-if="row.is_cancelled" type="info" effect="light">已取消</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="退款金额" min-width="110" align="right">
+                <template #default="{ row }">{{ row.refund_amount_cents > 0 ? money(row.refund_amount_cents) : '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="received_date" label="收款日期" min-width="112">
+                <template #default="{ row }">{{ row.received_date || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="note" label="备注" min-width="160" show-overflow-tooltip />
+              <el-table-column label="操作" min-width="150" align="center">
+                <template #default="{ row }">
+                  <el-button v-if="incomeNextStatuses(row.status).length" type="primary" link @click="openIncomeDialog(row)">流转状态</el-button>
+                  <el-button v-if="incomeCanCancel(row.status) && !row.is_cancelled" type="danger" link @click="cancelIncomeRecord(row)">取消</el-button>
+                  <span v-if="!incomeNextStatuses(row.status).length && !(incomeCanCancel(row.status) && !row.is_cancelled)">—</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无收入记录" :image-size="72" />
+            <div v-if="incomeList?.totals_by_status" class="table-footnote">
+              <span v-for="(total, status) in incomeList.totals_by_status" :key="status">{{ incomeStatusLabel(status) }} {{ total.count }} 笔 · {{ money(total.amount_cents) }}；</span>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="MRR 与保本" name="mrr">
+            <div class="period-toolbar">
+              <el-date-picker v-model="mrrMonth" type="month" format="YYYY-MM" value-format="YYYY-MM" placeholder="选择月份" />
+              <el-button type="primary" plain :loading="mrrLoading" @click="loadMRR">查看 MRR</el-button>
+              <span class="currency-hint">金额单位：人民币 CNY</span>
+            </div>
+            <div v-if="mrr" class="period-grid">
+              <article class="period-stat income">
+                <span>MRR（当月有效订阅月化金额之和）</span>
+                <strong>{{ money(mrr.mrr_cents) }}</strong>
+              </article>
+              <article class="period-stat net">
+                <span>计入订阅数</span>
+                <strong>{{ mrr.included_count }} 笔</strong>
+              </article>
+              <article class="period-stat manual">
+                <span>剔除：已取消 / 已退款 / 不在当月 / 状态不符 / 非订阅</span>
+                <strong>{{ mrr.excluded_cancelled }} / {{ mrr.excluded_refunded }} / {{ mrr.excluded_out_of_period }} / {{ mrr.excluded_wrong_status }} / {{ mrr.excluded_non_subscription }}</strong>
+              </article>
+            </div>
+            <div v-if="mrr" class="table-footnote">{{ mrr.formula }}。{{ mrr.note }}</div>
+            <el-divider />
+            <div class="scenario-notice">
+              <el-tag type="warning" effect="light">假设试算</el-tag>
+              <span>以下两个单商家数字是你输入的假设，不写入真实收入或成本记录；月固定成本取自当月已登记的固定现金费用减当月冲正。</span>
+            </div>
+            <div class="form-row two-col">
+              <el-form-item label="单商家月均收入（元，假设）">
+                <el-input-number
+                  v-model="breakevenForm.revenueYuan"
+                  class="full-width"
+                  :min="0"
+                  :max="10000000"
+                  :precision="2"
+                  :step="10"
+                  :value-on-clear="null"
+                  controls-position="right"
+                />
+              </el-form-item>
+              <el-form-item label="单商家月变动成本（元，假设）">
+                <el-input-number
+                  v-model="breakevenForm.variableYuan"
+                  class="full-width"
+                  :min="0"
+                  :max="10000000"
+                  :precision="2"
+                  :step="10"
+                  :value-on-clear="null"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </div>
+            <div class="form-actions">
+              <span class="audit-note">两项都填后才给出结论；缺参数时不输出保本结论。</span>
+              <el-button type="primary" plain :loading="breakevenLoading" @click="runBreakeven">试算保本商家数</el-button>
+            </div>
+            <div v-if="breakeven" class="period-grid ai-table-gap">
+              <article class="period-stat cost">
+                <span>月固定现金成本</span>
+                <strong>{{ money(breakeven.fixed_cash_cost_cents) }}</strong>
+              </article>
+              <article class="period-stat manual">
+                <span>当月时间经济成本（不计入现金保本口径）</span>
+                <strong>{{ money(breakeven.time_log_economic_cents) }}</strong>
+              </article>
+              <article class="period-stat net">
+                <span>单商家贡献毛利（假设）</span>
+                <strong>{{ breakeven.contribution_margin_cents == null ? '缺参数' : money(breakeven.contribution_margin_cents) }}</strong>
+              </article>
+              <article class="period-stat balance">
+                <span>保本商家数</span>
+                <strong>{{ breakeven.params_missing ? '缺参数' : breakeven.can_break_even ? `${breakeven.breakeven_merchants} 家` : '增加商家数无法保本' }}</strong>
+              </article>
+            </div>
+            <div v-if="breakeven" class="table-footnote">{{ breakeven.formula }}。{{ breakeven.note }}</div>
+          </el-tab-pane>
+        </el-tabs>
+      </DataPanel>
+
+      <el-dialog v-model="incomeDialogVisible" title="收入状态流转" width="min(560px, 94vw)" top="3vh" :close-on-click-modal="false">
+        <template v-if="incomeDialogRecord">
+          <div class="reversal-source-card">
+            <strong>收入 #{{ incomeDialogRecord.id }} · {{ incomeTypeLabel(incomeDialogRecord.income_type) }}</strong>
+            <span>{{ incomeDialogRecord.occurred_date }} · {{ money(incomeDialogRecord.amount_cents) }} · 当前状态：{{ incomeStatusLabel(incomeDialogRecord.status) }}</span>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="目标状态" required>
+              <el-select v-model="incomeDialog.targetStatus" class="full-width">
+                <el-option v-for="item in incomeDialogTargets" :key="item" :label="incomeStatusLabel(item)" :value="item" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="incomeDialog.targetStatus === 'received'" label="收款日期" required>
+              <el-date-picker
+                v-model="incomeDialog.receivedDate"
+                type="date"
+                class="full-width"
+                format="YYYY-MM-DD"
+                value-format="YYYY-MM-DD"
+                :disabled-date="disableFutureDate"
+                placeholder="选择收款日期"
+              />
+            </el-form-item>
+            <el-form-item v-if="incomeDialog.targetStatus === 'refunding' || incomeDialog.targetStatus === 'refunded'" label="退款金额（元）" required>
+              <el-input-number
+                v-model="incomeDialog.refundAmountYuan"
+                class="full-width"
+                :min="0.01"
+                :max="incomeDialogRecord.amount_cents / 100"
+                :precision="2"
+                :step="0.01"
+                controls-position="right"
+              />
+              <div class="input-hint">不超过收入金额 {{ money(incomeDialogRecord.amount_cents) }}。</div>
+            </el-form-item>
+            <el-form-item label="备注">
+              <el-input v-model="incomeDialog.note" maxlength="500" placeholder="可空；留空保持原备注" />
+            </el-form-item>
+          </el-form>
+        </template>
+        <template #footer>
+          <el-button @click="incomeDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="submittingIncomeUpdate" @click="submitIncomeUpdate">确认流转</el-button>
+        </template>
+      </el-dialog>
+
       <el-dialog v-model="emergencyDialogVisible" :title="emergencyTargetDisabled ? '确认紧急关闭 AI' : '确认恢复 AI 调用'" width="min(560px, 94vw)" top="3vh" :close-on-click-modal="false">
         <el-alert
           v-if="emergencyTargetDisabled"
@@ -920,6 +1359,8 @@ import {
   createAdminAIVendorBill,
   createAdminPlatformExpense,
   createAdminPlatformExpenseReversal,
+  createAdminPlatformIncomeRecord,
+  createAdminPlatformTimeLog,
   fetchAdminAIBillReconciliation,
   fetchAdminAIBudgetAlerts,
   fetchAdminAIBudgets,
@@ -927,12 +1368,33 @@ import {
   fetchAdminAIEmergencySwitch,
   fetchAdminAIModelPrices,
   fetchAdminAIUsageStats,
+  fetchAdminPlatformBreakeven,
   fetchAdminPlatformCostOverview,
+  fetchAdminPlatformExpenseStats,
+  fetchAdminPlatformIncomeRecords,
+  fetchAdminPlatformMRR,
+  fetchAdminPlatformTimeLogs,
   fetchMerchants,
   saveAdminAIBudget,
   saveAdminAIEmergencySwitch,
   saveAdminAIModelPrice,
+  updateAdminPlatformIncomeRecord,
 } from '../../api/modules'
+import {
+  EXPENSE_COST_TYPES,
+  EXPENSE_PAYMENT_STATUSES,
+  INCOME_STATUSES,
+  INCOME_TYPES,
+  TIME_LOG_WORK_TYPES,
+  expenseCostTypeLabel,
+  expensePaymentStatusLabel,
+  hoursFromScaled,
+  incomeCanCancel,
+  incomeNextStatuses,
+  incomeStatusLabel,
+  incomeTypeLabel,
+  timeLogWorkTypeLabel,
+} from '../../utils/platformFinance.js'
 
 const loading = ref(false)
 const submittingExpense = ref(false)
@@ -943,6 +1405,7 @@ const overview = ref(null)
 const error = ref('')
 const today = new Date()
 const todayString = localDateString(today)
+const currentMonthString = todayString.slice(0, 7)
 const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
 const dateRange = ref([localDateString(monthStart), todayString])
 const emptyScenarioAssumptions = () => ({
@@ -958,6 +1421,8 @@ const expenseCategories = [
   { value: 'labor_contractor', label: '人员 / 外包' },
   { value: 'customer_acquisition_travel', label: '获客 / 差旅' },
   { value: 'equipment', label: '设备' },
+  { value: 'ai_services', label: 'AI 服务' },
+  { value: 'third_party_services', label: '第三方服务' },
   { value: 'other', label: '其他' },
 ]
 
@@ -974,6 +1439,12 @@ const expenseForm = ref({
   amountYuan: null,
   memo: '',
   idempotencyKey: newIdempotencyKey(),
+  costType: '',
+  vendor: '',
+  paymentStatus: 'paid',
+  isRecurring: false,
+  isCashCost: true,
+  isEconomicCost: true,
 })
 const reversalForm = ref({ reversalDate: todayString, amountYuan: null, reason: '', idempotencyKey: newIdempotencyKey() })
 const selectedPeriod = computed(() => overview.value?.selected_period || {})
@@ -1105,8 +1576,12 @@ const loadOverview = async () => {
 }
 
 const submitExpense = async () => {
-  if (!expenseForm.value.category || !expenseForm.value.expenseDate || !expenseForm.value.memo.trim()) {
-    ElMessage.warning('请补全费用类别、发生日期和简短备注')
+  if (!expenseForm.value.category || !expenseForm.value.costType || !expenseForm.value.expenseDate || !expenseForm.value.memo.trim()) {
+    ElMessage.warning('请补全费用类别、固定/变动、发生日期和简短备注')
+    return
+  }
+  if (!expenseForm.value.isCashCost && !expenseForm.value.isEconomicCost) {
+    ElMessage.warning('现金成本与经济成本至少选一项')
     return
   }
   const amountCents = Math.round(Number(expenseForm.value.amountYuan) * 100)
@@ -1123,15 +1598,295 @@ const submitExpense = async () => {
       expense_date: expenseForm.value.expenseDate,
       memo: expenseForm.value.memo.trim(),
       idempotency_key: expenseForm.value.idempotencyKey,
+      cost_type: expenseForm.value.costType,
+      vendor: expenseForm.value.vendor.trim(),
+      payment_status: expenseForm.value.paymentStatus,
+      is_recurring: expenseForm.value.isRecurring,
+      is_cash_cost: expenseForm.value.isCashCost,
+      is_economic_cost: expenseForm.value.isEconomicCost,
     })
     ElMessage.success('实际费用已登记')
     expenseForm.value = { ...expenseForm.value, category: '', amountYuan: null, memo: '', idempotencyKey: newIdempotencyKey() }
     await loadOverview()
+    await loadExpenseStats()
   } catch (err) {
     ElMessage.error(err?.response?.data?.message || '费用未保存，请检查数据后重试')
   } finally {
     submittingExpense.value = false
   }
+}
+
+// ---- 平台财务 v14：费用统计、时间成本、收入台账、MRR 与保本 ----
+const expenseCostTypes = EXPENSE_COST_TYPES
+const expensePaymentStatuses = EXPENSE_PAYMENT_STATUSES
+const timeLogWorkTypes = TIME_LOG_WORK_TYPES
+const incomeTypes = INCOME_TYPES
+const incomeStatuses = INCOME_STATUSES
+
+const expenseStatsStartMonth = ref(currentMonthString)
+const expenseStatsEndMonth = ref(currentMonthString)
+const expenseStats = ref(null)
+const expenseStatsLoading = ref(false)
+
+const expenseStatRowKey = (row) => `${row.month}|${row.category}|${row.cost_type || ''}`
+
+const loadExpenseStats = async () => {
+  if (!expenseStatsStartMonth.value || !expenseStatsEndMonth.value) return
+  if (expenseStatsStartMonth.value > expenseStatsEndMonth.value) {
+    ElMessage.warning('开始月份不能晚于结束月份')
+    return
+  }
+  expenseStatsLoading.value = true
+  try {
+    const response = await fetchAdminPlatformExpenseStats({ start_month: expenseStatsStartMonth.value, end_month: expenseStatsEndMonth.value })
+    expenseStats.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载费用统计失败')
+  } finally {
+    expenseStatsLoading.value = false
+  }
+}
+
+const financeTab = ref('time-logs')
+const timeLogList = ref(null)
+const submittingTimeLog = ref(false)
+const timeLogForm = ref({
+  logDate: todayString,
+  workType: '',
+  content: '',
+  hours: null,
+  referenceHourlyValueYuan: null,
+  module: '',
+})
+
+const loadTimeLogs = async () => {
+  try {
+    const response = await fetchAdminPlatformTimeLogs({ limit: 50 })
+    timeLogList.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载时间成本失败')
+  }
+}
+
+const submitTimeLog = async () => {
+  if (!timeLogForm.value.logDate || !timeLogForm.value.workType || !timeLogForm.value.content.trim()) {
+    ElMessage.warning('请补全日期、工作类型和内容')
+    return
+  }
+  const hours = Number(timeLogForm.value.hours)
+  const referenceCents = Math.round(Number(timeLogForm.value.referenceHourlyValueYuan) * 100)
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
+    ElMessage.warning('小时数需在 0.01–24 之间')
+    return
+  }
+  if (!Number.isSafeInteger(referenceCents) || referenceCents < 1) {
+    ElMessage.warning('参考小时价值必须为正数')
+    return
+  }
+  submittingTimeLog.value = true
+  try {
+    await createAdminPlatformTimeLog({
+      log_date: timeLogForm.value.logDate,
+      work_type: timeLogForm.value.workType,
+      content: timeLogForm.value.content.trim(),
+      hours,
+      reference_hourly_value_cents: referenceCents,
+      module: timeLogForm.value.module.trim(),
+      idempotency_key: newUUID(),
+    })
+    ElMessage.success('时间成本已登记（仅经济成本）')
+    timeLogForm.value = { ...timeLogForm.value, content: '', hours: null, module: '' }
+    await loadTimeLogs()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '时间成本未保存，请检查数据后重试')
+  } finally {
+    submittingTimeLog.value = false
+  }
+}
+
+const incomeList = ref(null)
+const submittingIncome = ref(false)
+const incomeForm = ref({
+  incomeType: '',
+  amountYuan: null,
+  occurredDate: todayString,
+  status: 'ordered',
+  receivedDate: todayString,
+  merchantId: null,
+  billingPeriodMonths: 1,
+  subscriptionStartDate: '',
+  subscriptionEndDate: '',
+  note: '',
+})
+
+const isSubscriptionIncomeType = (type) => type === 'subscription_basic' || type === 'subscription_premium'
+
+const loadIncomeRecords = async () => {
+  try {
+    const response = await fetchAdminPlatformIncomeRecords({ limit: 50 })
+    incomeList.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载收入台账失败')
+  }
+}
+
+const submitIncome = async () => {
+  if (!incomeForm.value.incomeType || !incomeForm.value.occurredDate) {
+    ElMessage.warning('请补全收入类型与发生日期')
+    return
+  }
+  const amountCents = Math.round(Number(incomeForm.value.amountYuan) * 100)
+  if (!Number.isSafeInteger(amountCents) || amountCents < 1 || amountCents > 100000000000) {
+    ElMessage.warning('金额必须为正数，且不超过单笔上限')
+    return
+  }
+  if (incomeForm.value.status === 'received' && !incomeForm.value.receivedDate) {
+    ElMessage.warning('已收款状态需要填收款日期')
+    return
+  }
+  const isSubscription = isSubscriptionIncomeType(incomeForm.value.incomeType)
+  if (isSubscription && (!incomeForm.value.subscriptionStartDate || !incomeForm.value.subscriptionEndDate)) {
+    ElMessage.warning('订阅类收入必须填订阅起止日期')
+    return
+  }
+  submittingIncome.value = true
+  try {
+    const payload = {
+      income_type: incomeForm.value.incomeType,
+      amount_cents: amountCents,
+      currency: 'CNY',
+      occurred_date: incomeForm.value.occurredDate,
+      status: incomeForm.value.status,
+      billing_period_months: incomeForm.value.billingPeriodMonths,
+      note: incomeForm.value.note.trim(),
+      idempotency_key: newUUID(),
+    }
+    if (incomeForm.value.status === 'received') payload.received_date = incomeForm.value.receivedDate
+    if (incomeForm.value.merchantId) payload.merchant_id = incomeForm.value.merchantId
+    if (isSubscription) {
+      payload.subscription_start_date = incomeForm.value.subscriptionStartDate
+      payload.subscription_end_date = incomeForm.value.subscriptionEndDate
+    }
+    await createAdminPlatformIncomeRecord(payload)
+    ElMessage.success('收入已登记')
+    incomeForm.value = { ...incomeForm.value, incomeType: '', amountYuan: null, note: '', subscriptionStartDate: '', subscriptionEndDate: '' }
+    await loadIncomeRecords()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '收入未保存，请检查数据后重试')
+  } finally {
+    submittingIncome.value = false
+  }
+}
+
+const incomeStatusTagType = (status) => {
+  if (status === 'received') return 'success'
+  if (status === 'refunded') return 'danger'
+  if (status === 'refunding' || status === 'pending_receipt') return 'warning'
+  return 'info'
+}
+
+const incomeDialogVisible = ref(false)
+const incomeDialogRecord = ref(null)
+const incomeDialog = ref({ targetStatus: '', receivedDate: todayString, refundAmountYuan: null, note: '' })
+const submittingIncomeUpdate = ref(false)
+const incomeDialogTargets = computed(() => (incomeDialogRecord.value ? incomeNextStatuses(incomeDialogRecord.value.status) : []))
+
+const openIncomeDialog = (row) => {
+  incomeDialogRecord.value = row
+  incomeDialog.value = { targetStatus: incomeNextStatuses(row.status)[0] || '', receivedDate: todayString, refundAmountYuan: null, note: '' }
+  incomeDialogVisible.value = true
+}
+
+const submitIncomeUpdate = async () => {
+  const record = incomeDialogRecord.value
+  if (!record || !incomeDialog.value.targetStatus) return
+  const payload = { status: incomeDialog.value.targetStatus }
+  if (incomeDialog.value.targetStatus === 'received') {
+    if (!incomeDialog.value.receivedDate) {
+      ElMessage.warning('请填收款日期')
+      return
+    }
+    payload.received_date = incomeDialog.value.receivedDate
+  }
+  if (incomeDialog.value.targetStatus === 'refunding' || incomeDialog.value.targetStatus === 'refunded') {
+    const refundCents = Math.round(Number(incomeDialog.value.refundAmountYuan) * 100)
+    if (!Number.isSafeInteger(refundCents) || refundCents < 1 || refundCents > record.amount_cents) {
+      ElMessage.warning('退款金额必须大于 0 且不超过收入金额')
+      return
+    }
+    payload.refund_amount_cents = refundCents
+  }
+  if (incomeDialog.value.note.trim()) payload.note = incomeDialog.value.note.trim()
+  submittingIncomeUpdate.value = true
+  try {
+    await updateAdminPlatformIncomeRecord(record.id, payload)
+    ElMessage.success('收入状态已更新')
+    incomeDialogVisible.value = false
+    await loadIncomeRecords()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '状态更新失败')
+  } finally {
+    submittingIncomeUpdate.value = false
+  }
+}
+
+const cancelIncomeRecord = async (row) => {
+  try {
+    await ElMessageBox.confirm(`取消收入 #${row.id}（${incomeTypeLabel(row.income_type)} · ${money(row.amount_cents)}）后将不再计入 MRR，该操作会写入审计。`, '确认取消收入', { confirmButtonText: '确认取消', cancelButtonText: '返回', type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await updateAdminPlatformIncomeRecord(row.id, { cancel: true })
+    ElMessage.success('收入已取消')
+    await loadIncomeRecords()
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '取消失败')
+  }
+}
+
+const mrrMonth = ref(currentMonthString)
+const mrr = ref(null)
+const mrrLoading = ref(false)
+const breakevenForm = ref({ revenueYuan: null, variableYuan: null })
+const breakeven = ref(null)
+const breakevenLoading = ref(false)
+
+const loadMRR = async () => {
+  if (!mrrMonth.value) return
+  mrrLoading.value = true
+  try {
+    const response = await fetchAdminPlatformMRR({ month: mrrMonth.value })
+    mrr.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '加载 MRR 失败')
+  } finally {
+    mrrLoading.value = false
+  }
+}
+
+const runBreakeven = async () => {
+  if (!mrrMonth.value) return
+  const params = { month: mrrMonth.value }
+  if (breakevenForm.value.revenueYuan != null && breakevenForm.value.revenueYuan !== '') {
+    params.avg_revenue_per_merchant_cents = Math.round(Number(breakevenForm.value.revenueYuan) * 100)
+  }
+  if (breakevenForm.value.variableYuan != null && breakevenForm.value.variableYuan !== '') {
+    params.avg_variable_cost_per_merchant_cents = Math.round(Number(breakevenForm.value.variableYuan) * 100)
+  }
+  breakevenLoading.value = true
+  try {
+    const response = await fetchAdminPlatformBreakeven(params)
+    breakeven.value = response?.data || null
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.message || '保本试算失败')
+  } finally {
+    breakevenLoading.value = false
+  }
+}
+
+const onFinanceTabChange = (tab) => {
+  if (tab === 'mrr' && !mrr.value) loadMRR()
 }
 
 const openReversal = (expense) => {
@@ -1473,6 +2228,9 @@ onMounted(() => {
   loadOverview()
   loadAiUsageStats()
   loadEmergencySwitch()
+  loadExpenseStats()
+  loadTimeLogs()
+  loadIncomeRecords()
 })
 </script>
 
@@ -1538,6 +2296,8 @@ onMounted(() => {
 .ai-emergency-on{color:#15803d}
 .ai-emergency-note{margin:0}
 .ai-dialog-form{margin-top:14px}
+.cost-flag-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;min-height:32px}
+.expense-flags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 @media(max-width:1200px){.ai-stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.ai-recon-grid{grid-template-columns:1fr}.ai-price-form-row,.ai-price-form-row + .ai-price-form-row,.ai-bill-form-row,.ai-budget-form-row{grid-template-columns:repeat(2,minmax(0,1fr))}.ai-budget-status-grid{grid-template-columns:1fr}}
 @media(max-width:640px){.ai-stats-grid{grid-template-columns:1fr}.ai-price-form-row,.ai-price-form-row + .ai-price-form-row,.ai-bill-form-row,.ai-budget-form-row{grid-template-columns:1fr}.ai-filter-select{width:100%}}
 </style>

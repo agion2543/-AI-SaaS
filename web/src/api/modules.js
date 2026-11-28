@@ -183,6 +183,15 @@ export const fetchAdminAIUsageOverview = () => http.get('/admin/ai-usage/overvie
 export const fetchAdminPlatformCostOverview = (params) => http.get('/admin/platform-costs/overview', { params })
 export const createAdminPlatformExpense = (payload) => http.post('/admin/platform-costs/expenses', payload)
 export const createAdminPlatformExpenseReversal = (id, payload) => http.post(`/admin/platform-costs/expenses/${id}/reversals`, payload)
+export const fetchAdminPlatformExpenseStats = (params) => http.get('/admin/platform-costs/expenses/stats', { params })
+// 平台财务 v14（仅超管）：时间成本、收入台账、MRR 与保本测算。
+export const fetchAdminPlatformTimeLogs = (params) => http.get('/admin/platform-finance/time-logs', { params })
+export const createAdminPlatformTimeLog = (payload) => http.post('/admin/platform-finance/time-logs', payload)
+export const fetchAdminPlatformIncomeRecords = (params) => http.get('/admin/platform-finance/income-records', { params })
+export const createAdminPlatformIncomeRecord = (payload) => http.post('/admin/platform-finance/income-records', payload)
+export const updateAdminPlatformIncomeRecord = (id, payload) => http.put(`/admin/platform-finance/income-records/${id}`, payload)
+export const fetchAdminPlatformMRR = (params) => http.get('/admin/platform-finance/mrr', { params })
+export const fetchAdminPlatformBreakeven = (params) => http.get('/admin/platform-finance/breakeven', { params })
 // AI 成本控制（P1 MVP，仅超管）：估算成本与供应商实际账单在接口与字段上严格分开。
 export const fetchAdminAIUsageStats = (params) => http.get('/admin/ai-cost-control/usage-stats', { params })
 export const fetchAdminAIModelPrices = () => http.get('/admin/ai-cost-control/model-prices')
