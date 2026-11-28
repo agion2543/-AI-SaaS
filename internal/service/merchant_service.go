@@ -477,6 +477,12 @@ func (s *MerchantService) CreateSubscriptionOrder(userID, merchantID uint, req d
 		PlanDurationDaysSnapshot: &planDurationSnapshot,
 		Amount:                   plan.PriceCents,
 		TotalAmount:              plan.PriceCents,
+		// Subscription orders have no product line items, but orders.items
+		// is a MySQL JSON column: it rejects the empty string GORM would
+		// otherwise write for the zero value (Error 3140). Store the empty
+		// JSON array, the same value ConfirmMerchantSubscriptionPayment
+		// already normalizes to before saving.
+		Items:                    "[]",
 		Status:                   "pending",
 		PaymentChannel:           channel,
 	}
