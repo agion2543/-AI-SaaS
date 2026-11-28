@@ -271,7 +271,7 @@ bash scripts/test-backup-restore-age.sh
 全平台按北京时间（Asia/Shanghai，UTC+8）计日、计月。UTC 容器在日边界附近 8 小时内会把交易归属到错误的日期，所以时区必须在三层同时 pin 住，缺一层都不可靠：
 
 1. **容器**：四个 Compose 文件（默认、生产、新装、托管）的全部服务都设 `TZ=Asia/Shanghai`；MySQL 的 `time_zone` 默认是 `SYSTEM`，跟随容器时区。镜像 runtime 层装了 `tzdata`（见 `Dockerfile`），没有它 Go 的 `time.Local` 认不出 `TZ`，容器会悄悄回到 UTC。
-2. **DSN**：`MYSQL_DSN` 必须用 `loc=Asia/Shanghai`，不能用 `loc=Local`（`.env.example` 已改；生产 `.env.production` 同样检查）。`loc=Local` 会跟随容器时区，容器时区一旦漂移，写入/读取的日期就跟着漂移。
+2. **DSN**：`MYSQL_DSN` 必须用 `loc=Asia/Shanghai`，不能用 `loc=Local`（`.env.example` 已改；生产 `.env.production` 同样检查）。注意：写进 DSN 时斜杠必须转义为 `loc=Asia%2FShanghai`，驱动（go-sql-driver/mysql v1.7.0）会拒绝未转义的 `loc=Asia/Shanghai`（`invalid DSN: did you forget to escape a param value?`）。`loc=Local` 会跟随容器时区，容器时区一旦漂移，写入/读取的日期就跟着漂移。
 3. **代码**：每日经营总结、活动复盘、营业额按日归属使用代码内固定的 `beijingTimeZone`（UTC+8 固定偏移，不依赖容器时区）；仪表盘的日期窗口也已从 `time.Local` 改为 `beijingTimeZone`。
 
 部署后验证（部署前不要只信配置）：容器内 `date` 应显示 `CST`/`+0800`；MySQL 执行 `SELECT @@global.time_zone, @@system_time_zone;` 应为 `SYSTEM` 加 `CST` 或 `Asia/Shanghai`；在 00:30 前后各做一笔测试订单，确认都归属到同一北京时间日期。

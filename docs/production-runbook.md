@@ -129,6 +129,6 @@ MYSQL_REFUND_IT_DSN='root@unix(/tmp/cue-refund-mysql-<id>/mysql.sock)/cue_refund
 
 - 容器 `TZ=Asia/Shanghai` 未被改动，容器内 `date` 显示 `CST`/`+0800`；
 - MySQL `SELECT @@global.time_zone, @@system_time_zone;` 为 `SYSTEM` 加 `CST` 或 `Asia/Shanghai`；
-- `.env.production` 的 `MYSQL_DSN` 用 `loc=Asia/Shanghai`，不是 `loc=Local`。
+- `.env.production` 的 `MYSQL_DSN` 用 `loc=Asia/Shanghai`，不是 `loc=Local`。写进 DSN 时斜杠必须转义为 `loc=Asia%2FShanghai`，否则驱动拒绝解析（见 `docs/production-deploy.md` 第 10 节）。
 
 不要只改容器时区就以为换了时区：每日总结、复盘、营业额按日归属用代码内固定的北京时间，成本中心等处的 `time.Local` 仍依赖容器 TZ；改时区约定前先改代码。

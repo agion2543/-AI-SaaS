@@ -12,7 +12,8 @@ version: "3.9"
 # never falls back to a default password.
 # Timezone: every service pins TZ=Asia/Shanghai (MySQL takes SYSTEM time
 # from it; the Go runtime needs tzdata in the image, see Dockerfile), and
-# the DSN uses loc=Asia/Shanghai, so daily turnover/summary attribution is
+# the DSN uses loc=Asia%2FShanghai (slash percent-encoded; the MySQL driver
+# rejects unescaped loc=Asia/Shanghai), so daily turnover/summary attribution is
 # always Beijing time.
 services:
   mysql:
