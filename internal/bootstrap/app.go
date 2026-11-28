@@ -171,7 +171,11 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 		}
 	}
 
-	if cfg.AppEnv != "production" {
+	// Explicit-development only (H2): a deployment that forgets
+	// APP_ENV=production must not auto-activate pending merchants or seed
+	// demo data. DevPasswordResetEnabled is true only when APP_ENV was
+	// explicitly set to development.
+	if cfg.DevPasswordResetEnabled {
 		if err := db.Model(&model.Merchant{}).Where("status = ?", "pending").Update("status", "active").Error; err != nil {
 			return err
 		}

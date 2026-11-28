@@ -23,7 +23,7 @@ const testOTPSecret = "synthetic-otp-hmac-secret-32-bytes-minimum"
 func TestDevelopmentSMSMockStillIssuesAndAcceptsCodes(t *testing.T) {
 	db := newSMSTestDB(t)
 	customer, _ := seedSMSTestUsers(t, db)
-	cfg := &config.Config{AppEnv: "development", JWTSecret: testOTPSecret}
+	cfg := &config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}
 	auth := NewAuthService(cfg, db)
 	merchant := NewMerchantService(cfg, db)
 
@@ -89,7 +89,7 @@ func TestOTPHashBindsPhoneAndScene(t *testing.T) {
 
 func TestSMSSendLimitsPerPhone(t *testing.T) {
 	db := newSMSTestDB(t)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	phone := "13800138021"
 	request := dto.SendSMSCodeRequest{Phone: phone}
 	if err := auth.SendRegisterCode(request); err != nil {
@@ -124,7 +124,7 @@ func TestSMSSendLimitsPerPhone(t *testing.T) {
 
 func TestSMSFailedAttemptsLockCodeAndSuccessIsSingleUse(t *testing.T) {
 	db := newSMSTestDB(t)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	phone := "13800138022"
 	if err := auth.SendRegisterCode(dto.SendSMSCodeRequest{Phone: phone}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestSMSFailedAttemptsLockCodeAndSuccessIsSingleUse(t *testing.T) {
 func TestSMSBindingCodeIsScopedToIssuingUser(t *testing.T) {
 	db := newSMSTestDB(t)
 	customer, merchantAdmin := seedSMSTestUsers(t, db)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	targetPhone := "13800138009"
 	if err := auth.SendBindPhoneCode(customer.ID, dto.SendSMSCodeRequest{Phone: targetPhone}); err != nil {
 		t.Fatalf("issue synthetic bind code: %v", err)
@@ -188,7 +188,7 @@ func TestSMSBindingCodeIsScopedToIssuingUser(t *testing.T) {
 
 func TestSMSExpiredCodeCannotBeConsumed(t *testing.T) {
 	db := newSMSTestDB(t)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	phone := "13800138025"
 	if err := auth.SendRegisterCode(dto.SendSMSCodeRequest{Phone: phone}); err != nil {
 		t.Fatalf("send synthetic registration code: %v", err)
@@ -263,7 +263,7 @@ func TestSMSRequestsFailClosedOutsideDevelopment(t *testing.T) {
 			t.Run(appEnv+"/"+testCase.name, func(t *testing.T) {
 				db := newSMSTestDB(t)
 				customer, merchantAdmin := seedSMSTestUsers(t, db)
-				cfg := &config.Config{AppEnv: appEnv, JWTSecret: testOTPSecret}
+				cfg := &config.Config{AppEnv: appEnv, DevPasswordResetEnabled: appEnv == "development", JWTSecret: testOTPSecret}
 				auth := NewAuthService(cfg, db)
 				merchant := NewMerchantService(cfg, db)
 
@@ -292,7 +292,7 @@ func TestFixedSMSCodeIsNotAcceptedOutsideDevelopment(t *testing.T) {
 	for _, appEnv := range []string{"production", "staging"} {
 		t.Run(appEnv, func(t *testing.T) {
 			db := newSMSTestDB(t)
-			cfg := &config.Config{AppEnv: appEnv, JWTSecret: testOTPSecret}
+			cfg := &config.Config{AppEnv: appEnv, DevPasswordResetEnabled: appEnv == "development", JWTSecret: testOTPSecret}
 			auth := NewAuthService(cfg, db)
 			merchant := NewMerchantService(cfg, db)
 
@@ -348,4 +348,26 @@ func seedSMSTestUsers(t *testing.T, db *gorm.DB) (*model.User, *model.User) {
 		t.Fatalf("seed synthetic merchant admin: %v", err)
 	}
 	return customer, merchantAdmin
+}
+
+func TestFixedSMSCodeRefusedWhenAppEnvDefaultIsDevelopment(t *testing.T) {
+	// H2: APP_ENV omitted in production still defaults AppEnv to
+	// "development", but the fixed 123456 code must not be issued: mock
+	// codes require the explicit APP_ENV=development signal.
+	db := newSMSTestDB(t)
+	cfg := &config.Config{AppEnv: "development", JWTSecret: testOTPSecret}
+	auth := NewAuthService(cfg, db)
+	if err := auth.SendRegisterCode(dto.SendSMSCodeRequest{Phone: "13800138003"}); !errors.Is(err, errSMSProviderNotConfigured) {
+		t.Fatalf("implicit development default must refuse mock SMS codes; got %v", err)
+	}
+	var count int64
+	if err := db.Model(&model.VerificationCode{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("refused mock send created %d verification records; want 0", count)
+	}
+	if err := auth.consumeVerificationCode("13800138001", "login", devFixedSMSCode, nil); err == nil {
+		t.Fatal("fixed mock code must not authenticate when the development default was not explicit")
+	}
 }

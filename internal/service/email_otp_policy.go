@@ -23,10 +23,11 @@ var (
 	errEmailInvalidCode           = errors.New("验证码错误或已过期")
 )
 
-// generateMockEmailCode deliberately supports simulation only in development.
+// generateMockEmailCode deliberately supports simulation only when the
+// caller explicitly allows mock codes (explicit APP_ENV=development).
 // Production has no configured mail provider and must not claim a mock send.
-func generateMockEmailCode(appEnv string) (string, error) {
-	if !isDevelopmentEnvironment(appEnv) {
+func generateMockEmailCode(allowMock bool) (string, error) {
+	if !allowMock {
 		return "", errEmailProviderNotConfigured
 	}
 	return devFixedEmailCode, nil
@@ -48,8 +49,8 @@ func hashEmailCode(secret, email, scene, code string) (string, error) {
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func issueEmailVerificationCode(db *gorm.DB, appEnv, secret, email, scene string, userID *uint) error {
-	code, err := generateMockEmailCode(appEnv)
+func issueEmailVerificationCode(db *gorm.DB, allowMock bool, secret, email, scene string, userID *uint) error {
+	code, err := generateMockEmailCode(allowMock)
 	if err != nil {
 		return err
 	}

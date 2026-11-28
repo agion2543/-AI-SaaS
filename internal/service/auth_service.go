@@ -423,12 +423,20 @@ func (s *AuthService) DevResetPassword(req dto.DevResetPasswordRequest) error {
 	}
 }
 
+// mockOTPAllowed reports whether fixed development verification codes may
+// be issued. It keys off the explicit APP_ENV=development signal, never the
+// defaulted AppEnv value: a deployment that forgets APP_ENV=production must
+// not silently keep the fixed 123456 code (H2).
+func (s *AuthService) mockOTPAllowed() bool {
+	return s.cfg != nil && s.cfg.DevPasswordResetEnabled
+}
+
 func (s *AuthService) issueVerificationCode(phone, scene string, userID *uint) error {
-	return issueSMSVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, phone, scene, userID)
+	return issueSMSVerificationCode(s.db, s.mockOTPAllowed(), s.cfg.JWTSecret, phone, scene, userID)
 }
 
 func (s *AuthService) issueEmailVerificationCode(email, scene string, userID *uint) error {
-	return issueEmailVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, email, scene, userID)
+	return issueEmailVerificationCode(s.db, s.mockOTPAllowed(), s.cfg.JWTSecret, email, scene, userID)
 }
 
 func (s *AuthService) consumeVerificationCode(phone, scene, code string, userID *uint) error {
@@ -442,7 +450,7 @@ func (s *AuthService) ensureUserTenantDefaults(user *model.User) {
 }
 
 func (s *AuthService) generateSMSCode() (string, error) {
-	return generateMockSMSCode(s.cfg.AppEnv)
+	return generateMockSMSCode(s.mockOTPAllowed())
 }
 
 func normalizePhone(phone string) string {

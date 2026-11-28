@@ -20,7 +20,7 @@ import (
 func TestDevelopmentEmailOTPUsesHMACWithoutLoggingPlaintext(t *testing.T) {
 	db := newEmailOTPTestDB(t)
 	user := seedEmailOTPTestUser(t, db)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 
 	var logs bytes.Buffer
 	previousWriter := log.Writer()
@@ -70,7 +70,7 @@ func TestEmailOTPHashBindsEmailSceneAndCode(t *testing.T) {
 func TestEmailOTPSendLimitsPerEmail(t *testing.T) {
 	db := newEmailOTPTestDB(t)
 	user := seedEmailOTPTestUser(t, db)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	request := dto.SendEmailCodeRequest{Email: "limit@example.test"}
 
 	if err := auth.SendBindEmailCode(user.ID, request); err != nil {
@@ -105,7 +105,7 @@ func TestEmailOTPSendLimitsPerEmail(t *testing.T) {
 func TestEmailOTPFailedAttemptsLockAndSuccessfulCodeIsSingleUse(t *testing.T) {
 	db := newEmailOTPTestDB(t)
 	user := seedEmailOTPTestUser(t, db)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	email := "verify@example.test"
 	if err := auth.SendBindEmailCode(user.ID, dto.SendEmailCodeRequest{Email: email}); err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestEmailBindingCodeIsScopedToIssuingUser(t *testing.T) {
 	if err := db.Create(otherUser).Error; err != nil {
 		t.Fatalf("create second synthetic user: %v", err)
 	}
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	targetEmail := "user-scoped@example.test"
 	if err := auth.SendBindEmailCode(owner.ID, dto.SendEmailCodeRequest{Email: targetEmail}); err != nil {
 		t.Fatalf("issue synthetic bind code: %v", err)
@@ -195,7 +195,7 @@ func TestEmailBindingCodeIsScopedToIssuingUser(t *testing.T) {
 func TestEmailOTPExpiredCodeCannotBind(t *testing.T) {
 	db := newEmailOTPTestDB(t)
 	user := seedEmailOTPTestUser(t, db)
-	auth := NewAuthService(&config.Config{AppEnv: "development", JWTSecret: testOTPSecret}, db)
+	auth := NewAuthService(&config.Config{AppEnv: "development", DevPasswordResetEnabled: true, JWTSecret: testOTPSecret}, db)
 	email := "expired@example.test"
 	if err := auth.SendBindEmailCode(user.ID, dto.SendEmailCodeRequest{Email: email}); err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestEmailOTPRequestsFailClosedOutsideDevelopment(t *testing.T) {
 		t.Run(appEnv, func(t *testing.T) {
 			db := newEmailOTPTestDB(t)
 			user := seedEmailOTPTestUser(t, db)
-			auth := NewAuthService(&config.Config{AppEnv: appEnv, JWTSecret: testOTPSecret}, db)
+			auth := NewAuthService(&config.Config{AppEnv: appEnv, DevPasswordResetEnabled: appEnv == "development", JWTSecret: testOTPSecret}, db)
 			if err := auth.SendBindEmailCode(user.ID, dto.SendEmailCodeRequest{Email: "blocked@example.test"}); !errors.Is(err, errEmailProviderNotConfigured) {
 				t.Fatalf("without a real email provider, %s must reject simulated sends; got %v", appEnv, err)
 			}

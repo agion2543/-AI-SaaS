@@ -29,7 +29,7 @@ func TestMySQLOTPConcurrentIssueAndConsume(t *testing.T) {
 		{
 			name: "first SMS send",
 			send: func() error {
-				return issueSMSVerificationCode(db, "development", testOTPSecret, "13800138991", "register", nil)
+				return issueSMSVerificationCode(db, true, testOTPSecret, "13800138991", "register", nil)
 			},
 			count: func() (int64, error) {
 				var count int64
@@ -40,7 +40,7 @@ func TestMySQLOTPConcurrentIssueAndConsume(t *testing.T) {
 		{
 			name: "first email send",
 			send: func() error {
-				return issueEmailVerificationCode(db, "development", testOTPSecret, "otp-first-send@example.test", "bind_email", nil)
+				return issueEmailVerificationCode(db, true, testOTPSecret, "otp-first-send@example.test", "bind_email", nil)
 			},
 			count: func() (int64, error) {
 				var count int64

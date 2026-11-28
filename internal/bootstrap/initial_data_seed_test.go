@@ -198,3 +198,48 @@ func TestSeedInitialDataPreservesEditsCreatesMissingPackagesAndDoesNotRecreateMe
 		t.Fatalf("reseed recreated %d named default merchant plans after one was renamed and another deleted", defaultPlanCount)
 	}
 }
+
+func TestSeedAutoActivationRequiresExplicitDevelopment(t *testing.T) {
+	db := openInitialDataSeedTestDB(t)
+	if err := db.AutoMigrate(&model.Merchant{}, &model.Store{}, &model.MerchantGroupBuyLink{}, &model.MerchantGroupBuyLinkAudit{}); err != nil {
+		t.Fatalf("migrate synthetic seed merchant tables: %v", err)
+	}
+	pending := model.Merchant{Name: "合成待审核商家", Status: "pending"}
+	if err := db.Create(&pending).Error; err != nil {
+		t.Fatalf("create synthetic pending merchant: %v", err)
+	}
+	base := &config.Config{
+		AppEnv:                 "development",
+		InitialAdminUser:       "synthetic-admin",
+		InitialAdminPass:       "synthetic-initial-seed-password",
+		InitialDataSeedEnabled: true,
+	}
+
+	// H2: AppEnv reads as development only because it is the default when
+	// APP_ENV is omitted. Pending merchants must stay pending.
+	implicit := *base
+	if err := seedInitialData(db, &implicit); err != nil {
+		t.Fatalf("seed with implicit development default: %v", err)
+	}
+	var kept model.Merchant
+	if err := db.First(&kept, pending.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if kept.Status != "pending" {
+		t.Fatalf("implicit development default auto-activated merchant: status=%q", kept.Status)
+	}
+
+	// Explicit APP_ENV=development keeps the old local-dev behaviour.
+	explicit := *base
+	explicit.DevPasswordResetEnabled = true
+	if err := seedInitialData(db, &explicit); err != nil {
+		t.Fatalf("seed with explicit development: %v", err)
+	}
+	var activated model.Merchant
+	if err := db.First(&activated, pending.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activated.Status != "active" {
+		t.Fatalf("explicit development should auto-activate pending merchants: status=%q", activated.Status)
+	}
+}

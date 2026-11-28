@@ -2296,8 +2296,14 @@ func (s *MerchantService) MerchantTurnover(merchantID uint, startValue, endValue
 	}, nil
 }
 
+// mockOTPAllowed mirrors AuthService.mockOTPAllowed: fixed development
+// verification codes require explicit APP_ENV=development (H2).
+func (s *MerchantService) mockOTPAllowed() bool {
+	return s.cfg != nil && s.cfg.DevPasswordResetEnabled
+}
+
 func (s *MerchantService) issueMerchantVerificationCode(phone, scene string, userID *uint) error {
-	return issueSMSVerificationCode(s.db, s.cfg.AppEnv, s.cfg.JWTSecret, phone, scene, userID)
+	return issueSMSVerificationCode(s.db, s.mockOTPAllowed(), s.cfg.JWTSecret, phone, scene, userID)
 }
 
 func (s *MerchantService) consumeMerchantVerificationCode(phone, scene, code string, userID *uint) error {

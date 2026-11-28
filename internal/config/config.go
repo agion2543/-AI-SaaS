@@ -16,7 +16,12 @@ const DefaultOTPSendRateLimitPerIPPerMinute = 10
 type Config struct {
 	AppName string
 	AppEnv  string
-	// DevPasswordResetEnabled is true only when APP_ENV explicitly selects development.
+	// DevPasswordResetEnabled is true only when APP_ENV explicitly selects
+	// development. It is the single explicit-development signal for every
+	// development-only capability (dev password reset, fixed mock OTP codes,
+	// seed auto-activation): none of them may key off the defaulted AppEnv
+	// value, or a deployment that forgets APP_ENV=production would keep
+	// them enabled.
 	DevPasswordResetEnabled        bool
 	AppHost                        string
 	AppPort                        string

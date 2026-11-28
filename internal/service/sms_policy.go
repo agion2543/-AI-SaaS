@@ -31,12 +31,8 @@ var (
 	errOTPHashKeyTooShort       = errors.New("JWT_SECRET must contain at least 32 bytes for safe verification code storage")
 )
 
-func isDevelopmentEnvironment(appEnv string) bool {
-	return strings.EqualFold(strings.TrimSpace(appEnv), "development")
-}
-
-func generateMockSMSCode(appEnv string) (string, error) {
-	if !isDevelopmentEnvironment(appEnv) {
+func generateMockSMSCode(allowMock bool) (string, error) {
+	if !allowMock {
 		return "", errSMSProviderNotConfigured
 	}
 	return devFixedSMSCode, nil
@@ -58,8 +54,8 @@ func hashSMSCode(secret, phone, scene, code string) (string, error) {
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func issueSMSVerificationCode(db *gorm.DB, appEnv, secret, phone, scene string, userID *uint) error {
-	code, err := generateMockSMSCode(appEnv)
+func issueSMSVerificationCode(db *gorm.DB, allowMock bool, secret, phone, scene string, userID *uint) error {
+	code, err := generateMockSMSCode(allowMock)
 	if err != nil {
 		return err
 	}
