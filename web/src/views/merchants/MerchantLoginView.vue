@@ -6,10 +6,10 @@
       <p>商家账号可在这里登录、订阅付费、管理门店商品、订单和 AI 经营分析。</p>
 
       <el-form :model="loginForm">
+        <el-segmented v-model="loginMode" :options="loginModeOptions" class="mode-switch" />
         <el-form-item>
           <el-input v-model="loginForm.phone" maxlength="11" placeholder="联系人手机号" />
         </el-form-item>
-        <el-segmented v-model="loginMode" :options="loginModeOptions" class="mode-switch" />
         <el-form-item v-if="loginMode === 'password'">
           <el-input v-model="loginForm.password" type="password" show-password placeholder="登录密码" />
         </el-form-item>

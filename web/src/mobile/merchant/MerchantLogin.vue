@@ -19,6 +19,24 @@
     <!-- 登录表单 -->
     <div class="login-form">
       <van-form @submit="onLogin">
+        <!-- 登录方式切换 -->
+        <div class="mode-switch">
+          <van-button
+            size="small"
+            :type="loginMode === 'password' ? 'primary' : 'default'"
+            @click="loginMode = 'password'"
+          >
+            密码登录
+          </van-button>
+          <van-button
+            size="small"
+            :type="loginMode === 'code' ? 'primary' : 'default'"
+            @click="loginMode = 'code'"
+          >
+            验证码登录
+          </van-button>
+        </div>
+
         <van-cell-group inset>
           <van-field
             v-model="form.phone"
@@ -64,24 +82,6 @@
             </template>
           </van-field>
         </van-cell-group>
-
-        <!-- 登录方式切换 -->
-        <div class="mode-switch">
-          <van-button
-            size="small"
-            :type="loginMode === 'password' ? 'primary' : 'default'"
-            @click="loginMode = 'password'"
-          >
-            密码登录
-          </van-button>
-          <van-button
-            size="small"
-            :type="loginMode === 'code' ? 'primary' : 'default'"
-            @click="loginMode = 'code'"
-          >
-            验证码登录
-          </van-button>
-        </div>
 
         <!-- 开发模式提示 -->
         <div v-if="isDev" class="dev-notice">
@@ -422,7 +422,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   gap: 12px;
-  padding: 16px 16px 0;
+  padding: 0 16px 16px;
 }
 
 .form-submit {
