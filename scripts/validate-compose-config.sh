@@ -17,6 +17,7 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 COMPOSE_FILES=(
+  docker-compose.yml
   docker-compose.prod.yml
   docker-compose.new-install.yml
   docker-compose.managed.yml
@@ -51,6 +52,14 @@ done
 cat > "$TMP_ROOT/.env.production" <<'SYNTHETIC_ENV'
 MYSQL_ROOT_PASSWORD=synthetic_root_password_for_config_validation
 MYSQL_APP_PASSWORD=synthetic_app_password_for_config_validation
+MYSQL_DSN=mysql://synthetic_user:synthetic_password@tcp(mysql:3306)/synthetic_database
+SYNTHETIC_ENV
+# The default Compose references env_file .env (not .env.production);
+# give it the same synthetic values so `docker compose config` can parse
+# it without touching any real credential.
+cat > "$TMP_ROOT/.env" <<'SYNTHETIC_ENV'
+MYSQL_ROOT_PASSWORD=synthetic-root-password
+MYSQL_APP_PASSWORD=synthetic-app-password
 MYSQL_DSN=mysql://synthetic_user:synthetic_password@tcp(mysql:3306)/synthetic_database
 SYNTHETIC_ENV
 cat > "$TMP_ROOT/compose-interpolation.env" <<'SYNTHETIC_INTERPOLATION'

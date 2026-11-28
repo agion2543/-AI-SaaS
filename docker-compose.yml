@@ -7,13 +7,16 @@ version: "3.9"
 # file at an existing database or an old AutoMigrate-built volume: the
 # migrator refuses unknown legacy schemas fail-closed. For a fresh start,
 # drop the old dev volume first (docker compose down -v) and start empty.
+# MySQL root password: set MYSQL_ROOT_PASSWORD in .env (see .env.example)
+# or in the shell before starting; Compose refuses to start without it and
+# never falls back to a default password.
 services:
   mysql:
     image: mysql:8.0
     container_name: saas-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env or the shell before starting the default Compose (see .env.example)}
       MYSQL_DATABASE: saas_billing
     ports:
       - "3306:3306"
@@ -24,7 +27,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env or the shell before starting the default Compose (see .env.example)}"]
       interval: 10s
       timeout: 5s
       retries: 10
