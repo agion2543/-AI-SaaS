@@ -1876,10 +1876,12 @@ const runBreakeven = async () => {
   if (!mrrMonth.value) return
   const params = { month: mrrMonth.value }
   if (breakevenForm.value.revenueYuan != null && breakevenForm.value.revenueYuan !== '') {
-    params.avg_revenue_per_merchant_cents = Math.round(Number(breakevenForm.value.revenueYuan) * 100)
+    // 渲染验证发现：后端只认 merchant_monthly_*，之前这里发的 avg_* 参数名
+    // 被后端忽略，保本试算永远缺参数；改发规范名（后端仍兼容旧名）。
+    params.merchant_monthly_revenue_cents = Math.round(Number(breakevenForm.value.revenueYuan) * 100)
   }
   if (breakevenForm.value.variableYuan != null && breakevenForm.value.variableYuan !== '') {
-    params.avg_variable_cost_per_merchant_cents = Math.round(Number(breakevenForm.value.variableYuan) * 100)
+    params.merchant_monthly_variable_cents = Math.round(Number(breakevenForm.value.variableYuan) * 100)
   }
   breakevenLoading.value = true
   try {

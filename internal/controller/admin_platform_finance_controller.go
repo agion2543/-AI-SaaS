@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -127,8 +128,14 @@ func (ctl *AdminController) GetPlatformMRR(c *gin.Context) {
 }
 
 func (ctl *AdminController) GetPlatformBreakeven(c *gin.Context) {
-	revenue, revenueErr := parseOptionalPlatformFinanceCents(c.Query("merchant_monthly_revenue_cents"))
-	variable, variableErr := parseOptionalPlatformFinanceCents(c.Query("merchant_monthly_variable_cents"))
+	// 渲染验证发现：成本页前端发送的是 avg_revenue_per_merchant_cents /
+	// avg_variable_cost_per_merchant_cents（v14 前端提交 c6201ba），而后端
+	// 只读 merchant_monthly_*（v14 后端提交 e5cec91），导致保本试算在页面上
+	// 永远缺参数、算不出保本商家数。规范名优先，旧名作兼容回落。
+	revenue, revenueErr := parseOptionalPlatformFinanceCents(firstNonEmptyPlatformFinanceParam(
+		c.Query("merchant_monthly_revenue_cents"), c.Query("avg_revenue_per_merchant_cents")))
+	variable, variableErr := parseOptionalPlatformFinanceCents(firstNonEmptyPlatformFinanceParam(
+		c.Query("merchant_monthly_variable_cents"), c.Query("avg_variable_cost_per_merchant_cents")))
 	if revenueErr != nil || variableErr != nil {
 		utils.Error(c, http.StatusBadRequest, "单商家月均收入与单商家月变动成本须为整数分")
 		return
@@ -154,6 +161,19 @@ func parseOptionalPlatformFinanceCents(raw string) (*int64, error) {
 		return nil, err
 	}
 	return &value, nil
+}
+
+// firstNonEmptyPlatformFinanceParam returns the first non-empty query value,
+// so the breakeven endpoint accepts both the canonical
+// merchant_monthly_* names and the legacy avg_* names the cost page sent
+// before the v14 render verification fix.
+func firstNonEmptyPlatformFinanceParam(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (ctl *AdminController) GetPlatformExpenseStats(c *gin.Context) {
