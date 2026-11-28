@@ -142,12 +142,18 @@ func (s *OrderService) CreateOrder(userID uint, req dto.CreateOrderRequest) (*mo
 	}
 
 	order := &model.Order{
-		OrderNo:        fmt.Sprintf("ORD%d", time.Now().UnixNano()),
-		OrderType:      "user_membership",
-		UserID:         &userID,
-		PackageID:      &pkg.ID,
-		Amount:         pkg.Price,
-		TotalAmount:    pkg.Price,
+		OrderNo:     fmt.Sprintf("ORD%d", time.Now().UnixNano()),
+		OrderType:   "user_membership",
+		UserID:      &userID,
+		PackageID:   &pkg.ID,
+		Amount:      pkg.Price,
+		TotalAmount: pkg.Price,
+		// Member orders have no product line items, but orders.items
+		// is a MySQL JSON column: it rejects the empty string GORM would
+		// otherwise write for the zero value (Error 3140). Store the empty
+		// JSON array, the same value ConfirmMerchantSubscriptionPayment
+		// already normalizes to before saving.
+		Items:          "[]",
 		Status:         "pending",
 		PaymentChannel: req.PaymentChannel,
 		AutoRenew:      req.AutoRenew,
