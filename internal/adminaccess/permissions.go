@@ -150,6 +150,7 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 	)
 	setAny([]string{PermissionReadOnly, PermissionOperations},
 		"GET /admin/merchants",
+		"GET /admin/merchants/stats",
 		"GET /admin/merchants/:id",
 		"GET /admin/merchant-follow-ups",
 		"GET /admin/merchants/:id/follow-ups",

@@ -179,6 +179,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				legacyAccess.PUT("/admins/:id", adminAccessCtl.UpdateAdmin)
 			}
 			adminLegacy.GET("/merchants", adminCtl.Merchants)
+			adminLegacy.GET("/merchants/stats", adminCtl.MerchantStats)
 			adminLegacy.GET("/merchants/:id", adminCtl.MerchantDetail)
 			adminLegacy.GET("/merchants/:id/payment-config", merchantCtl.AdminPaymentConfig)
 			adminLegacy.PUT("/merchants/:id/payment-config", merchantCtl.ReviewPaymentConfig)
@@ -462,6 +463,7 @@ func Register(engine *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			adminGroup.GET("/platform-finance/breakeven", adminCtl.GetPlatformBreakeven)
 			adminGroup.POST("/payment-qrcode/upload", adminCtl.UploadPaymentQRCode)
 			adminGroup.GET("/merchants", adminCtl.Merchants)
+			adminGroup.GET("/merchants/stats", adminCtl.MerchantStats)
 			adminGroup.GET("/merchant-plans", adminCtl.MerchantPlans)
 			adminGroup.POST("/merchant-plans", adminCtl.SaveMerchantPlan)
 			adminGroup.PUT("/merchant-plans/:id", adminCtl.SaveMerchantPlan)

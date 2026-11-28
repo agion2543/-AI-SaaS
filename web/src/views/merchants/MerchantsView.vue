@@ -14,7 +14,7 @@
     <el-alert v-if="loadError" class="error-alert" type="error" show-icon :closable="false" :title="loadError" />
 
     <section class="metric-grid">
-      <MetricCard label="商家总数" :value="merchants.length" hint="当前平台入驻商家数量。" tone="primary" />
+      <MetricCard label="商家总数" :value="merchantStats.total" hint="当前平台入驻商家数量。" tone="primary" />
       <MetricCard label="已订阅" :value="subscribedCount" hint="订阅仍在有效期内的商家。" tone="success" />
       <MetricCard label="高风险商家" :value="highRiskCount" hint="冻结、退款/取消偏高或支付异常。" tone="warning" />
       <MetricCard label="收款待审" :value="paymentPendingCount" hint="未审核通过前顾客端不展示收款码。" tone="warning" />
@@ -76,7 +76,7 @@
 
       <el-table
         v-loading="loading"
-        :data="visibleMerchants"
+        :data="merchants"
         empty-text="暂无商家数据"
         @sort-change="handleTableSort"
       >
@@ -165,12 +165,12 @@
         <el-pagination
           background
           layout="total, sizes, prev, pager, next"
-          :total="filteredMerchants.length"
+          :total="total"
           :page-size="pageSize"
           :current-page="page"
           :page-sizes="[10, 20, 50]"
           @size-change="handleSizeChange"
-          @current-change="page = $event"
+          @current-change="handlePageChange"
         />
       </div>
     </DataPanel>
@@ -207,12 +207,25 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
-import { fetchMerchants, openMerchantSubscription, updateMerchantStatus } from '../../api/modules'
+import { fetchMerchants, fetchMerchantStats, openMerchantSubscription, updateMerchantStatus } from '../../api/modules'
 import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
 
 const merchants = ref([])
+const total = ref(0)
+const emptyMerchantStats = () => ({
+  total: 0,
+  subscribed_count: 0,
+  high_risk_count: 0,
+  watch_count: 0,
+  open_follow_up_count: 0,
+  payment_pending_count: 0,
+  payment_missing_qr_count: 0,
+  pending_settlement_merchant_count: 0
+})
+// 指标卡与风险快捷条全部取服务端统计（全量聚合），不再按当前页拼凑。
+const merchantStats = ref(emptyMerchantStats())
 const keyword = ref('')
 const status = ref('')
 const subscriptionFilter = ref('')
@@ -238,17 +251,18 @@ const subscriptionForm = reactive({
   note: ''
 })
 
-const newestMerchant = computed(() => [...merchants.value].sort((a, b) => dateValue(b.created_at) - dateValue(a.created_at))[0] || null)
-const subscribedCount = computed(() => merchants.value.filter(subscriptionValid).length)
-const unsubscribedCount = computed(() => merchants.value.length - subscribedCount.value)
-const highRiskCount = computed(() => merchants.value.filter((item) => riskLevel(item).score >= 3).length)
-const watchRiskCount = computed(() => merchants.value.filter((item) => riskLevel(item).score === 2).length)
-const openFollowUpCount = computed(() => merchants.value.reduce((sum, item) => sum + Number(item.open_follow_up_count || 0), 0))
-const pendingSettlementMerchantCount = computed(() => merchants.value.filter((item) => Number(item.pending_settlement_count || item.unsettled_order_count || 0) > 0).length)
-const paymentPendingCount = computed(() => merchants.value.filter((item) => item.payment_config_audit === 'pending').length)
-const paymentMissingQrCount = computed(() => merchants.value.filter((item) => paymentMissingQr(item)).length)
+// “最新注册”只在按注册时间降序的第 1 页才标：分页后当前页未必含全站最新商家。
+const newestMerchant = computed(() => (page.value === 1 && sortBy.value === 'created_at' && sortOrder.value === 'desc' ? merchants.value[0] || null : null))
+const subscribedCount = computed(() => merchantStats.value.subscribed_count)
+const unsubscribedCount = computed(() => merchantStats.value.total - subscribedCount.value)
+const highRiskCount = computed(() => merchantStats.value.high_risk_count)
+const watchRiskCount = computed(() => merchantStats.value.watch_count)
+const openFollowUpCount = computed(() => merchantStats.value.open_follow_up_count)
+const pendingSettlementMerchantCount = computed(() => merchantStats.value.pending_settlement_merchant_count)
+const paymentPendingCount = computed(() => merchantStats.value.payment_pending_count)
+const paymentMissingQrCount = computed(() => merchantStats.value.payment_missing_qr_count)
 const riskQuickFilters = computed(() => [
-  { label: '全部商家', value: '', valueText: merchants.value.length, hint: '按风险优先排序' },
+  { label: '全部商家', value: '', valueText: merchantStats.value.total, hint: '按风险优先排序' },
   { label: '高风险', value: 'high', valueText: highRiskCount.value, hint: '优先联系处理' },
   { label: '需关注', value: 'watch', valueText: watchRiskCount.value, hint: '退款、接单或订阅异常' },
   { label: '未处理跟进', value: 'follow_up', valueText: openFollowUpCount.value, hint: '人工事项未关闭' },
@@ -261,11 +275,26 @@ const load = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await fetchMerchants({ page: 1, page_size: 500, t: Date.now() })
+    const params = {
+      page: page.value,
+      page_size: pageSize.value,
+      t: Date.now(),
+      keyword: keyword.value.trim() || undefined,
+      status: status.value || undefined,
+      subscription: subscriptionFilter.value || undefined,
+      risk: riskFilter.value || undefined,
+      sort_by: sortBy.value,
+      sort_order: sortOrder.value
+    }
+    const [res, statsRes] = await Promise.all([fetchMerchants(params), fetchMerchantStats()])
     merchants.value = res.data?.list || []
-    if (!merchants.value.length) loadError.value = '接口请求成功，但没有返回商家数据。请确认当前登录的是平台后台账号。'
+    total.value = res.data?.total ?? 0
+    merchantStats.value = statsRes.data || emptyMerchantStats()
+    if (!total.value) loadError.value = '接口请求成功，但没有返回商家数据。请确认当前登录的是平台后台账号。'
   } catch (err) {
     merchants.value = []
+    total.value = 0
+    merchantStats.value = emptyMerchantStats()
     loadError.value = err.response?.data?.message || '商家列表加载失败，请重新登录后台或检查后端服务。'
     ElMessage.error(loadError.value)
   } finally {
@@ -273,23 +302,14 @@ const load = async () => {
   }
 }
 
-const filteredMerchants = computed(() => {
-  const kw = keyword.value.trim().toLowerCase()
-  const list = merchants.value.filter((item) => {
-    const matchKeyword = !kw || `${item.name || ''} ${item.contact_phone || ''}`.toLowerCase().includes(kw)
-    const matchStatus = !status.value || item.status === status.value
-    const matchSubscription = !subscriptionFilter.value ||
-      (subscriptionFilter.value === 'active' ? subscriptionValid(item) : !subscriptionValid(item))
-    const matchRisk = !riskFilter.value || matchRiskFilter(item, riskFilter.value)
-    return matchKeyword && matchStatus && matchSubscription && matchRisk
-  })
-  return [...list].sort((a, b) => compareMerchant(a, b))
-})
-
-const visibleMerchants = computed(() => filteredMerchants.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
-
 const search = () => {
   page.value = 1
+  load()
+}
+
+const handlePageChange = (nextPage) => {
+  page.value = nextPage
+  load()
 }
 
 const reset = () => {
@@ -312,46 +332,7 @@ const handleTableSort = ({ prop, order }) => {
 const handleSizeChange = (nextSize) => {
   pageSize.value = nextSize
   page.value = 1
-}
-
-const compareMerchant = (a, b) => {
-  let av
-  let bv
-  if (sortBy.value === 'name') {
-    av = a.name || ''
-    bv = b.name || ''
-    return sortOrder.value === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-  }
-  if (sortBy.value === 'risk_score') {
-    av = riskLevel(a).score
-    bv = riskLevel(b).score
-  } else if (sortBy.value === 'open_follow_up_count') {
-    av = Number(a.open_follow_up_count || 0)
-    bv = Number(b.open_follow_up_count || 0)
-  } else if (sortBy.value === 'trade_amount') {
-    av = Number(a.trade_amount || 0)
-    bv = Number(b.trade_amount || 0)
-  } else if (sortBy.value === 'subscription_expire_at') {
-    av = dateValue(a.subscription_expire_at || a.subscription_expired_at)
-    bv = dateValue(b.subscription_expire_at || b.subscription_expired_at)
-  } else if (sortBy.value === 'id') {
-    av = Number(a.id || 0)
-    bv = Number(b.id || 0)
-  } else {
-    av = dateValue(a.created_at)
-    bv = dateValue(b.created_at)
-  }
-  return sortOrder.value === 'asc' ? av - bv : bv - av
-}
-
-const matchRiskFilter = (row, value) => {
-  if (value === 'high') return riskLevel(row).score >= 3
-  if (value === 'watch') return riskLevel(row).score === 2
-  if (value === 'follow_up') return Number(row.open_follow_up_count || 0) > 0
-  if (value === 'settlement') return Number(row.pending_settlement_count || row.unsettled_order_count || 0) > 0
-  if (value === 'payment_pending') return row.payment_config_audit === 'pending'
-  if (value === 'payment_missing_qr') return paymentMissingQr(row)
-  return true
+  load()
 }
 
 const changeStatus = async (row, nextStatus) => {

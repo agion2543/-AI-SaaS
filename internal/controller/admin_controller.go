@@ -172,12 +172,32 @@ func (ctl *AdminController) ExportCustomerProfiles(c *gin.Context) {
 
 func (ctl *AdminController) Merchants(c *gin.Context) {
 	page, pageSize := utils.NormalizePage(atoi(c.Query("page")), atoi(c.Query("page_size")))
-	merchants, total, err := ctl.admin.ListMerchants(page, pageSize, c.Query("keyword"))
+	filter := repository.MerchantListFilter{
+		Keyword:            c.Query("keyword"),
+		Status:             c.Query("status"),
+		Subscription:       c.Query("subscription"),
+		Risk:               c.Query("risk"),
+		ExpiringWithinDays: atoi(c.Query("expiring_within_days")),
+		SortBy:             c.Query("sort_by"),
+		SortOrder:          c.Query("sort_order"),
+	}
+	merchants, total, err := ctl.admin.ListMerchants(page, pageSize, filter)
 	if err != nil {
 		utils.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	utils.Success(c, gin.H{"list": merchants, "total": total})
+}
+
+// MerchantStats 返回商家列表页指标卡与风险快捷条的服务端统计
+// （全量商家聚合，不依赖当前页）。
+func (ctl *AdminController) MerchantStats(c *gin.Context) {
+	stats, err := ctl.admin.MerchantStats()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.Success(c, stats)
 }
 
 func (ctl *AdminController) MerchantPlans(c *gin.Context) {

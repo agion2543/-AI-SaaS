@@ -120,6 +120,7 @@ export const uploadPlatformPaymentQRCode = (formData) => http.post('/admin/payme
   headers: { 'Content-Type': 'multipart/form-data' }
 })
 export const fetchMerchants = (params) => http.get('/admin/merchants', { params })
+export const fetchMerchantStats = () => http.get('/admin/merchants/stats')
 export const fetchMerchantPlans = () => http.get('/admin/merchant-plans')
 export const createMerchantPlan = (payload) => http.post('/admin/merchant-plans', payload)
 export const updateMerchantPlan = (id, payload) => http.put(`/admin/merchant-plans/${id}`, payload)

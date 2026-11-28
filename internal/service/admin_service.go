@@ -301,28 +301,46 @@ func buildCustomerInsight(row CustomerProfileRow) (string, string) {
 	return "新顾客", "建议发送首单感谢和二次到店优惠，尽快形成复购。"
 }
 
-func (s *AdminService) ListMerchants(page, pageSize int, keyword string) ([]MerchantListRow, int64, error) {
-	merchants, total, err := s.merchants.List((page-1)*pageSize, pageSize, keyword)
-	if err != nil || len(merchants) == 0 {
-		return []MerchantListRow{}, total, err
-	}
-	ids := make([]uint, 0, len(merchants))
-	for _, merchant := range merchants {
-		ids = append(ids, merchant.ID)
-	}
+// merchantListAggregates 是 ListMerchants 一页（或统计全量）商家行的
+// 聚合数据：订单、待结算、跟进、收款配置各一次 IN 查询拼 map，
+// 与旧实现相同的四张表、同一口径；第 3 件瘦身 MerchantListRow 时
+// 只改行结构，这里不动。
+type merchantListAggregates struct {
+	orders      map[uint]merchantOrderAgg
+	settlements map[uint]int64
+	follows     map[uint]merchantFollowAgg
+	payments    map[uint]model.MerchantPaymentConfig
+}
 
-	type orderAgg struct {
-		MerchantID          uint
-		OrderCount          int64
-		TradeAmount         int64
-		RefundAmount        int64
-		PendingOrderCount   int64
-		FailedOrderCount    int64
-		ReceivedOrderCount  int64
-		ClosedOrderCount    int64
-		UnsettledOrderCount int64
+type merchantOrderAgg struct {
+	MerchantID          uint
+	OrderCount          int64
+	TradeAmount         int64
+	RefundAmount        int64
+	PendingOrderCount   int64
+	FailedOrderCount    int64
+	ReceivedOrderCount  int64
+	ClosedOrderCount    int64
+	UnsettledOrderCount int64
+}
+
+type merchantFollowAgg struct {
+	MerchantID     uint
+	OpenCount      int64
+	LastFollowUpAt *time.Time
+}
+
+func (s *AdminService) loadMerchantListAggregates(ids []uint) (*merchantListAggregates, error) {
+	agg := &merchantListAggregates{
+		orders:      make(map[uint]merchantOrderAgg),
+		settlements: make(map[uint]int64),
+		follows:     make(map[uint]merchantFollowAgg),
+		payments:    make(map[uint]model.MerchantPaymentConfig),
 	}
-	var orderAggs []orderAgg
+	if len(ids) == 0 {
+		return agg, nil
+	}
+	var orderAggs []merchantOrderAgg
 	if err := s.db.Table("orders").
 		Select(`merchant_id,
 			COUNT(*) AS order_count,
@@ -336,11 +354,10 @@ func (s *AdminService) ListMerchants(page, pageSize int, keyword string) ([]Merc
 		Where("merchant_id IN ? AND order_type = ?", ids, "store_order").
 		Group("merchant_id").
 		Scan(&orderAggs).Error; err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	orderMap := make(map[uint]orderAgg, len(orderAggs))
 	for _, item := range orderAggs {
-		orderMap[item.MerchantID] = item
+		agg.orders[item.MerchantID] = item
 	}
 
 	type settlementAgg struct {
@@ -353,59 +370,82 @@ func (s *AdminService) ListMerchants(page, pageSize int, keyword string) ([]Merc
 		Where("merchant_id IN ? AND status = ?", ids, "pending").
 		Group("merchant_id").
 		Scan(&settlementAggs).Error; err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	settlementMap := make(map[uint]int64, len(settlementAggs))
 	for _, item := range settlementAggs {
-		settlementMap[item.MerchantID] = item.Count
+		agg.settlements[item.MerchantID] = item.Count
 	}
 
-	type followAgg struct {
+	// MAX(created_at) 直接扫 *time.Time 在 MySQL 下正常，但在 SQLite
+	// 下驱动返回字符串会 Scan 失败（旧测试从未建跟进记录，故没暴露）。
+	// 先按字符串扫，再按两种驱动格式解析，口径不变。
+	type merchantFollowAggScan struct {
 		MerchantID     uint
 		OpenCount      int64
-		LastFollowUpAt *time.Time
+		LastFollowUpAt string
 	}
-	var followAggs []followAgg
+	var followScans []merchantFollowAggScan
 	if err := s.db.Table("merchant_follow_ups").
 		Select("merchant_id, SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count, MAX(created_at) AS last_follow_up_at").
 		Where("merchant_id IN ?", ids).
 		Group("merchant_id").
-		Scan(&followAggs).Error; err != nil {
-		return nil, 0, err
+		Scan(&followScans).Error; err != nil {
+		return nil, err
 	}
-	followMap := make(map[uint]followAgg, len(followAggs))
-	for _, item := range followAggs {
-		followMap[item.MerchantID] = item
+	for _, item := range followScans {
+		row := merchantFollowAgg{MerchantID: item.MerchantID, OpenCount: item.OpenCount}
+		if strings.TrimSpace(item.LastFollowUpAt) != "" {
+			parsed, parseErr := parseMerchantFollowUpTime(item.LastFollowUpAt)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			row.LastFollowUpAt = &parsed
+		}
+		agg.follows[item.MerchantID] = row
 	}
 
 	var paymentConfigs []model.MerchantPaymentConfig
 	if err := s.db.Where("merchant_id IN ?", ids).Find(&paymentConfigs).Error; err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	paymentMap := make(map[uint]model.MerchantPaymentConfig, len(paymentConfigs))
 	for _, item := range paymentConfigs {
-		paymentMap[item.MerchantID] = item
+		agg.payments[item.MerchantID] = item
 	}
+	return agg, nil
+}
 
+// parseMerchantFollowUpTime 解析 MAX(created_at) 的扫描值：MySQL 驱动
+// 返回 time.Time（database/sql 转字符串后为 RFC3339Nano），SQLite
+// 返回 "2006-01-02 15:04:05" 文本（含小数秒时同理）。
+func parseMerchantFollowUpTime(value string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05-07:00", "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("parse last follow-up time %q", value)
+}
+
+func merchantListRowsFromAggregates(merchants []model.Merchant, agg *merchantListAggregates) []MerchantListRow {
 	rows := make([]MerchantListRow, 0, len(merchants))
 	for _, merchant := range merchants {
 		row := MerchantListRow{Merchant: merchant}
-		if agg, ok := orderMap[merchant.ID]; ok {
-			row.OrderCount = agg.OrderCount
-			row.TradeAmount = agg.TradeAmount
-			row.RefundAmount = agg.RefundAmount
-			row.PendingOrderCount = agg.PendingOrderCount
-			row.FailedOrderCount = agg.FailedOrderCount
-			row.ReceivedOrderCount = agg.ReceivedOrderCount
-			row.ClosedOrderCount = agg.ClosedOrderCount
-			row.UnsettledOrderCount = agg.UnsettledOrderCount
+		if item, ok := agg.orders[merchant.ID]; ok {
+			row.OrderCount = item.OrderCount
+			row.TradeAmount = item.TradeAmount
+			row.RefundAmount = item.RefundAmount
+			row.PendingOrderCount = item.PendingOrderCount
+			row.FailedOrderCount = item.FailedOrderCount
+			row.ReceivedOrderCount = item.ReceivedOrderCount
+			row.ClosedOrderCount = item.ClosedOrderCount
+			row.UnsettledOrderCount = item.UnsettledOrderCount
 		}
-		row.PendingSettlementCount = settlementMap[merchant.ID]
-		if agg, ok := followMap[merchant.ID]; ok {
-			row.OpenFollowUpCount = agg.OpenCount
-			row.LastFollowUpAt = agg.LastFollowUpAt
+		row.PendingSettlementCount = agg.settlements[merchant.ID]
+		if item, ok := agg.follows[merchant.ID]; ok {
+			row.OpenFollowUpCount = item.OpenCount
+			row.LastFollowUpAt = item.LastFollowUpAt
 		}
-		if config, ok := paymentMap[merchant.ID]; ok {
+		if config, ok := agg.payments[merchant.ID]; ok {
 			row.PaymentConfigStatus = config.Status
 			row.PaymentConfigAudit = config.AuditStatus
 			row.PaymentConfigMode = config.Mode
@@ -414,7 +454,296 @@ func (s *AdminService) ListMerchants(page, pageSize int, keyword string) ([]Merc
 		}
 		rows = append(rows, row)
 	}
-	return rows, total, nil
+	return rows
+}
+
+// merchantSubscriptionValid 与前端 MerchantsView 的 subscriptionValid
+// 同口径：subscription_status=active 且当前到期日（expire_at 优先，
+// 否则 expired_at）在未来。
+func merchantSubscriptionValid(merchant model.Merchant, now time.Time) bool {
+	if merchant.SubscriptionStatus != "active" {
+		return false
+	}
+	expire := merchant.SubscriptionExpireAt
+	if expire == nil {
+		expire = merchant.SubscriptionExpiredAt
+	}
+	return expire != nil && expire.After(now)
+}
+
+// merchantRiskScore 与前端 MerchantsView 的 riskLevel 同口径（0 正常 /
+// 1 观察 / 2 需关注 / 3 高风险），供服务端风险筛查、风险排序与统计
+// 共用；前端只负责按行展示，不再本地算分过滤。
+func merchantRiskScore(merchant model.Merchant, agg *merchantListAggregates, now time.Time) int {
+	order := agg.orders[merchant.ID]
+	follow := agg.follows[merchant.ID]
+	payment, hasPayment := agg.payments[merchant.ID]
+	refundRate := float64(0)
+	if order.TradeAmount > 0 {
+		refundRate = float64(order.RefundAmount) / float64(order.TradeAmount)
+	}
+	cancelRate := float64(0)
+	if order.OrderCount > 0 {
+		cancelRate = float64(order.ClosedOrderCount) / float64(order.OrderCount)
+	}
+	paymentMissingQR := hasPayment && payment.Mode == "direct" &&
+		strings.TrimSpace(payment.AlipayQRCode) == "" && strings.TrimSpace(payment.WechatQRCode) == ""
+	if merchant.Status == "suspended" || refundRate >= 0.35 || cancelRate >= 0.5 ||
+		order.FailedOrderCount >= 3 || paymentMissingQR {
+		return 3
+	}
+	if refundRate >= 0.2 || cancelRate >= 0.3 || follow.OpenCount > 0 ||
+		order.ReceivedOrderCount > 0 || (hasPayment && payment.AuditStatus == "pending") {
+		return 2
+	}
+	if !merchantSubscriptionValid(merchant, now) ||
+		agg.settlements[merchant.ID] > 0 || order.UnsettledOrderCount > 0 {
+		return 1
+	}
+	return 0
+}
+
+func merchantMatchesRiskFilter(merchant model.Merchant, agg *merchantListAggregates, risk string, now time.Time) bool {
+	switch risk {
+	case "high":
+		return merchantRiskScore(merchant, agg, now) >= 3
+	case "watch":
+		return merchantRiskScore(merchant, agg, now) == 2
+	case "follow_up":
+		return agg.follows[merchant.ID].OpenCount > 0
+	case "settlement":
+		return agg.settlements[merchant.ID] > 0 || agg.orders[merchant.ID].UnsettledOrderCount > 0
+	case "payment_pending":
+		if payment, ok := agg.payments[merchant.ID]; ok {
+			return payment.AuditStatus == "pending"
+		}
+		return false
+	case "payment_missing_qr":
+		payment, ok := agg.payments[merchant.ID]
+		return ok && payment.Mode == "direct" &&
+			strings.TrimSpace(payment.AlipayQRCode) == "" && strings.TrimSpace(payment.WechatQRCode) == ""
+	default:
+		return true
+	}
+}
+
+// merchantListAggregateSort  reports whether sortBy needs the aggregate
+// path (risk score / trade amount / open follow-up count) instead of
+// the repository's plain-column sort.
+func merchantListAggregateSort(sortBy string) bool {
+	switch sortBy {
+	case "risk_score", "trade_amount", "open_follow_up_count":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortMerchantsByAggregate(merchants []model.Merchant, agg *merchantListAggregates, sortBy, sortOrder string, now time.Time) {
+	ascending := strings.EqualFold(sortOrder, "asc")
+	less := func(a, b model.Merchant) bool { return false }
+	switch sortBy {
+	case "name":
+		less = func(a, b model.Merchant) bool {
+			if a.Name != b.Name {
+				if ascending {
+					return a.Name < b.Name
+				}
+				return a.Name > b.Name
+			}
+			return a.ID > b.ID
+		}
+	case "created_at":
+		less = func(a, b model.Merchant) bool {
+			if !a.CreatedAt.Equal(b.CreatedAt) {
+				if ascending {
+					return a.CreatedAt.Before(b.CreatedAt)
+				}
+				return a.CreatedAt.After(b.CreatedAt)
+			}
+			return a.ID > b.ID
+		}
+	case "subscription_expire_at":
+		expireOf := func(m model.Merchant) time.Time {
+			if m.SubscriptionExpireAt != nil {
+				return *m.SubscriptionExpireAt
+			}
+			if m.SubscriptionExpiredAt != nil {
+				return *m.SubscriptionExpiredAt
+			}
+			return time.Time{}
+		}
+		less = func(a, b model.Merchant) bool {
+			av, bv := expireOf(a), expireOf(b)
+			if !av.Equal(bv) {
+				if ascending {
+					return av.Before(bv)
+				}
+				return av.After(bv)
+			}
+			return a.ID > b.ID
+		}
+	case "id":
+		less = func(a, b model.Merchant) bool {
+			if ascending {
+				return a.ID < b.ID
+			}
+			return a.ID > b.ID
+		}
+	case "risk_score":
+		less = func(a, b model.Merchant) bool {
+			av, bv := merchantRiskScore(a, agg, now), merchantRiskScore(b, agg, now)
+			if av != bv {
+				if ascending {
+					return av < bv
+				}
+				return av > bv
+			}
+			return a.ID > b.ID
+		}
+	case "trade_amount":
+		less = func(a, b model.Merchant) bool {
+			av, bv := agg.orders[a.ID].TradeAmount, agg.orders[b.ID].TradeAmount
+			if av != bv {
+				if ascending {
+					return av < bv
+				}
+				return av > bv
+			}
+			return a.ID > b.ID
+		}
+	case "open_follow_up_count":
+		less = func(a, b model.Merchant) bool {
+			av, bv := agg.follows[a.ID].OpenCount, agg.follows[b.ID].OpenCount
+			if av != bv {
+				if ascending {
+					return av < bv
+				}
+				return av > bv
+			}
+			return a.ID > b.ID
+		}
+	}
+	sort.SliceStable(merchants, func(i, j int) bool { return less(merchants[i], merchants[j]) })
+}
+
+// ListMerchants 返回一页商家行 + 筛选后总数。筛选/排序全部在服务端：
+// 关键字/状态/订阅/即将到期走仓库；风险筛查与聚合排序（risk_score /
+// trade_amount / open_follow_up_count）需聚合，先全量算分再切片——
+// 商家量级下一次聚合查询可接受，且 total 始终是筛选后计数。
+func (s *AdminService) ListMerchants(page, pageSize int, filter repository.MerchantListFilter) ([]MerchantListRow, int64, error) {
+	now := time.Now()
+	if merchantListAggregateSort(filter.SortBy) || strings.TrimSpace(filter.Risk) != "" {
+		matched, err := s.merchants.ListAllFiltered(filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		ids := make([]uint, 0, len(matched))
+		for _, merchant := range matched {
+			ids = append(ids, merchant.ID)
+		}
+		agg, err := s.loadMerchantListAggregates(ids)
+		if err != nil {
+			return nil, 0, err
+		}
+		if risk := strings.TrimSpace(filter.Risk); risk != "" {
+			kept := matched[:0]
+			for _, merchant := range matched {
+				if merchantMatchesRiskFilter(merchant, agg, risk, now) {
+					kept = append(kept, merchant)
+				}
+			}
+			matched = kept
+		}
+		sortBy := filter.SortBy
+		if sortBy == "" {
+			sortBy = "risk_score"
+		}
+		sortMerchantsByAggregate(matched, agg, sortBy, filter.SortOrder, now)
+		total := int64(len(matched))
+		start := (page - 1) * pageSize
+		if start < 0 {
+			start = 0
+		}
+		if start >= len(matched) {
+			return []MerchantListRow{}, total, nil
+		}
+		end := start + pageSize
+		if end > len(matched) {
+			end = len(matched)
+		}
+		return merchantListRowsFromAggregates(matched[start:end], agg), total, nil
+	}
+	merchants, total, err := s.merchants.ListFiltered(filter, (page-1)*pageSize, pageSize)
+	if err != nil || len(merchants) == 0 {
+		return []MerchantListRow{}, total, err
+	}
+	ids := make([]uint, 0, len(merchants))
+	for _, merchant := range merchants {
+		ids = append(ids, merchant.ID)
+	}
+	agg, err := s.loadMerchantListAggregates(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	return merchantListRowsFromAggregates(merchants, agg), total, nil
+}
+
+// MerchantStats 是商家列表页指标卡与风险快捷条的服务端统计：
+// 全部按全量商家算，不再由前端拿当前页拼凑。
+type MerchantStats struct {
+	Total                        int64 `json:"total"`
+	SubscribedCount              int64 `json:"subscribed_count"`
+	HighRiskCount                int64 `json:"high_risk_count"`
+	WatchCount                   int64 `json:"watch_count"`
+	OpenFollowUpCount            int64 `json:"open_follow_up_count"`
+	PaymentPendingCount          int64 `json:"payment_pending_count"`
+	PaymentMissingQRCount        int64 `json:"payment_missing_qr_count"`
+	PendingSettlementMerchantCount int64 `json:"pending_settlement_merchant_count"`
+}
+
+// MerchantStats 聚合全量商家：一次商家全量 + 一次聚合查询，
+// 与 ListMerchants 共用 merchantRiskScore / merchantSubscriptionValid。
+func (s *AdminService) MerchantStats() (*MerchantStats, error) {
+	now := time.Now()
+	merchants, err := s.merchants.ListAllFiltered(repository.MerchantListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint, 0, len(merchants))
+	for _, merchant := range merchants {
+		ids = append(ids, merchant.ID)
+	}
+	agg, err := s.loadMerchantListAggregates(ids)
+	if err != nil {
+		return nil, err
+	}
+	stats := &MerchantStats{Total: int64(len(merchants))}
+	for _, merchant := range merchants {
+		if merchantSubscriptionValid(merchant, now) {
+			stats.SubscribedCount++
+		}
+		switch merchantRiskScore(merchant, agg, now) {
+		case 3:
+			stats.HighRiskCount++
+		case 2:
+			stats.WatchCount++
+		}
+		stats.OpenFollowUpCount += agg.follows[merchant.ID].OpenCount
+		if payment, ok := agg.payments[merchant.ID]; ok {
+			if payment.AuditStatus == "pending" {
+				stats.PaymentPendingCount++
+			}
+			if payment.Mode == "direct" &&
+				strings.TrimSpace(payment.AlipayQRCode) == "" && strings.TrimSpace(payment.WechatQRCode) == "" {
+				stats.PaymentMissingQRCount++
+			}
+		}
+		if agg.settlements[merchant.ID] > 0 || agg.orders[merchant.ID].UnsettledOrderCount > 0 {
+			stats.PendingSettlementMerchantCount++
+		}
+	}
+	return stats, nil
 }
 
 func (s *AdminService) ListMerchantPlans() ([]model.MerchantPlan, error) {

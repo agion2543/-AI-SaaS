@@ -14,6 +14,7 @@ import (
 	"go-web-gin-health/internal/config"
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
+	"go-web-gin-health/internal/repository"
 )
 
 func newSyntheticAICostDB(t *testing.T) *gorm.DB {
@@ -995,30 +996,136 @@ func TestMerchantListKeywordSearch(t *testing.T) {
 		createSyntheticAICostMerchant(t, db, name)
 	}
 
-	rows, total, err := admin.ListMerchants(1, 10, "山风")
+	rows, total, err := admin.ListMerchants(1, 10, repository.MerchantListFilter{Keyword: "山风"})
 	if err != nil {
 		t.Fatalf("list merchants keyword 山风: %v", err)
 	}
 	if total != 2 || len(rows) != 2 {
 		t.Fatalf("keyword 山风: total=%d rows=%d, want 2", total, len(rows))
 	}
-	rows, total, err = admin.ListMerchants(1, 10, "江边")
+	rows, total, err = admin.ListMerchants(1, 10, repository.MerchantListFilter{Keyword: "江边"})
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].Name != "江边小店" {
 		t.Fatalf("keyword 江边: total=%d rows=%+v err=%v, want 1 row 江边小店", total, rows, err)
 	}
 	// % 与 _ 按字面匹配，不当通配符：搜 "%" 只命中名字里真有 % 的一家。
-	rows, total, err = admin.ListMerchants(1, 10, "%")
+	rows, total, err = admin.ListMerchants(1, 10, repository.MerchantListFilter{Keyword: "%"})
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].Name != "百分百%_店" {
 		t.Fatalf("keyword %%: total=%d rows=%+v err=%v, want 1 row 百分百%%_店", total, rows, err)
 	}
 	// 空关键字不过滤，全量计数。
-	rows, total, err = admin.ListMerchants(1, 10, "")
+	rows, total, err = admin.ListMerchants(1, 10, repository.MerchantListFilter{})
 	if err != nil || total != 4 || len(rows) != 4 {
 		t.Fatalf("empty keyword: total=%d rows=%d err=%v, want 4", total, len(rows), err)
 	}
 	// 关键字 + 分页：total 是筛选后计数。
-	rows, total, err = admin.ListMerchants(1, 1, "山风")
+	rows, total, err = admin.ListMerchants(1, 1, repository.MerchantListFilter{Keyword: "山风"})
 	if err != nil || total != 2 || len(rows) != 1 {
 		t.Fatalf("keyword 山风 page 1 size 1: total=%d rows=%d err=%v, want total 2 rows 1", total, len(rows), err)
+	}
+}
+
+// 2026-11-28 P2 第 2 件 B：商家列表服务端筛选/排序/统计下推。
+// 旧行为是前端拉 page_size=500（后端静默压成 10）再本地过滤排序，
+// 第 11 家及更老的商家搜不到、指标卡全按 10 家算；此处验证服务端
+// status/subscription/keyword（含手机号）/risk 筛选、聚合排序与统计。
+func TestMerchantListServerFiltersSortAndStats(t *testing.T) {
+	db := newSyntheticAICostDB(t)
+	if err := db.AutoMigrate(&model.Order{}, &model.MerchantSettlement{}, &model.MerchantFollowUp{}, &model.MerchantPaymentConfig{}); err != nil {
+		t.Fatalf("migrate merchant list tables: %v", err)
+	}
+	admin := NewAdminService(&config.Config{}, db)
+	now := time.Now()
+	expireAt := func(d time.Duration) *time.Time { v := now.Add(d); return &v }
+	mk := func(name, status, subStatus string, expire *time.Time, phone string) model.Merchant {
+		m := createSyntheticAICostMerchant(t, db, name)
+		if err := db.Model(&model.Merchant{}).Where("id = ?", m.ID).Updates(map[string]interface{}{
+			"status": status, "subscription_status": subStatus,
+			"subscription_expire_at": expire, "contact_phone": phone,
+		}).Error; err != nil {
+			t.Fatalf("update merchant %q: %v", name, err)
+		}
+		m.Status, m.SubscriptionStatus, m.SubscriptionExpireAt, m.ContactPhone = status, subStatus, expire, phone
+		return m
+	}
+	active := mk("filter-active", "active", "active", expireAt(30*24*time.Hour), "13800000001")
+	expired := mk("filter-expired", "active", "active", expireAt(-24*time.Hour), "13800000002")
+	suspended := mk("filter-suspended", "suspended", "inactive", nil, "13800000003")
+	plain := mk("filter-plain", "active", "inactive", nil, "13800000004")
+	expiring := mk("filter-expiring", "active", "active", expireAt(3*24*time.Hour), "13800000005")
+	paidAt := now
+	mkOrder := func(no string, merchantID uint, total int64) {
+		if err := db.Create(&model.Order{
+			OrderNo: no, MerchantID: &merchantID, OrderType: "store_order",
+			Status: "completed", TotalAmount: total, PaidAt: &paidAt,
+		}).Error; err != nil {
+			t.Fatalf("create order %q: %v", no, err)
+		}
+	}
+	mkOrder("FILTER-ORDER-1", active.ID, 10000)
+	mkOrder("FILTER-ORDER-2", expiring.ID, 5000)
+	if err := db.Create(&model.MerchantFollowUp{MerchantID: plain.ID, Status: "open", Content: "synthetic follow-up"}).Error; err != nil {
+		t.Fatalf("create follow-up: %v", err)
+	}
+	if err := db.Create(&model.MerchantPaymentConfig{MerchantID: suspended.ID, Mode: "direct", Status: "disabled", AuditStatus: "approved"}).Error; err != nil {
+		t.Fatalf("create payment config: %v", err)
+	}
+
+	list := func(filter repository.MerchantListFilter, page, size int) ([]MerchantListRow, int64) {
+		rows, total, err := admin.ListMerchants(page, size, filter)
+		if err != nil {
+			t.Fatalf("list merchants %+v: %v", filter, err)
+		}
+		return rows, total
+	}
+	names := func(rows []MerchantListRow) map[string]bool {
+		got := make(map[string]bool, len(rows))
+		for _, row := range rows {
+			got[row.Name] = true
+		}
+		return got
+	}
+
+	if _, total := list(repository.MerchantListFilter{}, 1, 10); total != 5 {
+		t.Fatalf("no filter total=%d, want 5", total)
+	}
+	if rows, total := list(repository.MerchantListFilter{Status: "suspended"}, 1, 10); total != 1 || !names(rows)["filter-suspended"] {
+		t.Fatalf("status suspended total=%d rows=%+v, want 1 suspended", total, rows)
+	}
+	if rows, total := list(repository.MerchantListFilter{Subscription: "active"}, 1, 10); total != 2 || !names(rows)["filter-active"] || !names(rows)["filter-expiring"] {
+		t.Fatalf("subscription active total=%d rows=%+v, want active+expiring", total, rows)
+	}
+	if _, total := list(repository.MerchantListFilter{Subscription: "inactive"}, 1, 10); total != 3 {
+		t.Fatalf("subscription inactive total=%d, want 3", total)
+	}
+	if rows, total := list(repository.MerchantListFilter{Subscription: "active", ExpiringWithinDays: 7}, 1, 10); total != 1 || !names(rows)["filter-expiring"] {
+		t.Fatalf("expiring within 7d total=%d rows=%+v, want 1 expiring", total, rows)
+	}
+	if rows, total := list(repository.MerchantListFilter{Keyword: "13800000001"}, 1, 10); total != 1 || !names(rows)["filter-active"] {
+		t.Fatalf("keyword phone total=%d rows=%+v, want 1 active", total, rows)
+	}
+	if rows, total := list(repository.MerchantListFilter{Risk: "high"}, 1, 10); total != 1 || !names(rows)["filter-suspended"] {
+		t.Fatalf("risk high total=%d rows=%+v, want 1 suspended", total, rows)
+	}
+	if rows, total := list(repository.MerchantListFilter{Risk: "follow_up"}, 1, 10); total != 1 || !names(rows)["filter-plain"] {
+		t.Fatalf("risk follow_up total=%d rows=%+v, want 1 plain", total, rows)
+	}
+	if rows, total := list(repository.MerchantListFilter{SortBy: "trade_amount", SortOrder: "desc"}, 1, 10); total != 5 || rows[0].Name != "filter-active" || rows[0].TradeAmount != 10000 || rows[1].Name != "filter-expiring" || rows[1].TradeAmount != 5000 {
+		t.Fatalf("trade_amount desc total=%d first=%+v second=%+v, want active 10000 then expiring 5000", total, rows[0], rows[1])
+	}
+	if rows, _ := list(repository.MerchantListFilter{SortBy: "trade_amount", SortOrder: "desc"}, 2, 1); len(rows) != 1 || rows[0].Name != "filter-expiring" {
+		t.Fatalf("trade_amount desc page 2 size 1 rows=%+v, want expiring", rows)
+	}
+	if rows, _ := list(repository.MerchantListFilter{SortBy: "risk_score", SortOrder: "desc"}, 1, 2); len(rows) != 2 || rows[0].Name != "filter-suspended" || rows[1].Name != "filter-plain" {
+		t.Fatalf("risk_score desc page 1 rows=%+v, want suspended then plain", rows)
+	}
+	_ = expired
+
+	stats, err := admin.MerchantStats()
+	if err != nil {
+		t.Fatalf("merchant stats: %v", err)
+	}
+	if stats.Total != 5 || stats.SubscribedCount != 2 || stats.HighRiskCount != 1 || stats.WatchCount != 1 ||
+		stats.OpenFollowUpCount != 1 || stats.PaymentMissingQRCount != 1 || stats.PendingSettlementMerchantCount != 2 {
+		t.Fatalf("merchant stats = %+v, want total 5 subscribed 2 high 1 watch 1 follow-ups 1 missing-qr 1 settlement 2 (two paid-but-unsettled orders)", stats)
 	}
 }
