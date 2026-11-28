@@ -346,6 +346,7 @@ import DataPanel from '../../components/design/DataPanel.vue'
 import MetricCard from '../../components/design/MetricCard.vue'
 import PageHero from '../../components/design/PageHero.vue'
 import { clearRefundIdempotency, getOrCreateRefundIdempotency } from '../../utils/refundIdempotency'
+import { refundRecordStatusLabel, refundRecordStatusType, refundSubmitMessage } from '../../utils/refundReview'
 import { useAuthStore } from '../../stores/auth'
 import { downloadBlob } from '../../utils/download'
 
@@ -611,11 +612,11 @@ const submitRefund = async () => {
   refundIdempotencyPayload.value = idempotency.fingerprint
   refundSaving.value = true
   try {
-    await refundAdminOrder(orderID, {
+    const { data } = await refundAdminOrder(orderID, {
       ...requestPayload,
       idempotency_key: refundIdempotencyKey.value
     })
-    ElMessage.success('支付宝退款已确认成功')
+    ElMessage.success(refundSubmitMessage(data))
     clearRefundIdempotency(orderID)
     refundIdempotencyKey.value = ''
     refundIdempotencyPayload.value = ''
@@ -689,8 +690,6 @@ const paymentStatusLabel = (status) => ({
   failed: '支付失败'
 }[status] || status || '-')
 const paymentStatusType = (status) => ({ success: 'success', duplicate_success: 'danger', late_success_exception: 'warning', paid_review_required: 'warning', failed: 'info' }[status] || 'info')
-const refundRecordStatusLabel = (status) => ({ success: '渠道已确认', processing: '处理中', unknown: '结果待核查', failed: '渠道明确拒绝' }[status] || status || '-')
-const refundRecordStatusType = (status) => ({ success: 'success', processing: 'warning', unknown: 'danger', failed: 'info' }[status] || 'info')
 const paymentChannelLabel = (channel) => ({
   platform_qr: '平台收款码',
   alipay: '支付宝',

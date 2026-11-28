@@ -33,6 +33,7 @@ const AdminAccessRestrictedView = () => import('../views/system/AdminAccessRestr
 const MerchantsView = () => import('../views/merchants/MerchantsView.vue')
 const GroupBuyLinksView = () => import('../views/platform/GroupBuyLinksView.vue')
 const RefundReconciliationView = () => import('../views/platform/RefundReconciliationView.vue')
+const RefundReviewView = () => import('../views/platform/RefundReviewView.vue')
 const MerchantDetailView = () => import('../views/merchants/MerchantDetailView.vue')
 const MerchantLoginView = () => import('../views/merchants/MerchantLoginView.vue')
 const MerchantDashboardView = () => import('../views/merchants/MerchantDashboardView.vue')
@@ -79,6 +80,7 @@ const routes = [
       { path: 'subscriptions', component: SubscriptionRevenueView },
       { path: 'orders', component: OrdersView },
       { path: 'refund-reconciliations', component: RefundReconciliationView },
+      { path: 'refund-reviews', component: RefundReviewView },
       { path: 'cards', component: CardsView },
       { path: 'audit-logs', component: AuditLogsView },
       { path: 'system', component: SystemView },
@@ -220,6 +222,7 @@ router.beforeEach(async (to) => {
     else if (to.path === '/admin/access') allowed = isSuperAdmin
     else if (to.path === '/admin/platform-costs') allowed = isSuperAdmin
     else if (to.path === '/admin/announcements' || to.path === '/admin/maintenance-plans') allowed = isSuperAdmin
+    else if (to.path === '/admin/refund-reviews') allowed = isSuperAdmin
     else if (to.path === '/admin/dashboard') allowed = hasAny('read_only')
     else if (to.path === '/admin/todos') allowed = hasAny('operations')
     else if (/^\/admin\/(merchants|group-buy-links|users)(\/|$)/.test(to.path)) allowed = hasAny('read_only', 'operations')

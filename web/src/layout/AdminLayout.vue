@@ -104,6 +104,7 @@ const visibleSections = computed(() => {
     if (isSuperAdmin) items.push(item('/admin/platform-costs', '平台成本核算', '确认订阅实收与成本状态'))
     if (isSuperAdmin) items.push(item('/admin/announcements', '平台公告', '发布系统更新、促销与价格变动'))
     if (isSuperAdmin) items.push(item('/admin/maintenance-plans', '维护计划', '排期维护窗口与在途订单安全'))
+    if (isSuperAdmin) items.push(item('/admin/refund-reviews', '退款复核', '超阈值退款通过 / 拒绝与阈值'))
     if (isSuperAdmin) items.push(item('/admin/access', '账号与权限', '管理员账号、角色与权限组'))
     sections.push({ title: '系统管理', items })
   } else if (isSuperAdmin) {
