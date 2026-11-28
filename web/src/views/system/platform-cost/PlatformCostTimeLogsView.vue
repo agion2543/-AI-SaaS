@@ -8,11 +8,13 @@
     >
       <template #actions>
         <el-tag effect="light" type="warning">仅超管可见</el-tag>
-        <el-button type="primary" @click="loadTimeLogs">刷新数据</el-button>
+        <el-button type="primary" :loading="timeLogsLoading" @click="loadTimeLogs">刷新数据</el-button>
       </template>
     </PageHero>
 
-    <section class="summary-grid">
+    <el-skeleton v-if="timeLogsLoading && !timeLogList" :rows="4" animated />
+
+    <section v-else-if="timeLogList" class="summary-grid">
       <article class="summary-card">
         <div class="card-label">时间成本记录</div>
         <strong>{{ timeLogList?.rows?.length || 0 }} 笔</strong>
@@ -44,7 +46,7 @@
               title="时间成本只计经济成本，不进现金支出"
               description="金额由服务端按（小时数 × 参考小时价值）算出；参考小时价值由你自填，系统不推断真实工资。记录只追加不改不删。"
             />
-            <el-form class="expense-form" label-position="top" @submit.prevent="submitTimeLog">
+            <el-form id="time-log-form" class="expense-form" label-position="top" @submit.prevent="submitTimeLog">
               <div class="form-row two-col">
                 <el-form-item label="日期" required>
                   <el-date-picker
@@ -118,7 +120,9 @@
                 <template #default="{ row }">{{ row.module || '—' }}</template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无时间成本记录" :image-size="72" />
+            <el-empty v-else-if="!timeLogsLoading" description="暂无时间成本记录" :image-size="72">
+              <el-button type="primary" @click="scrollToId('time-log-form')">去登记时间成本</el-button>
+            </el-empty>
               </DataPanel>
   </div>
 </template>
@@ -205,6 +209,7 @@ const {
   expenseStatRowKey,
   loadExpenseStats,
   timeLogList,
+  timeLogsLoading,
   submittingTimeLog,
   timeLogForm,
   loadTimeLogs,
@@ -311,6 +316,11 @@ const {
 onMounted(() => {
   loadTimeLogs()
 })
+
+// 空状态主操作按钮：回到本页的录入表单（豆包 §3.1 / 规范 §3.5）。
+const scrollToId = (id) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped src="./platform-cost.css"></style>

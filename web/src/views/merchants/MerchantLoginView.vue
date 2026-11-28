@@ -17,14 +17,14 @@
           <el-form-item>
             <div class="code-row">
               <el-input v-model="loginForm.sms_code" maxlength="6" placeholder="请输入 6 位验证码" />
-              <el-button :disabled="loginCountdown > 0" @click="sendLoginCode">
+              <el-button :disabled="loginCountdown > 0 || sendingLoginCode" :loading="sendingLoginCode" @click="sendLoginCode">
                 {{ loginCountdown > 0 ? `${loginCountdown}s 后重发` : '发送验证码' }}
               </el-button>
             </div>
           </el-form-item>
           <div class="dev-note">开发/测试环境：验证码固定为 123456，暂未接入真实短信。</div>
         </template>
-        <el-button type="primary" class="full-button" @click="submitLogin">登录商家后台</el-button>
+        <el-button type="primary" class="full-button" :loading="loginSubmitting" @click="submitLogin">登录商家后台</el-button>
         <div class="auth-links">
           <el-button text @click="router.push('/merchant/register')">还没有账号？申请入驻</el-button>
           <el-button text @click="forgotVisible = true">忘记密码</el-button>
@@ -40,7 +40,7 @@
         <el-form-item label="短信验证码">
           <div class="code-row">
             <el-input v-model="resetForm.sms_code" maxlength="6" placeholder="开发环境可用 123456" />
-            <el-button :disabled="countdown > 0" @click="sendResetCode">
+            <el-button :disabled="countdown > 0 || sendingResetCode" :loading="sendingResetCode" @click="sendResetCode">
               {{ countdown > 0 ? `${countdown}s 后重发` : '发送验证码' }}
             </el-button>
           </div>
@@ -54,7 +54,7 @@
       </el-form>
       <template #footer>
         <el-button @click="forgotVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitResetPassword">重置密码</el-button>
+        <el-button type="primary" :loading="resetSubmitting" @click="submitResetPassword">重置密码</el-button>
       </template>
     </el-dialog>
   </div>
@@ -83,6 +83,10 @@ const authStore = useMerchantAuthStore()
 const forgotVisible = ref(false)
 const countdown = ref(0)
 const loginCountdown = ref(0)
+const loginSubmitting = ref(false)
+const sendingLoginCode = ref(false)
+const sendingResetCode = ref(false)
+const resetSubmitting = ref(false)
 const loginMode = ref('password')
 const loginModeOptions = [
   { label: '密码登录', value: 'password' },
@@ -116,6 +120,8 @@ const guideToRegister = async () => {
 }
 
 const submitLogin = async () => {
+  if (loginSubmitting.value) return
+  loginSubmitting.value = true
   try {
     const payload =
       loginMode.value === 'code'
@@ -132,6 +138,8 @@ const submitLogin = async () => {
     } else {
       ElMessage.error(message)
     }
+  } finally {
+    loginSubmitting.value = false
   }
 }
 
@@ -148,6 +156,8 @@ const startCountdown = (key, target) => {
 }
 
 const sendLoginCode = async () => {
+  if (sendingLoginCode.value || loginCountdown.value > 0) return
+  sendingLoginCode.value = true
   try {
     await sendMerchantLoginCode({ phone: loginForm.phone })
     ElMessage.success('验证码已发送，开发/测试环境可直接使用 123456')
@@ -159,20 +169,28 @@ const sendLoginCode = async () => {
     } else {
       ElMessage.error(message)
     }
+  } finally {
+    sendingLoginCode.value = false
   }
 }
 
 const sendResetCode = async () => {
+  if (sendingResetCode.value || countdown.value > 0) return
+  sendingResetCode.value = true
   try {
     await sendMerchantPasswordResetCode({ phone: resetForm.phone })
     ElMessage.success('验证码已发送，开发环境可直接使用 123456')
     startCountdown('reset', countdown)
   } catch (error) {
     ElMessage.error(error.response?.data?.message || '验证码发送失败')
+  } finally {
+    sendingResetCode.value = false
   }
 }
 
 const submitResetPassword = async () => {
+  if (resetSubmitting.value) return
+  resetSubmitting.value = true
   try {
     await resetMerchantPassword(resetForm)
     ElMessage.success('密码已重置，请使用新密码登录')
@@ -180,6 +198,8 @@ const submitResetPassword = async () => {
     loginForm.phone = resetForm.phone
   } catch (error) {
     ElMessage.error(error.response?.data?.message || '重置密码失败')
+  } finally {
+    resetSubmitting.value = false
   }
 }
 

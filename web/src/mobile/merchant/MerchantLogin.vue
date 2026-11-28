@@ -58,7 +58,7 @@
             ]"
           >
             <template #button>
-              <van-button size="small" type="primary" :disabled="loginCountdown > 0" @click.prevent="sendLoginCode">
+              <van-button size="small" type="primary" :disabled="loginCountdown > 0 || sendingLoginCode" :loading="sendingLoginCode" @click.prevent="sendLoginCode">
                 {{ loginCodeText }}
               </van-button>
             </template>
@@ -151,7 +151,7 @@
               ]"
             >
               <template #button>
-                <van-button size="small" type="primary" :disabled="resetCountdown > 0" @click.prevent="sendResetCode">
+                <van-button size="small" type="primary" :disabled="resetCountdown > 0 || sendingResetCode" :loading="sendingResetCode" @click.prevent="sendResetCode">
                   {{ resetCodeText }}
                 </van-button>
               </template>
@@ -221,6 +221,7 @@ const form = ref({
 })
 
 const loginCountdown = ref(0)
+const sendingLoginCode = ref(false)
 let loginTimer = null
 const loginCodeText = computed(() => {
   if (loginCountdown.value > 0) {
@@ -232,6 +233,7 @@ const loginCodeText = computed(() => {
 const forgotVisible = ref(false)
 const resetLoading = ref(false)
 const resetCountdown = ref(0)
+const sendingResetCode = ref(false)
 let resetTimer = null
 const resetForm = ref({
   phone: '',
@@ -272,11 +274,13 @@ async function guideToRegister() {
 }
 
 async function sendLoginCode() {
+  if (sendingLoginCode.value || loginCountdown.value > 0) return
   const phone = form.value.phone
   if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
     showToast('请先输入正确的11位手机号')
     return
   }
+  sendingLoginCode.value = true
   try {
     await sendMerchantLoginCode({ phone })
     showSuccessToast('验证码已发送（开发模式填 123456）')
@@ -288,10 +292,13 @@ async function sendLoginCode() {
     } else {
       showFailToast(errMsg)
     }
+  } finally {
+    sendingLoginCode.value = false
   }
 }
 
 async function onLogin() {
+  if (loginLoading.value) return
   loginLoading.value = true
   try {
     const payload = loginMode.value === 'code'
@@ -331,21 +338,26 @@ function openForgotPopup() {
 }
 
 async function sendResetCode() {
+  if (sendingResetCode.value || resetCountdown.value > 0) return
   const phone = resetForm.value.phone
   if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
     showToast('请先输入正确的11位手机号')
     return
   }
+  sendingResetCode.value = true
   try {
     await sendMerchantPasswordResetCode({ phone })
     showSuccessToast('验证码已发送（开发模式填 123456）')
     startCountdown(resetCountdown, (timer) => { resetTimer = timer })
   } catch (e) {
     showFailToast(e.response?.data?.message || '发送失败')
+  } finally {
+    sendingResetCode.value = false
   }
 }
 
 async function onResetPassword() {
+  if (resetLoading.value) return
   resetLoading.value = true
   try {
     await resetMerchantPassword(resetForm.value)

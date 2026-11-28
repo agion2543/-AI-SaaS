@@ -11,14 +11,14 @@
         <el-form-item>
           <el-input v-model="form.password" type="password" :placeholder="text.password" show-password />
         </el-form-item>
-        <el-button type="primary" size="large" style="width: 100%" @click="submit">{{ text.login }}</el-button>
+        <el-button type="primary" size="large" style="width: 100%" :loading="submitting" @click="submit">{{ text.login }}</el-button>
       </el-form>
     </div>
   </div>
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { adminLogin } from '../../api/modules'
@@ -36,12 +36,19 @@ const text = {
 
 const router = useRouter()
 const store = useAuthStore()
+const submitting = ref(false)
 const form = reactive({
   username: 'admin',
   password: ''
 })
 
 const submit = async () => {
+  if (submitting.value) return
+  if (!form.username.trim() || !form.password) {
+    ElMessage.warning('请输入管理员账号和登录密码')
+    return
+  }
+  submitting.value = true
   try {
     const res = await adminLogin(form)
     store.setAuth(res.data)
@@ -49,6 +56,8 @@ const submit = async () => {
     router.push('/admin/dashboard')
   } catch (error) {
     ElMessage.error(error.response?.data?.message || text.failed)
+  } finally {
+    submitting.value = false
   }
 }
 </script>

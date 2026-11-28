@@ -38,7 +38,7 @@
       eyebrow="AI USAGE"
     >
 
-            <div class="period-toolbar">
+            <div id="ai-usage-period" class="period-toolbar">
               <el-date-picker
                 v-model="aiDateRange"
                 type="daterange"
@@ -92,7 +92,9 @@
                   <template #default="{ row }">{{ money(row.estimated_cost_cents) }}</template>
                 </el-table-column>
               </el-table>
-              <el-empty v-if="!aiStatsRows.length" description="本期暂无 AI 调用记录；这不代表成本为零" :image-size="72" />
+              <el-empty v-if="!aiStatsRows.length" description="本期暂无 AI 调用记录；这不代表成本为零" :image-size="72">
+                <el-button type="primary" @click="scrollToId('ai-usage-period')">调整统计期间</el-button>
+              </el-empty>
               <div class="table-footnote">2026-11-28 前的调用无门店归属，记为“未指定门店”，不虚构归属。{{ aiStats.period_start }} 至 {{ aiStats.period_end }}。</div>
             </template>
               </DataPanel>
@@ -107,7 +109,7 @@
               <strong>调价请新增一行</strong>
               <span>同一模型 + 供应商 + 生效时间重复提交会原地更新单价；历史调用的估算成本以写入时价冻结，改价不影响已记成本。</span>
             </div>
-            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitModelPrice">
+            <el-form id="model-price-form" class="ai-inline-form" label-position="top" @submit.prevent="submitModelPrice">
               <div class="form-row ai-price-form-row">
                 <el-form-item label="模型" required>
                   <el-input v-model="priceForm.model" maxlength="120" placeholder="例如 gpt-4o-mini" />
@@ -169,11 +171,22 @@
               </el-table-column>
               <el-table-column label="操作" min-width="110" align="center">
                 <template #default="{ row }">
-                  <el-button type="primary" link @click="toggleModelPrice(row)">{{ row.is_active ? '停用' : '启用' }}</el-button>
+                  <el-popconfirm
+                    :title="row.is_active ? `停用 ${row.model}（${row.provider || '未指定供应商'}）${localDateTimeString(new Date(row.effective_from))} 生效的价格？停用后新调用不再按该价估算。` : `重新启用 ${row.model} 的该条价格？`"
+                    :confirm-button-text="row.is_active ? '确认停用' : '确认启用'"
+                    cancel-button-text="取消"
+                    @confirm="toggleModelPrice(row)"
+                  >
+                    <template #reference>
+                      <el-button type="primary" link>{{ row.is_active ? '停用' : '启用' }}</el-button>
+                    </template>
+                  </el-popconfirm>
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无模型价格；无生效价的调用按记录上的估算成本回落" :image-size="72" />
+            <el-empty v-else-if="!modelPricesLoading" description="暂无模型价格；无生效价的调用按记录上的估算成本回落" :image-size="72">
+              <el-button type="primary" @click="scrollToId('model-price-form')">去添加模型价格</el-button>
+            </el-empty>
               </DataPanel>
 
     <DataPanel
@@ -210,7 +223,7 @@
                 <span v-if="reconciliation.unpriced_fallback_estimated_cost_cents">估算成本中 {{ money(reconciliation.unpriced_fallback_estimated_cost_cents) }} 无生效价，回落到调用记录上的估算成本。</span>
               </div>
             </template>
-            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitVendorBill">
+            <el-form id="vendor-bill-form" class="ai-inline-form" label-position="top" @submit.prevent="submitVendorBill">
               <div class="form-row ai-bill-form-row">
                 <el-form-item label="供应商" required>
                   <el-input v-model="billForm.vendor" maxlength="120" placeholder="例如 OpenAI / DeepSeek" />
@@ -254,7 +267,9 @@
                 <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="本期暂无录入的供应商实际账单；无账单不代表实际成本为零" :image-size="72" />
+            <el-empty v-else-if="!reconciliationLoading" description="本期暂无录入的供应商实际账单；无账单不代表实际成本为零" :image-size="72">
+              <el-button type="primary" @click="scrollToId('vendor-bill-form')">去录入供应商账单</el-button>
+            </el-empty>
               </DataPanel>
   </div>
 </template>
@@ -449,6 +464,11 @@ onMounted(() => {
   loadModelPrices()
   loadVendorBills()
 })
+
+// 空状态主操作按钮：回到本页的录入表单或统计期间（豆包 §3.1 / 规范 §3.5）。
+const scrollToId = (id) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped src="./platform-cost.css"></style>

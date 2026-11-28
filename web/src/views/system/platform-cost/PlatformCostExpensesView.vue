@@ -65,13 +65,13 @@
           :closable="false"
           :title="selectedPeriod.profit_status_note || '暂无已录入成本，利润暂不可算。'"
         />
-<div class="work-grid">
+<div class="work-grid" id="expense-records">
         <DataPanel
           title="登记已发生的平台费用"
           description="只录已经发生、可核验的支出；金额以分保存，固定币种为 CNY。"
           eyebrow="ACTUAL EXPENSE ENTRY"
         >
-          <el-form class="expense-form" label-position="top" @submit.prevent="submitExpense">
+          <el-form id="expense-entry-form" class="expense-form" label-position="top" @submit.prevent="submitExpense">
             <div class="form-row two-col">
               <el-form-item label="费用类别" required>
                 <el-select v-model="expenseForm.category" class="full-width" placeholder="选择费用类别">
@@ -191,7 +191,9 @@
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-else description="本期暂无已录入成本；这不代表实际成本为零" :image-size="72" />
+          <el-empty v-else description="本期暂无已录入成本；这不代表实际成本为零" :image-size="72">
+            <el-button type="primary" @click="scrollToId('expense-entry-form')">去登记费用</el-button>
+          </el-empty>
           <div v-if="selectedPeriod.expense_rows_truncated" class="table-footnote">本期记录超过 500 笔，表格只显示最近的 500 条；汇总仍统计完整期间。</div>
         </DataPanel>
       </div>
@@ -211,7 +213,9 @@
           </el-table-column>
           <el-table-column prop="reason" label="冲正原因" min-width="220" show-overflow-tooltip />
         </el-table>
-        <el-empty v-else description="本期暂无冲正记录" :image-size="72" />
+        <el-empty v-else description="本期暂无冲正记录；费用未被冲正时这里为空" :image-size="72">
+          <el-button type="primary" @click="scrollToId('expense-records')">查看已登记费用</el-button>
+        </el-empty>
         <div v-if="selectedPeriod.expense_reversal_rows_truncated" class="table-footnote">本期冲正超过 500 笔，表格只显示最近的 500 条；汇总仍统计完整期间。</div>
         <div class="reversal-period-note">冲正只在其登记的发生期间体现抵减，不回溯重算原费用期间。</div>
       </DataPanel>
@@ -246,7 +250,9 @@
             <template #default="{ row }">{{ money(row.total_cents) }}</template>
           </el-table-column>
         </el-table>
-        <el-empty v-else description="所选期间暂无已登记费用" :image-size="72" />
+        <el-empty v-else-if="!expenseStatsLoading" description="所选期间暂无已登记费用" :image-size="72">
+          <el-button type="primary" @click="scrollToId('expense-entry-form')">去登记费用</el-button>
+        </el-empty>
         <div v-if="expenseStats?.reversal_cents_by_month && Object.keys(expenseStats.reversal_cents_by_month).length" class="table-footnote">
           当月冲正（按冲正日期归属）：
           <span v-for="(amount, month) in expenseStats.reversal_cents_by_month" :key="month">{{ month }} -{{ money(amount) }}；</span>
@@ -525,6 +531,11 @@ onMounted(() => {
   loadOverview()
   loadExpenseStats()
 })
+
+// 空状态主操作按钮：回到本页的录入表单（豆包 §3.1 / 规范 §3.5）。
+const scrollToId = (id) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped src="./platform-cost.css"></style>

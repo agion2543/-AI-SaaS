@@ -147,6 +147,7 @@ export function usePlatformCost() {
   const submittingBill = ref(false)
   const billForm = ref({ vendor: '', period: [localDateString(new Date(today.getFullYear(), today.getMonth(), 1)), todayString], amountYuan: null, note: '' })
   const aiBudgets = ref([])
+  const aiBudgetsLoading = ref(false)
   // 下拉框不再一次性拉商家全量（后端会把 page_size 压成 10，旧做法只剩最新 10 家）：
   // 预算表/预警表的名字由后端随行返回；两个下拉框改为远程搜索，按关键字取。
   const budgetMerchantOptions = ref([])
@@ -167,6 +168,7 @@ export function usePlatformCost() {
   const alertsTotal = ref(0)
   const alertFilter = ref({ merchantId: '', threshold: '', periodType: '' })
   const emergencySwitch = ref(null)
+  const emergencyLoading = ref(false)
   const submittingEmergency = ref(false)
   const emergencyDialogVisible = ref(false)
   const emergencyTargetDisabled = ref(false)
@@ -256,6 +258,7 @@ export function usePlatformCost() {
   }
 
   const submitExpense = async () => {
+    if (submittingExpense.value) return
     if (!expenseForm.value.category || !expenseForm.value.costType || !expenseForm.value.expenseDate || !expenseForm.value.memo.trim()) {
       ElMessage.warning('请补全费用类别、固定/变动、发生日期和简短备注')
       return
@@ -328,6 +331,7 @@ export function usePlatformCost() {
   }
 
   const timeLogList = ref(null)
+  const timeLogsLoading = ref(false)
   const submittingTimeLog = ref(false)
   const timeLogForm = ref({
     logDate: todayString,
@@ -339,15 +343,19 @@ export function usePlatformCost() {
   })
 
   const loadTimeLogs = async () => {
+    timeLogsLoading.value = true
     try {
       const response = await fetchAdminPlatformTimeLogs({ limit: 50 })
       timeLogList.value = response?.data || null
     } catch (err) {
       ElMessage.error(err?.response?.data?.message || '加载时间成本失败')
+    } finally {
+      timeLogsLoading.value = false
     }
   }
 
   const submitTimeLog = async () => {
+    if (submittingTimeLog.value) return
     if (!timeLogForm.value.logDate || !timeLogForm.value.workType || !timeLogForm.value.content.trim()) {
       ElMessage.warning('请补全日期、工作类型和内容')
       return
@@ -384,6 +392,7 @@ export function usePlatformCost() {
   }
 
   const incomeList = ref(null)
+  const incomeLoading = ref(false)
   const submittingIncome = ref(false)
   const incomeForm = ref({
     incomeType: '',
@@ -401,15 +410,19 @@ export function usePlatformCost() {
   const isSubscriptionIncomeType = (type) => type === 'subscription_basic' || type === 'subscription_premium'
 
   const loadIncomeRecords = async () => {
+    incomeLoading.value = true
     try {
       const response = await fetchAdminPlatformIncomeRecords({ limit: 50 })
       incomeList.value = response?.data || null
     } catch (err) {
       ElMessage.error(err?.response?.data?.message || '加载收入台账失败')
+    } finally {
+      incomeLoading.value = false
     }
   }
 
   const submitIncome = async () => {
+    if (submittingIncome.value) return
     if (!incomeForm.value.incomeType || !incomeForm.value.occurredDate) {
       ElMessage.warning('请补全收入类型与发生日期')
       return
@@ -477,6 +490,7 @@ export function usePlatformCost() {
   }
 
   const submitIncomeUpdate = async () => {
+    if (submittingIncomeUpdate.value) return
     const record = incomeDialogRecord.value
     if (!record || !incomeDialog.value.targetStatus) return
     const payload = { status: incomeDialog.value.targetStatus }
@@ -578,6 +592,7 @@ export function usePlatformCost() {
   }
 
   const submitReversal = async () => {
+    if (submittingReversal.value) return
     if (!selectedExpense.value || !reversalForm.value.reversalDate || !reversalForm.value.reason.trim()) {
       ElMessage.warning('请补全冲正金额、发生日期和原因')
       return
@@ -645,6 +660,7 @@ export function usePlatformCost() {
   }
 
   const submitModelPrice = async () => {
+    if (submittingPrice.value) return
     const inputCents = yuanToCents(priceForm.value.inputPriceYuan)
     const outputCents = yuanToCents(priceForm.value.outputPriceYuan)
     const cachedCents = yuanToCents(priceForm.value.cachedPriceYuan)
@@ -679,15 +695,7 @@ export function usePlatformCost() {
   }
 
   const toggleModelPrice = async (row) => {
-    try {
-      await ElMessageBox.confirm(
-        row.is_active ? `停用 ${row.model}（${row.provider || '未指定供应商'}）${localDateTimeString(new Date(row.effective_from))} 生效的价格？停用后新调用不再按该价估算。` : `重新启用 ${row.model} 的该条价格？`,
-        row.is_active ? '确认停用模型价格' : '确认启用模型价格',
-        { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
-      )
-    } catch {
-      return
-    }
+    // 小确认走气泡确认（豆包 §1.4）：停用/启用只是单价状态切换，不用 Modal。
     try {
       await saveAdminAIModelPrice({
         model: row.model,
@@ -729,6 +737,7 @@ export function usePlatformCost() {
   }
 
   const submitVendorBill = async () => {
+    if (submittingBill.value) return
     const amountCents = yuanToCents(billForm.value.amountYuan)
     if (!billForm.value.vendor.trim() || billForm.value.period?.length !== 2) {
       ElMessage.warning('请填写供应商与账单周期')
@@ -801,11 +810,14 @@ export function usePlatformCost() {
   }
 
   const loadBudgets = async () => {
+    aiBudgetsLoading.value = true
     try {
       const response = await fetchAdminAIBudgets()
       aiBudgets.value = response?.data || []
     } catch (err) {
       ElMessage.error(err?.response?.data?.message || '加载商家预算失败')
+    } finally {
+      aiBudgetsLoading.value = false
     }
   }
 
@@ -833,6 +845,7 @@ export function usePlatformCost() {
   }
 
   const submitBudget = async () => {
+    if (submittingBudget.value) return
     if (budgetForm.value.merchantId === null || budgetForm.value.merchantId === undefined || budgetForm.value.merchantId === '') {
       ElMessage.warning('请选择商家或全局默认')
       return
@@ -895,11 +908,14 @@ export function usePlatformCost() {
   }
 
   const loadEmergencySwitch = async () => {
+    emergencyLoading.value = true
     try {
       const response = await fetchAdminAIEmergencySwitch()
       emergencySwitch.value = response?.data || null
     } catch (err) {
       ElMessage.error(err?.response?.data?.message || '加载紧急关闭开关失败')
+    } finally {
+      emergencyLoading.value = false
     }
   }
 
@@ -910,6 +926,7 @@ export function usePlatformCost() {
   }
 
   const submitEmergencySwitch = async () => {
+    if (submittingEmergency.value) return
     if (emergencyTargetDisabled.value && !emergencyReason.value.trim()) {
       ElMessage.warning('关闭 AI 请填写原因，原因会随审计记录')
       return
@@ -970,6 +987,7 @@ export function usePlatformCost() {
     submittingBill,
     billForm,
     aiBudgets,
+    aiBudgetsLoading,
     budgetMerchantOptions,
     alertMerchantOptions,
     budgetMerchantSearchLoading,
@@ -985,6 +1003,7 @@ export function usePlatformCost() {
     alertsTotal,
     alertFilter,
     emergencySwitch,
+    emergencyLoading,
     submittingEmergency,
     emergencyDialogVisible,
     emergencyTargetDisabled,
@@ -1014,11 +1033,13 @@ export function usePlatformCost() {
     expenseStatRowKey,
     loadExpenseStats,
     timeLogList,
+    timeLogsLoading,
     submittingTimeLog,
     timeLogForm,
     loadTimeLogs,
     submitTimeLog,
     incomeList,
+    incomeLoading,
     submittingIncome,
     incomeForm,
     isSubscriptionIncomeType,

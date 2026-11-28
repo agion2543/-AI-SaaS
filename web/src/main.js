@@ -29,6 +29,7 @@ import {
   ElMessageBox,
   ElOption,
   ElPagination,
+  ElPopconfirm,
   ElProgress,
   ElRadio,
   ElRadioButton,
@@ -81,6 +82,7 @@ import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/option/style/css'
 import 'element-plus/es/components/pagination/style/css'
+import 'element-plus/es/components/popconfirm/style/css'
 import 'element-plus/es/components/progress/style/css'
 import 'element-plus/es/components/radio/style/css'
 import 'element-plus/es/components/radio-button/style/css'
@@ -132,6 +134,7 @@ const elementComponents = [
   ElMenuItem,
   ElOption,
   ElPagination,
+  ElPopconfirm,
   ElProgress,
   ElRadio,
   ElRadioButton,

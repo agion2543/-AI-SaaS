@@ -8,10 +8,13 @@
     >
       <template #actions>
         <el-tag effect="light" type="warning">仅超管可见</el-tag>
-        <el-button type="primary" @click="loadBudgets(); loadBudgetAlerts(); loadEmergencySwitch()">刷新数据</el-button>
+        <el-button type="primary" :loading="aiBudgetsLoading || alertsLoading || emergencyLoading" @click="loadBudgets(); loadBudgetAlerts(); loadEmergencySwitch()">刷新数据</el-button>
       </template>
     </PageHero>
 
+    <el-skeleton v-if="!budgetsFirstLoaded" :rows="6" animated />
+
+    <template v-else>
     <el-alert
           v-if="emergencySwitch?.disabled"
           class="ai-emergency-banner"
@@ -50,7 +53,7 @@
               <strong>0 表示不限额</strong>
               <span>每日 / 月度预算任一为 0 即该周期不限额。无单独预算的商家适用全局默认行；全局默认也未设置时不限额。超额策略由后端在 AI 调用入口强制执行。</span>
             </div>
-            <el-form class="ai-inline-form" label-position="top" @submit.prevent="submitBudget">
+            <el-form id="budget-form" class="ai-inline-form" label-position="top" @submit.prevent="submitBudget">
               <div class="form-row ai-budget-form-row">
                 <el-form-item label="商家" required>
                   <el-select v-model="budgetForm.merchantId" class="full-width" placeholder="输入商家名搜索" filterable remote :remote-method="searchBudgetMerchants" :loading="budgetMerchantSearchLoading">
@@ -99,7 +102,9 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无商家预算；未设置预算的商家不限额" :image-size="72" />
+            <el-empty v-else description="暂无商家预算；未设置预算的商家不限额" :image-size="72">
+              <el-button type="primary" @click="scrollToId('budget-form')">去设置预算</el-button>
+            </el-empty>
             <div v-if="budgetStatus" class="ai-budget-status">
               <div class="ai-budget-status-head">
                 <strong>{{ budgetMerchantLabel(budgetStatus.status.merchant_id, budgetStatus.status.merchant_name) }} · 当前预算状态</strong>
@@ -169,7 +174,7 @@
                 <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无预算预警记录" :image-size="72" />
+            <el-empty v-else description="所选期间内暂无预算预警；用量未达到任何预警阈值时这里为空" :image-size="72" />
             <div v-if="alertsTotal > 0" class="pager">
               <el-pagination
                 background
@@ -216,6 +221,7 @@
               </div>
             </div>
               </DataPanel>
+    </template>
 
 <el-dialog v-model="emergencyDialogVisible" :title="emergencyTargetDisabled ? '确认紧急关闭 AI' : '确认恢复 AI 调用'" width="min(560px, 94vw)" top="3vh" :close-on-click-modal="false">
         <el-alert
@@ -256,7 +262,7 @@
 import DataPanel from '../../../components/design/DataPanel.vue'
 import PageHero from '../../../components/design/PageHero.vue'
 import { usePlatformCost } from './usePlatformCost.js'
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 
 const {
   loading,
@@ -290,6 +296,7 @@ const {
   submittingBill,
   billForm,
   aiBudgets,
+  aiBudgetsLoading,
   budgetMerchantOptions,
   alertMerchantOptions,
   budgetMerchantSearchLoading,
@@ -305,6 +312,7 @@ const {
   alertsTotal,
   alertFilter,
   emergencySwitch,
+  emergencyLoading,
   submittingEmergency,
   emergencyDialogVisible,
   emergencyTargetDisabled,
@@ -437,11 +445,19 @@ const {
   timeLogWorkTypeLabel,
 } = usePlatformCost()
 
-onMounted(() => {
-  loadBudgets()
-  loadBudgetAlerts()
-  loadEmergencySwitch()
+// 首屏加载标记（视图本地状态，不进共享 composable）。
+const budgetsFirstLoaded = ref(false)
+
+onMounted(async () => {
+  // 首屏三路数据齐了再出内容，之前只出骨架屏，避免 0 笔/暂无数据的空态误闪。
+  await Promise.all([loadBudgets(), loadBudgetAlerts(), loadEmergencySwitch()])
+  budgetsFirstLoaded.value = true
 })
+
+// 空状态主操作按钮：回到本页的预算表单（豆包 §3.1 / 规范 §3.5）。
+const scrollToId = (id) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped src="./platform-cost.css"></style>

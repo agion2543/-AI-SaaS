@@ -8,11 +8,13 @@
     >
       <template #actions>
         <el-tag effect="light" type="warning">仅超管可见</el-tag>
-        <el-button type="primary" @click="loadIncomeRecords">刷新数据</el-button>
+        <el-button type="primary" :loading="incomeLoading" @click="loadIncomeRecords">刷新数据</el-button>
       </template>
     </PageHero>
 
-    <section class="summary-grid">
+    <el-skeleton v-if="incomeLoading && !incomeList" :rows="4" animated />
+
+    <section v-else-if="incomeList" class="summary-grid">
       <article class="summary-card">
         <div class="card-label">收入记录</div>
         <strong>{{ incomeRecordCount }} 笔</strong>
@@ -44,7 +46,7 @@
               title="订单金额不等于收入"
               description="只有状态流转到已确认或已收款的记录才算作收入；已退款与已取消不计入 MRR。金额、类型与日期一旦登记不可再改，只能走状态流转。"
             />
-            <el-form class="expense-form" label-position="top" @submit.prevent="submitIncome">
+            <el-form id="income-form" class="expense-form" label-position="top" @submit.prevent="submitIncome">
               <div class="form-row two-col">
                 <el-form-item label="收入类型" required>
                   <el-select v-model="incomeForm.incomeType" class="full-width" placeholder="选择收入类型">
@@ -174,7 +176,9 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无收入记录" :image-size="72" />
+            <el-empty v-else-if="!incomeLoading" description="暂无收入记录" :image-size="72">
+              <el-button type="primary" @click="scrollToId('income-form')">去登记收入</el-button>
+            </el-empty>
             <div v-if="incomeList?.totals_by_status" class="table-footnote">
               <span v-for="(total, status) in incomeList.totals_by_status" :key="status">{{ incomeStatusLabel(status) }} {{ total.count }} 笔 · {{ money(total.amount_cents) }}；</span>
             </div>
@@ -314,6 +318,7 @@ const {
   loadTimeLogs,
   submitTimeLog,
   incomeList,
+  incomeLoading,
   submittingIncome,
   incomeForm,
   isSubscriptionIncomeType,
@@ -420,6 +425,11 @@ const incomePendingCents = computed(() => incomeTotals.value.pending_receipt?.am
 onMounted(() => {
   loadIncomeRecords()
 })
+
+// 空状态主操作按钮：回到本页的录入表单（豆包 §3.1 / 规范 §3.5）。
+const scrollToId = (id) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped src="./platform-cost.css"></style>

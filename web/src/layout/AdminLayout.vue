@@ -42,7 +42,8 @@
       </el-menu>
       <div v-if="!visibleSections.length" class="empty-permissions">
         <strong>当前账号尚未分配后台权限</strong>
-        <span>请联系超管为该账号分配最小必需权限。</span>
+        <span>请联系超管为该账号分配最小必需权限，或退出后换一个有权限的账号登录。</span>
+        <el-button type="primary" plain size="small" @click="logout">退出登录</el-button>
       </div>
     </aside>
 
