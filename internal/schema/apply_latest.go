@@ -19,7 +19,8 @@ import (
 // finance v14 (expense categories/fields, time logs, income records),
 // refund review v15 (payment-record operator, refund review columns) and
 // customer profiles v16 (materialized per-customer aggregates + backfill)
-// migrations. Existing schemas are accepted only when they are exact
+// and merchant onboarding v17 (review columns on merchants) migrations.
+// Existing schemas are accepted only when they are exact
 // managed versions; legacy and unknown databases stay fail-closed.
 func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 	type migrationStep struct {
@@ -42,6 +43,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 		{PlatformFinanceV14Version, ApplyPlatformFinanceV14},
 		{RefundReviewV15Version, ApplyRefundReviewV15},
 		{CustomerProfilesV16Version, ApplyCustomerProfilesV16},
+		{MerchantOnboardingV17Version, ApplyMerchantOnboardingV17},
 	}
 	continueFrom := func(version string, prior Result) (Result, error) {
 		current := -1
@@ -81,6 +83,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 	// source schema before it can write, so failed probes leave the database
 	// untouched; a successful probe is then advanced through every later step.
 	probes := []migrationStep{
+		{MerchantOnboardingV17Version, ApplyMerchantOnboardingV17},
 		{CustomerProfilesV16Version, ApplyCustomerProfilesV16},
 		{RefundReviewV15Version, ApplyRefundReviewV15},
 		{PlatformFinanceV14Version, ApplyPlatformFinanceV14},
