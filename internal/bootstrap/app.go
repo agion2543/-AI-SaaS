@@ -182,6 +182,12 @@ func seedInitialData(db *gorm.DB, cfg *config.Config) error {
 		if err := seedDemoGroupBuyLinks(db); err != nil {
 			return err
 		}
+		// Demo merchant dataset (P3): same explicit-development guard;
+		// never runs in production. Skips quietly when the database is
+		// only partially migrated (see demoDatasetTablesReady).
+		if err := seedDemoMerchantDataset(db); err != nil {
+			return err
+		}
 	}
 
 	return nil
