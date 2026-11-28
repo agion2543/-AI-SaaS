@@ -573,10 +573,10 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 16 || len(right) != 16 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 16/16", len(left), len(right))
+	if len(left) != 18 || len(right) != 18 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 18/18", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version, schema.PlatformFinanceV14Version, schema.RefundReviewV15Version, schema.CustomerProfilesV16Version} {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version, schema.PlatformFinanceV14Version, schema.RefundReviewV15Version, schema.CustomerProfilesV16Version, schema.MerchantOnboardingV17Version, schema.SupportTicketsV18Version} {
 		leftValue, leftOK := left[version]
 		rightValue, rightOK := right[version]
 		if !leftOK || !rightOK || leftValue != rightValue {
