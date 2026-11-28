@@ -643,7 +643,10 @@ func (ctl *MerchantController) DeleteStore(c *gin.Context) {
 	}
 
 	storeID := uint(atoi(c.Param("id")))
-	if err := ctl.merchant.DisableStore(merchantID, storeID); err != nil {
+	if err := ctl.merchant.DisableStore(merchantID, storeID, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_store_disable", TargetType: "store"},
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -760,7 +763,10 @@ func (ctl *MerchantController) DeleteStoreProduct(c *gin.Context) {
 	}
 
 	productID := uint(atoi(c.Param("id")))
-	if err := ctl.merchant.DisableStoreProduct(merchantID, productID); err != nil {
+	if err := ctl.merchant.DisableStoreProduct(merchantID, productID, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_product_disable", TargetType: "store_product"},
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -918,7 +924,10 @@ func (ctl *MerchantController) DeletePromotion(c *gin.Context) {
 		return
 	}
 	promotionID := uint(atoi(c.Param("id")))
-	if err := ctl.merchant.DeletePromotion(merchantID, promotionID); err != nil {
+	if err := ctl.merchant.DeletePromotion(merchantID, promotionID, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_promotion_delete", TargetType: "promotion"},
+	}); err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}

@@ -156,6 +156,14 @@ func auditPurposeForAction(action string) string {
 		return "调整普通管理员账号状态或角色"
 	case "merchant_order_refund":
 		return "商家退款处理"
+	case "merchant_order_payment_confirm":
+		return "商家确认收到顾客付款"
+	case "merchant_store_disable":
+		return "商家停用门店"
+	case "merchant_product_disable":
+		return "商家下架商品"
+	case "merchant_promotion_delete":
+		return "商家删除促销活动"
 	case "admin_order_refund":
 		return "平台退款处理"
 	case "merchant_order_detail_view":

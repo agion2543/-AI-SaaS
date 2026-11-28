@@ -1146,7 +1146,7 @@ func (s *OrderService) AcceptMerchantOrder(merchantID, orderID uint) error {
 	return s.orders.Save(order)
 }
 
-func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*model.Order, error) {
+func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint, audit ...AuditEvent) (*model.Order, error) {
 	var result model.Order
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var order model.Order
@@ -1190,6 +1190,20 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint) (*m
 		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "merchant_payment_confirmed", "商家已确认收到顾客付款")
 		if err := tx.Save(&order).Error; err != nil {
 			return err
+		}
+		// M1: merchant payment confirmation is a money-relevant act: record
+		// who confirmed it in the same transaction as the PaymentRecord.
+		// Amount and transaction number are recoverable from the order and
+		// its payment record; the audit row carries actor/action/target.
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "order"
+			event.Input.TargetID = order.ID
+			event.Input.TargetName = order.OrderNo
+			event.Input.MerchantID = &merchantID
+			if err := appendOptionalAuditTx(tx, []AuditEvent{event}); err != nil {
+				return err
+			}
 		}
 		if err := NewShareService(tx).ConsumeCouponForOrder(&order); err != nil {
 			return err

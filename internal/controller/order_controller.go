@@ -403,7 +403,10 @@ func (ctl *OrderController) ConfirmMerchantOrderPayment(c *gin.Context) {
 	}
 
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.ConfirmMerchantOrderPayment(merchantID, orderID)
+	order, err := ctl.service.ConfirmMerchantOrderPayment(merchantID, orderID, service.AuditEvent{
+		Actor: service.AuditActorFromContext(c),
+		Input: service.AuditRecordInput{Action: "merchant_order_payment_confirm", TargetType: "order"},
+	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return

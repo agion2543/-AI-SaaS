@@ -786,13 +786,26 @@ func (s *MerchantService) UpdateStore(merchantID, storeID uint, req dto.UpdateSt
 	return store, nil
 }
 
-func (s *MerchantService) DisableStore(merchantID, storeID uint) error {
+func (s *MerchantService) DisableStore(merchantID, storeID uint, audit ...AuditEvent) error {
 	store, err := s.stores.FindByMerchantAndID(merchantID, storeID)
 	if err != nil {
 		return errors.New("\u95e8\u5e97\u4e0d\u5b58\u5728")
 	}
 	store.Status = "inactive"
-	return s.stores.Save(store)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&store).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "store"
+			event.Input.TargetID = store.ID
+			event.Input.TargetName = store.Name
+			event.Input.MerchantID = &merchantID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 }
 
 func normalizeStoreOrderMode(value string) string {
@@ -902,13 +915,26 @@ func (s *MerchantService) SaveStoreProduct(merchantID, productID uint, req dto.S
 	return product, nil
 }
 
-func (s *MerchantService) DisableStoreProduct(merchantID, productID uint) error {
+func (s *MerchantService) DisableStoreProduct(merchantID, productID uint, audit ...AuditEvent) error {
 	product, err := s.products.FindByID(productID)
 	if err != nil || product.Store.MerchantID != merchantID {
 		return errors.New("\u5546\u54c1\u4e0d\u5b58\u5728")
 	}
 	product.Status = "inactive"
-	return s.products.Save(product)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&product).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "store_product"
+			event.Input.TargetID = product.ID
+			event.Input.TargetName = product.Name
+			event.Input.MerchantID = &merchantID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 }
 
 func (s *MerchantService) ListPromotions(merchantID uint, page, pageSize int) ([]model.Promotion, int64, error) {
@@ -1007,12 +1033,25 @@ func (s *MerchantService) DisablePromotion(merchantID, promotionID uint) error {
 	return s.promotions.Save(promotion)
 }
 
-func (s *MerchantService) DeletePromotion(merchantID, promotionID uint) error {
+func (s *MerchantService) DeletePromotion(merchantID, promotionID uint, audit ...AuditEvent) error {
 	promotion, err := s.promotions.FindByMerchantAndID(merchantID, promotionID)
 	if err != nil {
 		return errors.New("\u6d3b\u52a8\u4e0d\u5b58\u5728")
 	}
-	return s.promotions.Delete(promotion)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&promotion).Error; err != nil {
+			return err
+		}
+		if len(audit) > 0 {
+			event := audit[0]
+			event.Input.TargetType = "promotion"
+			event.Input.TargetID = promotion.ID
+			event.Input.TargetName = promotion.Title
+			event.Input.MerchantID = &merchantID
+			return appendOptionalAuditTx(tx, []AuditEvent{event})
+		}
+		return nil
+	})
 }
 
 func (s *MerchantService) GeneratePromotionDraft(merchantID uint, req dto.GeneratePromotionDraftRequest) (*model.Promotion, error) {
