@@ -39,6 +39,7 @@ export const cancelUserOrder = (orderNo) => http.post(`/user/orders/${orderNo}/c
 export const merchantRegister = (payload) => http.post('/merchant/register', payload)
 export const sendMerchantRegisterSMSCode = (payload) => http.post('/merchant/register/send-code', payload)
 export const merchantLogin = (payload) => http.post('/merchant/login', payload)
+export const sendMerchantLoginCode = (payload) => http.post('/merchant/login/send-code', payload)
 export const sendMerchantPasswordResetCode = (payload) => http.post('/merchant/password/send-code', payload)
 export const resetMerchantPassword = (payload) => http.post('/merchant/password/reset', payload)
 export const changeMerchantPassword = (payload) => http.put('/merchant/password', payload)

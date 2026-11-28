@@ -9,9 +9,21 @@
         <el-form-item>
           <el-input v-model="loginForm.phone" maxlength="11" placeholder="联系人手机号" />
         </el-form-item>
-        <el-form-item>
+        <el-segmented v-model="loginMode" :options="loginModeOptions" class="mode-switch" />
+        <el-form-item v-if="loginMode === 'password'">
           <el-input v-model="loginForm.password" type="password" show-password placeholder="登录密码" />
         </el-form-item>
+        <template v-else>
+          <el-form-item>
+            <div class="code-row">
+              <el-input v-model="loginForm.sms_code" maxlength="6" placeholder="请输入 6 位验证码" />
+              <el-button :disabled="loginCountdown > 0" @click="sendLoginCode">
+                {{ loginCountdown > 0 ? `${loginCountdown}s 后重发` : '发送验证码' }}
+              </el-button>
+            </div>
+          </el-form-item>
+          <div class="dev-note">开发/测试环境：验证码固定为 123456，暂未接入真实短信。</div>
+        </template>
         <el-button type="primary" class="full-button" @click="submitLogin">登录商家后台</el-button>
         <div class="auth-links">
           <el-button text @click="router.push('/merchant/register')">还没有账号？申请入驻</el-button>
@@ -51,13 +63,18 @@
 <script setup>
 import { onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   merchantLogin,
   resetMerchantPassword,
+  sendMerchantLoginCode,
   sendMerchantPasswordResetCode
 } from '../../api/modules'
 import { useMerchantAuthStore } from '../../stores/merchantAuth'
+
+// 与后端 merchant 登录“手机号未注册”文案保持一致，用于引导去注册。
+const UNREGISTERED_MESSAGE = '该手机号未注册，请先注册'
+const NOT_MERCHANT_MESSAGE = '商家账号不存在'
 
 const router = useRouter()
 const route = useRoute()
@@ -65,11 +82,18 @@ const authStore = useMerchantAuthStore()
 
 const forgotVisible = ref(false)
 const countdown = ref(0)
-let timer = null
+const loginCountdown = ref(0)
+const loginMode = ref('password')
+const loginModeOptions = [
+  { label: '密码登录', value: 'password' },
+  { label: '验证码登录', value: 'code' }
+]
+const timers = {}
 
 const loginForm = reactive({
   phone: '',
-  password: ''
+  password: '',
+  sms_code: ''
 })
 
 const resetForm = reactive({
@@ -79,34 +103,70 @@ const resetForm = reactive({
   confirm_password: ''
 })
 
+const guideToRegister = async () => {
+  try {
+    await ElMessageBox.confirm('该手机号尚未注册商家账号，是否前往申请入驻？', '手机号未注册', {
+      confirmButtonText: '去注册',
+      cancelButtonText: '取消'
+    })
+    router.push('/merchant/register')
+  } catch {
+    // 用户取消，不做任何事。
+  }
+}
+
 const submitLogin = async () => {
   try {
-    const res = await merchantLogin(loginForm)
+    const payload =
+      loginMode.value === 'code'
+        ? { phone: loginForm.phone, login_type: 'code', sms_code: loginForm.sms_code }
+        : { phone: loginForm.phone, login_type: 'password', password: loginForm.password }
+    const res = await merchantLogin(payload)
     authStore.setAuth(res.data)
     ElMessage.success('登录成功')
     router.push(route.query.redirect || '/merchant/dashboard')
   } catch (error) {
-    ElMessage.error(error.response?.data?.message || '登录失败')
+    const message = error.response?.data?.message || '登录失败'
+    if (message === UNREGISTERED_MESSAGE) {
+      await guideToRegister()
+    } else {
+      ElMessage.error(message)
+    }
   }
 }
 
-const startCountdown = () => {
-  countdown.value = 60
-  window.clearInterval(timer)
-  timer = window.setInterval(() => {
-    countdown.value -= 1
-    if (countdown.value <= 0) {
-      window.clearInterval(timer)
-      timer = null
+const startCountdown = (key, target) => {
+  target.value = 60
+  window.clearInterval(timers[key])
+  timers[key] = window.setInterval(() => {
+    target.value -= 1
+    if (target.value <= 0) {
+      window.clearInterval(timers[key])
+      timers[key] = null
     }
   }, 1000)
+}
+
+const sendLoginCode = async () => {
+  try {
+    await sendMerchantLoginCode({ phone: loginForm.phone })
+    ElMessage.success('验证码已发送，开发/测试环境可直接使用 123456')
+    startCountdown('login', loginCountdown)
+  } catch (error) {
+    const message = error.response?.data?.message || '验证码发送失败'
+    if (message === NOT_MERCHANT_MESSAGE) {
+      await guideToRegister()
+    } else {
+      ElMessage.error(message)
+    }
+  }
 }
 
 const sendResetCode = async () => {
   try {
     await sendMerchantPasswordResetCode({ phone: resetForm.phone })
     ElMessage.success('验证码已发送，开发环境可直接使用 123456')
-    startCountdown()
+    startCountdown('reset', countdown)
   } catch (error) {
     ElMessage.error(error.response?.data?.message || '验证码发送失败')
   }
@@ -124,7 +184,9 @@ const submitResetPassword = async () => {
 }
 
 onUnmounted(() => {
-  if (timer) window.clearInterval(timer)
+  Object.values(timers).forEach((timer) => {
+    if (timer) window.clearInterval(timer)
+  })
 })
 </script>
 
@@ -161,6 +223,18 @@ onUnmounted(() => {
   font-weight: 900;
   letter-spacing: 0.15em;
   margin-bottom: 8px;
+}
+
+.mode-switch {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.dev-note {
+  margin: -6px 0 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 .full-button {
