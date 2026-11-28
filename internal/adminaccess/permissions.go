@@ -11,6 +11,7 @@ const (
 	PermissionReadOnly            = "read_only"
 	PermissionOperations          = "operations"
 	PermissionFinance             = "finance"
+	PermissionPlatformFinance     = "platform_finance"
 	PermissionSystem              = "system_admin"
 	PermissionViewCustomerContact = "customer_contact_view"
 	PermissionExportCustomerOrder = "customer_order_export"
@@ -31,6 +32,7 @@ var permissionCatalog = []PermissionInfo{
 	{Code: PermissionReadOnly, Name: "只读查询", Description: "查看经营概览、商家、顾客、团购入口及运营资料，不执行修改操作。"},
 	{Code: PermissionOperations, Name: "运营管理", Description: "处理商家、顾客、门店、线索及团购审核等日常运营动作。"},
 	{Code: PermissionFinance, Name: "财务管理", Description: "查看和处理套餐、订阅、订单、支付、退款、结算及卡密。"},
+	{Code: PermissionPlatformFinance, Name: "平台财务（成本中心）", Description: "查看和登记平台成本、时间成本、收入台账与保本测算；仅超管持有，预留未来角色拆分，不作商家端展示。"},
 	{Code: PermissionSystem, Name: "系统管理", Description: "查看审计与安全信息，维护站点配置和 AI 策略；管理员账号与角色仍仅限超管。"},
 	{Code: PermissionViewCustomerContact, Name: "查看完整客户联系方式", Description: "按需查看客户与订单中的完整手机号、邮箱等联系方式；查看行为会写入审计。"},
 	{Code: PermissionExportCustomerOrder, Name: "导出客户/订单数据", Description: "下载客户档案或订单数据；导出行为会写入审计，完整联系方式仍需单独授权。"},
@@ -123,6 +125,19 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 	setSuper := func(entries ...string) {
 		for _, entry := range entries {
 			m[entry] = RouteAccess{SuperAdmin: true}
+		}
+	}
+
+	// setPlatformFinance maps the platform cost-centre routes. They stay
+	// super-admin gated today (the middleware denies every non-super admin
+	// before any permission is checked), but each route also carries the
+	// distinct platform_finance key — separate from the ordinary finance
+	// key used by subscription/payment routes — so a future role split can
+	// replace the super-admin gate with that key without re-mapping routes.
+	// No seven-key finance group and no role UI are built for it now.
+	setPlatformFinance := func(entries ...string) {
+		for _, entry := range entries {
+			m[entry] = RouteAccess{SuperAdmin: true, AllPermissions: []string{PermissionPlatformFinance}}
 		}
 	}
 
@@ -223,9 +238,12 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"GET /admin/access/admins",
 		"POST /admin/access/admins",
 		"PUT /admin/access/admins/:id",
+	)
+	setPlatformFinance(
 		"GET /admin/platform-costs/overview",
 		"POST /admin/platform-costs/expenses",
 		"POST /admin/platform-costs/expenses/:id/reversals",
+		"GET /admin/platform-costs/expenses/stats",
 		"GET /admin/ai-cost-control/usage-stats",
 		"GET /admin/ai-cost-control/model-prices",
 		"POST /admin/ai-cost-control/model-prices",
@@ -238,6 +256,15 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"GET /admin/ai-cost-control/budget-alerts",
 		"GET /admin/ai-cost-control/emergency-switch",
 		"PUT /admin/ai-cost-control/emergency-switch",
+		"GET /admin/platform-finance/time-logs",
+		"POST /admin/platform-finance/time-logs",
+		"GET /admin/platform-finance/income-records",
+		"POST /admin/platform-finance/income-records",
+		"PUT /admin/platform-finance/income-records/:id",
+		"GET /admin/platform-finance/mrr",
+		"GET /admin/platform-finance/breakeven",
+	)
+	setSuper(
 		"GET /admin/announcements",
 		"POST /admin/announcements",
 		"GET /admin/announcements/:id",

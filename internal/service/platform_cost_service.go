@@ -101,6 +101,12 @@ type PlatformExpenseSummaryRow struct {
 	Currency                 string                    `json:"currency"`
 	Memo                     string                    `json:"memo"`
 	CreatedBy                uint                      `json:"created_by"`
+	CostType                 string                    `json:"cost_type"`
+	Vendor                   string                    `json:"vendor"`
+	PaymentStatus            string                    `json:"payment_status"`
+	IsRecurring              bool                      `json:"is_recurring"`
+	IsCashCost               bool                      `json:"is_cash_cost"`
+	IsEconomicCost           bool                      `json:"is_economic_cost"`
 	ReversalCount            int64                     `json:"reversal_count"`
 	ReversedAmountCents      int64                     `json:"reversed_amount_cents"`
 	RemainingReversibleCents int64                     `json:"remaining_reversible_cents"`
@@ -277,6 +283,8 @@ func (s *AdminService) platformExpenseSummary(start, endExclusive time.Time) (pl
 		Select(`platform_expenses.id, platform_expenses.created_at, platform_expenses.updated_at,
 		platform_expenses.expense_date, platform_expenses.category,
 		platform_expenses.amount_cents, platform_expenses.currency, platform_expenses.memo, platform_expenses.created_by,
+		platform_expenses.cost_type, platform_expenses.vendor, platform_expenses.payment_status,
+		platform_expenses.is_recurring, platform_expenses.is_cash_cost, platform_expenses.is_economic_cost,
 		COALESCE(reversal_totals.reversal_count, 0) AS reversal_count,
 		COALESCE(reversal_totals.reversed_amount_cents, 0) AS reversed_amount_cents,
 		platform_expenses.amount_cents - COALESCE(reversal_totals.reversed_amount_cents, 0) AS remaining_reversible_cents`).
@@ -526,9 +534,45 @@ func validatePlatformExpenseRequest(request dto.CreatePlatformExpenseRequest, ac
 	switch category {
 	case model.PlatformExpenseCategoryCloudHosting, model.PlatformExpenseCategoryMessagingAPI,
 		model.PlatformExpenseCategoryLaborContractor, model.PlatformExpenseCategoryCustomerAcquisitionTravel,
-		model.PlatformExpenseCategoryEquipment, model.PlatformExpenseCategoryOther:
+		model.PlatformExpenseCategoryEquipment, model.PlatformExpenseCategoryOther,
+		model.PlatformExpenseCategoryAIServices, model.PlatformExpenseCategoryThirdPartyServices:
 	default:
 		return nil, fmt.Errorf("%w: unsupported category", ErrInvalidPlatformExpense)
+	}
+	costType := strings.TrimSpace(request.CostType)
+	switch costType {
+	case model.PlatformExpenseCostTypeFixed, model.PlatformExpenseCostTypeVariable:
+	default:
+		return nil, fmt.Errorf("%w: cost_type must be fixed or variable", ErrInvalidPlatformExpense)
+	}
+	vendor := strings.TrimSpace(request.Vendor)
+	if utf8.RuneCountInString(vendor) > 120 {
+		return nil, fmt.Errorf("%w: vendor must contain at most 120 characters", ErrInvalidPlatformExpense)
+	}
+	for _, r := range vendor {
+		if unicode.IsControl(r) || r == '<' || r == '>' {
+			return nil, fmt.Errorf("%w: vendor cannot contain control characters or HTML markup", ErrInvalidPlatformExpense)
+		}
+	}
+	paymentStatus := strings.TrimSpace(request.PaymentStatus)
+	if paymentStatus == "" {
+		paymentStatus = model.PlatformExpensePaymentStatusPaid
+	}
+	switch paymentStatus {
+	case model.PlatformExpensePaymentStatusPaid, model.PlatformExpensePaymentStatusUnpaid, model.PlatformExpensePaymentStatusPartial:
+	default:
+		return nil, fmt.Errorf("%w: unsupported payment_status", ErrInvalidPlatformExpense)
+	}
+	isCashCost := true
+	if request.IsCashCost != nil {
+		isCashCost = *request.IsCashCost
+	}
+	isEconomicCost := true
+	if request.IsEconomicCost != nil {
+		isEconomicCost = *request.IsEconomicCost
+	}
+	if !isCashCost && !isEconomicCost {
+		return nil, fmt.Errorf("%w: an expense must be a cash cost, an economic cost, or both", ErrInvalidPlatformExpense)
 	}
 	if request.AmountCents <= 0 || request.AmountCents > maxPlatformExpenseCents {
 		return nil, fmt.Errorf("%w: amount_cents must be between 1 and %d", ErrInvalidPlatformExpense, maxPlatformExpenseCents)
@@ -564,11 +608,19 @@ func validatePlatformExpenseRequest(request dto.CreatePlatformExpenseRequest, ac
 		Memo:           memo,
 		CreatedBy:      actorID,
 		IdempotencyKey: key.String(),
+		CostType:       costType,
+		Vendor:         vendor,
+		PaymentStatus:  paymentStatus,
+		IsRecurring:    request.IsRecurring,
+		IsCashCost:     isCashCost,
+		IsEconomicCost: isEconomicCost,
 	}, nil
 }
 
 func samePlatformExpensePayload(existing, candidate model.PlatformExpense) bool {
-	return existing.CreatedBy == candidate.CreatedBy && existing.Category == candidate.Category && existing.AmountCents == candidate.AmountCents && existing.Currency == candidate.Currency && existing.ExpenseDate == candidate.ExpenseDate && existing.Memo == candidate.Memo
+	return existing.CreatedBy == candidate.CreatedBy && existing.Category == candidate.Category && existing.AmountCents == candidate.AmountCents && existing.Currency == candidate.Currency && existing.ExpenseDate == candidate.ExpenseDate && existing.Memo == candidate.Memo &&
+		existing.CostType == candidate.CostType && existing.Vendor == candidate.Vendor && existing.PaymentStatus == candidate.PaymentStatus &&
+		existing.IsRecurring == candidate.IsRecurring && existing.IsCashCost == candidate.IsCashCost && existing.IsEconomicCost == candidate.IsEconomicCost
 }
 
 func normalizePlatformExpensePeriod(startDate, endDate time.Time) (time.Time, time.Time, error) {

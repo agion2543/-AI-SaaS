@@ -423,6 +423,7 @@ func assertConcurrentPartialReversalLimit(t *testing.T, db *sql.DB) {
 	original, created, err := admin.CreatePlatformExpense(dto.CreatePlatformExpenseRequest{
 		Category: "cloud_hosting", AmountCents: 10000, Currency: "CNY", ExpenseDate: date,
 		Memo: "synthetic concurrent reversal expense", IdempotencyKey: uuid.NewString(),
+		CostType: "fixed",
 	}, actor)
 	if err != nil || !created {
 		t.Fatalf("create synthetic concurrency source expense: created=%v err=%v", created, err)

@@ -109,7 +109,7 @@ func TestPlatformExpenseWriteIsSuperAdminOnlyOnBothAPIPrefixes(t *testing.T) {
 	financeToken := syntheticAdminToken(t, db, cfg, finance.ID)
 	systemToken := syntheticAdminToken(t, db, cfg, system.ID)
 	superToken := syntheticAdminToken(t, db, cfg, superAdmin.ID)
-	requestBody := `{"category":"cloud_hosting","amount_cents":1234,"currency":"CNY","expense_date":"` + time.Now().In(time.Local).Format("2006-01-02") + `","memo":"synthetic authorization test","idempotency_key":"` + uuid.NewString() + `"}`
+	requestBody := `{"category":"cloud_hosting","amount_cents":1234,"currency":"CNY","expense_date":"` + time.Now().In(time.Local).Format("2006-01-02") + `","memo":"synthetic authorization test","idempotency_key":"` + uuid.NewString() + `","cost_type":"fixed"}`
 
 	for _, path := range []string{"/api/admin/platform-costs/expenses", "/api/v1/admin/platform-costs/expenses"} {
 		t.Run(path, func(t *testing.T) {
@@ -235,6 +235,63 @@ func TestPlatformExpenseReversalIsSuperAdminOnlyOnBothAPIPrefixes(t *testing.T) 
 	}
 	if reversals != 1 || audits != 1 {
 		t.Fatalf("authorization or idempotent route replay mismatch: reversals=%d audits=%d", reversals, audits)
+	}
+}
+
+func TestPlatformFinanceRoutesAreSuperAdminOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open synthetic SQLite database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get synthetic SQL database: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.AdminRole{}, &model.AdminUser{}, &model.PlatformExpense{}, &model.PlatformTimeLog{}, &model.PlatformIncomeRecord{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("migrate synthetic platform finance authorization schema: %v", err)
+	}
+	createSyntheticReversalTable(t, db)
+
+	finance := createPlatformCostPermissionAdmin(t, db, "synthetic-finance-key-finance", "finance")
+	platformFinance := createPlatformCostPermissionAdmin(t, db, "synthetic-finance-key-platform", "platform_finance")
+	cfg := &config.Config{JWTSecret: "synthetic-platform-finance-permission-secret", FrontendURL: "http://localhost:5173", RateLimitPerMinute: 1000}
+	superAdmin := seedSyntheticSuperAdmin(t, db, 0, "synthetic-finance-super")
+	engine := gin.New()
+	Register(engine, db, cfg)
+	financeToken := syntheticAdminToken(t, db, cfg, finance.ID)
+	platformFinanceToken := syntheticAdminToken(t, db, cfg, platformFinance.ID)
+	superToken := syntheticAdminToken(t, db, cfg, superAdmin.ID)
+	paths := []string{
+		"/api/admin/platform-costs/expenses/stats?start_month=2026-11&end_month=2026-11",
+		"/api/admin/platform-finance/time-logs",
+		"/api/admin/platform-finance/income-records",
+		"/api/admin/platform-finance/mrr?month=2026-11",
+		"/api/admin/platform-finance/breakeven?month=2026-11",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			for _, test := range []struct {
+				name       string
+				token      string
+				wantStatus int
+			}{
+				{name: "finance role denied", token: financeToken, wantStatus: http.StatusForbidden},
+				{name: "platform_finance key alone denied", token: platformFinanceToken, wantStatus: http.StatusForbidden},
+				{name: "super admin allowed", token: superToken, wantStatus: http.StatusOK},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					request := httptest.NewRequest(http.MethodGet, path, nil)
+					request.Header.Set("Authorization", "Bearer "+test.token)
+					response := httptest.NewRecorder()
+					engine.ServeHTTP(response, request)
+					if response.Code != test.wantStatus {
+						t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -331,6 +331,7 @@ func validSyntheticExpenseRequest(t *testing.T) dto.CreatePlatformExpenseRequest
 		ExpenseDate:    time.Now().In(time.Local).Format("2006-01-02"),
 		Memo:           "synthetic cloud hosting bill",
 		IdempotencyKey: uuid.NewString(),
+		CostType:       model.PlatformExpenseCostTypeFixed,
 	}
 }
 
