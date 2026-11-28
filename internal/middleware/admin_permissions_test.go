@@ -185,6 +185,66 @@ func TestAdminAuthRejectsTokenWhenCurrentRoleDoesNotMatchTokenRole(t *testing.T)
 	}
 }
 
+func TestRefundReviewRoutesAreSuperAdminOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/refunds/pending-review"},
+		{http.MethodPost, "/refunds/1/review"},
+		{http.MethodGet, "/refunds/review-threshold"},
+		{http.MethodPut, "/refunds/review-threshold"},
+	}
+	for _, prefix := range []string{"/api/admin", "/api/v1/admin"} {
+		for _, route := range routes {
+			for _, test := range []struct {
+				name, role, permissions string
+				allowed                 bool
+			}{
+				{"finance admin", "admin", "finance", false},
+				{"finance plus operations admin", "admin", "read_only,operations,finance", false},
+				{"super admin", "super_admin", "", true},
+			} {
+				t.Run(prefix+route.method+route.path+"/"+test.name, func(t *testing.T) {
+					engine := gin.New()
+					fullPath := prefix + route.path
+					engine.Handle(route.method, fullPath, func(c *gin.Context) {
+						c.Set("role", test.role)
+						c.Set("admin_permissions", test.permissions)
+						c.Next()
+					}, AdminAuthorization(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+					response := httptest.NewRecorder()
+					engine.ServeHTTP(response, httptest.NewRequest(route.method, fullPath, nil))
+					want := http.StatusForbidden
+					if test.allowed {
+						want = http.StatusNoContent
+					}
+					if response.Code != want {
+						t.Fatalf("status=%d, want %d; body=%s", response.Code, want, response.Body.String())
+					}
+				})
+			}
+		}
+		// Guard: the ordinary refund list stays finance-accessible; only the
+		// four review routes were tightened.
+		t.Run(prefix+"/GET/refunds/finance admin still allowed", func(t *testing.T) {
+			engine := gin.New()
+			fullPath := prefix + "/refunds"
+			engine.GET(fullPath, func(c *gin.Context) {
+				c.Set("role", "admin")
+				c.Set("admin_permissions", "finance")
+				c.Next()
+			}, AdminAuthorization(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fullPath, nil))
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("ordinary refund list status=%d, want %d; body=%s", response.Code, http.StatusNoContent, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestAdminExportPermissionMatrix(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, prefix := range []string{"/api/admin", "/api/v1/admin"} {

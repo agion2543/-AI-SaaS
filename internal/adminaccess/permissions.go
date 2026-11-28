@@ -207,10 +207,6 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 		"POST /admin/orders/:id/review-historical-subscription",
 		"GET /admin/subscription-manual-reviews",
 		"GET /admin/refunds",
-		"GET /admin/refunds/pending-review",
-		"POST /admin/refunds/:id/review",
-		"GET /admin/refunds/review-threshold",
-		"PUT /admin/refunds/review-threshold",
 		"GET /admin/refund-reconciliations",
 		"GET /admin/refund-reconciliations/:id",
 		"POST /admin/refund-reconciliations/:id/manual-review",
@@ -220,6 +216,17 @@ func buildAdminRouteAccess() map[string]RouteAccess {
 	)
 	setAnyAndAll([]string{PermissionFinance}, []string{PermissionExportCustomerOrder},
 		"GET /admin/orders/export",
+	)
+
+	// M2 refund review is super-admin only: an ordinary admin holding the
+	// finance permission must not list pending-review refunds, decide a
+	// review, or read/change the review threshold. The review page is
+	// already super-admin gated in the UI; this closes the API side too.
+	setSuper(
+		"GET /admin/refunds/pending-review",
+		"POST /admin/refunds/:id/review",
+		"GET /admin/refunds/review-threshold",
+		"PUT /admin/refunds/review-threshold",
 	)
 
 	set(PermissionSystem,
