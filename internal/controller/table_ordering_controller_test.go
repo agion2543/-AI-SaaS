@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -40,7 +41,10 @@ func TestTableCheckoutReturnsApprovedMerchantQRCodeWithoutGatewayPayload(t *test
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	merchant := model.Merchant{Name: "合成桌位收款商家", Status: "active"}
+	// Fixture merchant is normally subscribed: table checkout is
+	// subscription-gated for new orders.
+	expiry := time.Now().Add(time.Hour)
+	merchant := model.Merchant{Name: "合成桌位收款商家", Status: "active", SubscriptionStatus: "active", SubscriptionExpireAt: &expiry}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatalf("create synthetic merchant: %v", err)
 	}

@@ -493,6 +493,12 @@ func (s *TableOrderingService) Checkout(sessionID uint, tableCode string, req dt
 }
 
 func (s *TableOrderingService) createTableOrderInTransaction(tx *gorm.DB, store model.Store, req dto.CreateCustomerOrderRequest, session model.TableSession) (*model.Order, error) {
+	// 订阅门控（H1）：桌位结算建单属于新单，过期/暂停/未开通订阅的商家不得
+	// 再结算；本桌已有结算订单的分支在 Checkout 上层直接返回，不走这里，
+	// 在途订单不受影响。
+	if err := requireMerchantAcceptsNewStoreOrders(store.Merchant, time.Now()); err != nil {
+		return nil, err
+	}
 	if req.CustomerPhone != "" && !isValidMainlandPhone(normalizePhone(req.CustomerPhone)) {
 		return nil, errors.New("customer phone must be 11 digits")
 	}

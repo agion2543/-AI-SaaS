@@ -1150,6 +1150,11 @@ func (s *MerchantService) CreateCustomerLead(storeID uint, req dto.CreateCustome
 	if store.Status != "active" || store.Merchant.Status != "active" {
 		return nil, errors.New("\u5f53\u524d\u95e8\u5e97\u6682\u4e0d\u53ef\u63d0\u4ea4\u7ebf\u7d22")
 	}
+	// 订阅门控（H1）：线索是付费 CRM 价值，过期/暂停/未开通订阅的商家不
+	// 得再收新线索。
+	if err := requireMerchantAcceptsNewStoreOrders(store.Merchant, time.Now()); err != nil {
+		return nil, errors.New("\u5f53\u524d\u95e8\u5e97\u6682\u4e0d\u53ef\u63d0\u4ea4\u7ebf\u7d22")
+	}
 
 	lead := &model.CustomerLead{
 		MerchantID:    store.MerchantID,

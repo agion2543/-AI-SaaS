@@ -187,6 +187,12 @@ func (s *OrderService) CreateCustomerStoreOrder(req dto.CreateCustomerOrderReque
 	if store.Status != "active" || !store.IsOpen || store.Merchant.Status != "active" {
 		return nil, errors.New("store is unavailable")
 	}
+	// 订阅门控：过期/暂停/未开通订阅的商家不得接新单（H1）。只拦新下单，
+	// 在途订单的付款、确认与退款不受影响。试用期商家是 active + 未到期，
+	// 正常通过本门。
+	if err := requireMerchantAcceptsNewStoreOrders(store.Merchant, time.Now()); err != nil {
+		return nil, err
+	}
 	// 维护进行中时拦截新下单（在途订单/支付/退款不受影响，继续完成）。
 	if blocked, plan, err := MaintenanceBlocksModule(s.db, MaintenanceModuleOrdering); err != nil {
 		return nil, err
@@ -489,6 +495,11 @@ func (s *OrderService) appendCustomerStoreOrderItemsLocked(orderNo, accessToken 
 	}
 	if store.Status != "active" || !store.IsOpen || store.Merchant.Status != "active" {
 		return nil, errors.New("store is unavailable")
+	}
+	// 订阅门控（H1）：追加菜品属于新增消费，过期/暂停/未开通订阅的商家不得
+	// 再追加；在途订单的付款与确认不受影响。
+	if err := requireMerchantAcceptsNewStoreOrders(store.Merchant, time.Now()); err != nil {
+		return nil, err
 	}
 
 	orderItems, err := aggregateCustomerOrderItems(req.Items)

@@ -65,7 +65,11 @@ func newOrderBoundaryTestDB(t *testing.T) *gorm.DB {
 
 func createSyntheticStoreOrder(t *testing.T, db *gorm.DB, orderNo, status string, amount int64, paidAt *time.Time) (model.Merchant, model.Store, model.StoreProduct, model.Order) {
 	t.Helper()
-	merchant := model.Merchant{Name: "合成商户-" + orderNo, Status: "active"}
+	// Fixture merchant is a normally subscribed merchant (active + future
+	// expiry): new-order intake is subscription-gated, so an unsubscribed
+	// fixture merchant could not place orders at all.
+	expiry := time.Now().Add(time.Hour)
+	merchant := model.Merchant{Name: "合成商户-" + orderNo, Status: "active", SubscriptionStatus: "active", SubscriptionExpireAt: &expiry}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatalf("create synthetic merchant: %v", err)
 	}

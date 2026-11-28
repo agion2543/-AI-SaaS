@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"go-web-gin-health/internal/dto"
 	"go-web-gin-health/internal/model"
@@ -12,7 +13,10 @@ import (
 
 func createSyntheticPricingProduct(t *testing.T, db *gorm.DB, price int64, minimum int, tiers []model.ProductPriceTier) (model.Merchant, model.Store, model.StoreProduct) {
 	t.Helper()
-	merchant := model.Merchant{Name: "合成档位价商户", Status: "active"}
+	// Fixture merchant is a normally subscribed merchant (active + future
+	// expiry): new-order intake is subscription-gated.
+	expiry := time.Now().Add(time.Hour)
+	merchant := model.Merchant{Name: "合成档位价商户", Status: "active", SubscriptionStatus: "active", SubscriptionExpireAt: &expiry}
 	if err := db.Create(&merchant).Error; err != nil {
 		t.Fatalf("create synthetic pricing merchant: %v", err)
 	}
