@@ -271,7 +271,7 @@ func TestRefundAuditIntentFailurePreventsProviderDispatch(t *testing.T) {
 	event := newAuditTestEvent(actor, "merchant_order_refund", map[string]interface{}{"reason": "synthetic regression"})
 
 	dropFailure := failAuditInserts(t, db)
-	_, err := orderService.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "synthetic regression"}, 42, "merchant", event)
+	_, _, err := orderService.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "synthetic regression"}, 42, "merchant", event)
 	if err == nil || !strings.Contains(err.Error(), "persist refund dispatch audit intent") {
 		t.Fatalf("refund error=%v, want audit-intent failure", err)
 	}
@@ -288,7 +288,7 @@ func TestRefundAuditIntentFailurePreventsProviderDispatch(t *testing.T) {
 	}
 
 	dropFailure()
-	if _, err := orderService.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "synthetic regression"}, 42, "merchant", event); err != nil {
+	if _, _, err := orderService.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "synthetic regression"}, 42, "merchant", event); err != nil {
 		t.Fatalf("successful audited refund request: %v", err)
 	}
 	if providerCalls != 1 || countAuditLogs(t, db) != 1 {

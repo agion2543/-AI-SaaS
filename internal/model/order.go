@@ -78,6 +78,12 @@ type PaymentRecord struct {
 	Amount         int64  `json:"amount"`
 	Status         string `gorm:"size:20;default:success" json:"status"`
 	RawPayload     string `gorm:"type:text" json:"raw_payload"`
+	// OperatorID/OperatorRole record who confirmed the payment (v15). The
+	// merchant manual-confirm path fills them in the same transaction as
+	// the audit row (M1 follow-up); provider callbacks leave them 0/""
+	// because no human operator confirms those.
+	OperatorID   uint   `json:"operator_id"`
+	OperatorRole string `gorm:"size:30" json:"operator_role"`
 }
 
 type RefundRecord struct {
@@ -96,6 +102,15 @@ type RefundRecord struct {
 	OperatorID         uint    `json:"operator_id"`
 	Status             string  `gorm:"size:20;default:success;index" json:"status"`
 	RawPayload         string  `gorm:"type:text" json:"raw_payload"`
+	// ReviewerID/ReviewerRole/ReviewReason/ReviewedAt record the
+	// super-admin review of an above-threshold refund (M2, v15). A refund
+	// in status "pending_review" waits for that review; "review_rejected"
+	// means the review refused execution. Below-threshold refunds never
+	// touch these columns.
+	ReviewerID   uint       `json:"reviewer_id"`
+	ReviewerRole string     `gorm:"size:30" json:"reviewer_role"`
+	ReviewReason string     `gorm:"size:255" json:"review_reason"`
+	ReviewedAt   *time.Time `json:"reviewed_at"`
 }
 
 // OrderItem is one priced line of a store order (schema v11 table

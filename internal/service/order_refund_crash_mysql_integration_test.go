@@ -331,7 +331,7 @@ func TestMySQLRefundProviderOutcomeLostToCrashReconcilesSuccessAndFailure(t *tes
 		t.Fatalf("exact success reconciliation retry must be idempotent: detail=%+v error=%v", successRetry, err)
 	}
 	service.alipay = &recordingSyntheticRefundGateway{db: db, dispatchTable: ledgerTable}
-	replayedSuccess, err := service.RefundMerchantOrder(successMerchant.ID, successOrder.ID, successRequest, 42, "merchant")
+	replayedSuccess, _, err := service.RefundMerchantOrder(successMerchant.ID, successOrder.ID, successRequest, 42, "merchant")
 	if err != nil || replayedSuccess.RefundedAmount != successRequest.Amount {
 		t.Fatalf("exact terminal success request replay mismatch: order=%+v error=%v", replayedSuccess, err)
 	}
@@ -371,7 +371,7 @@ func TestMySQLRefundProviderOutcomeLostToCrashReconcilesSuccessAndFailure(t *tes
 	if err != nil || len(failureRetry.Audit) != 2 {
 		t.Fatalf("exact failed reconciliation retry must be idempotent: detail=%+v error=%v", failureRetry, err)
 	}
-	_, err = service.RefundMerchantOrder(failureMerchant.ID, failureOrder.ID, failureRequest, 42, "merchant")
+	_, _, err = service.RefundMerchantOrder(failureMerchant.ID, failureOrder.ID, failureRequest, 42, "merchant")
 	if err == nil || !strings.Contains(err.Error(), "definitively rejected") {
 		t.Fatalf("exact failed request replay must report terminal rejection without dispatch: %v", err)
 	}
@@ -633,7 +633,7 @@ func runRefundCrashChild(t *testing.T) {
 	orderID, merchantID, dispatchTable := refundCrashChildArguments(t)
 	service := NewOrderService(db)
 	service.alipay = &exitAfterSyntheticDispatchGateway{db: db, dispatchTable: dispatchTable}
-	_, err := service.RefundMerchantOrder(merchantID, orderID, dto.RefundOrderRequest{
+	_, _, err := service.RefundMerchantOrder(merchantID, orderID, dto.RefundOrderRequest{
 		Amount:         2400,
 		Reason:         "synthetic worker crash test",
 		IdempotencyKey: refundCrashIdempotency,
@@ -660,7 +660,7 @@ func runRefundRestartRetryChild(t *testing.T) {
 		request.Reason = os.Getenv(refundProviderReasonEnv)
 		request.IdempotencyKey = os.Getenv(refundProviderKeyEnv)
 	}
-	_, err := service.RefundMerchantOrder(merchantID, orderID, request, 42, "merchant")
+	_, _, err := service.RefundMerchantOrder(merchantID, orderID, request, 42, "merchant")
 	if err == nil || !strings.Contains(err.Error(), "must be reconciled") {
 		t.Fatalf("restarted worker must refuse an existing processing/unknown reservation before dispatch: %v", err)
 	}
@@ -690,7 +690,7 @@ func runRefundProviderOutcomeCrashChild(t *testing.T) {
 	service.alipay = &exitAfterSyntheticProviderOutcomeGateway{
 		db: db, ledgerTable: ledgerTable, outcome: outcome, providerReference: providerReference,
 	}
-	_, err = service.RefundMerchantOrder(merchantID, orderID, dto.RefundOrderRequest{
+	_, _, err = service.RefundMerchantOrder(merchantID, orderID, dto.RefundOrderRequest{
 		Amount: amount, Reason: reason, IdempotencyKey: idempotencyKey,
 	}, 42, "merchant")
 	t.Fatalf("child refund unexpectedly returned before abrupt fake-provider exit: %v", err)

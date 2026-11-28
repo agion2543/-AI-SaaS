@@ -431,14 +431,14 @@ func TestMySQLConcurrentPartialRefundsNeverReserveMoreThanRemaining(t *testing.T
 	service.alipay = gateway
 	firstResult := make(chan error, 1)
 	go func() {
-		_, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 3000, Reason: "合成部分退款 A", IdempotencyKey: "synthetic-cap-key-a"}, 41, "merchant")
+		_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 3000, Reason: "合成部分退款 A", IdempotencyKey: "synthetic-cap-key-a"}, 41, "merchant")
 		firstResult <- err
 	}()
 	waitForSyntheticDispatch(t, gateway)
 
 	secondResult := make(chan error, 1)
 	go func() {
-		_, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 2500, Reason: "合成部分退款 B", IdempotencyKey: "synthetic-cap-key-b"}, 42, "merchant")
+		_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 2500, Reason: "合成部分退款 B", IdempotencyKey: "synthetic-cap-key-b"}, 42, "merchant")
 		secondResult <- err
 	}()
 	select {
@@ -484,12 +484,12 @@ func TestMySQLSameRefundIdempotencyKeyDoesNotDispatchTwice(t *testing.T) {
 	request := dto.RefundOrderRequest{Amount: 2000, Reason: "同键合成退款", IdempotencyKey: "synthetic-same-key"}
 	firstResult := make(chan error, 1)
 	go func() {
-		_, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 51, "merchant")
+		_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 51, "merchant")
 		firstResult <- err
 	}()
 	waitForSyntheticDispatch(t, gateway)
 
-	_, secondErr := service.RefundMerchantOrder(merchant.ID, order.ID, request, 51, "merchant")
+	_, _, secondErr := service.RefundMerchantOrder(merchant.ID, order.ID, request, 51, "merchant")
 	if secondErr == nil || !strings.Contains(secondErr.Error(), "must be reconciled") {
 		t.Fatalf("same idempotency key while processing should not dispatch again: %v", secondErr)
 	}
@@ -519,7 +519,7 @@ func TestMySQLUnknownRefundReservationBlocksAnotherRequest(t *testing.T) {
 	}
 	unknown := createUnknownRefundReservation(t, db, order, uniqueSyntheticMySQLOrderNo(t, "UNKNOWN-REFUND"), 3000)
 	service := NewOrderService(db)
-	_, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 500, Reason: "未知预留阻断检查", IdempotencyKey: "synthetic-after-unknown"}, 61, "merchant")
+	_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 500, Reason: "未知预留阻断检查", IdempotencyKey: "synthetic-after-unknown"}, 61, "merchant")
 	if err == nil || !strings.Contains(err.Error(), "must be reconciled before any further refund") {
 		t.Fatalf("unknown reservation must block a new request: %v", err)
 	}

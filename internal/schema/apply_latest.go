@@ -16,7 +16,8 @@ import (
 // platform expenses v7, expense reversal v8, shared table-ordering v9,
 // merchant table-label v10, order-items/channel v11, AI cost-control
 // v12, announcements/maintenance/P3 data-foundation v13, and platform
-// finance v14 (expense categories/fields, time logs, income records)
+// finance v14 (expense categories/fields, time logs, income records) and
+// refund review v15 (payment-record operator, refund review columns)
 // migrations. Existing schemas are accepted only when they are exact
 // managed versions; legacy and unknown databases stay fail-closed.
 func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
@@ -38,6 +39,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 		{AICostControlV12Version, ApplyAICostControlV12},
 		{AnnouncementsMaintenanceV13Version, ApplyAnnouncementsMaintenanceV13},
 		{PlatformFinanceV14Version, ApplyPlatformFinanceV14},
+		{RefundReviewV15Version, ApplyRefundReviewV15},
 	}
 	continueFrom := func(version string, prior Result) (Result, error) {
 		current := -1
@@ -77,6 +79,7 @@ func ApplyLatest(ctx context.Context, db *sql.DB) (Result, error) {
 	// source schema before it can write, so failed probes leave the database
 	// untouched; a successful probe is then advanced through every later step.
 	probes := []migrationStep{
+		{RefundReviewV15Version, ApplyRefundReviewV15},
 		{PlatformFinanceV14Version, ApplyPlatformFinanceV14},
 		{AnnouncementsMaintenanceV13Version, ApplyAnnouncementsMaintenanceV13},
 		{AICostControlV12Version, ApplyAICostControlV12},

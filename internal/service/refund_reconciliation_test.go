@@ -197,7 +197,7 @@ func TestUnknownRefundReservationBlocksAdditionalRefundUntilReconciled(t *testin
 	}
 	refund := createUnknownRefundReservation(t, db, order, "SYNTHETIC-RF-BLOCK-001", 4000)
 	service := NewOrderService(db)
-	_, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 100, Reason: "未知结果前不得换新键重试", IdempotencyKey: "synthetic-new-refund-key"}, 42, "merchant")
+	_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 100, Reason: "未知结果前不得换新键重试", IdempotencyKey: "synthetic-new-refund-key"}, 42, "merchant")
 	if err == nil || !strings.Contains(err.Error(), "must be reconciled before any further refund") {
 		t.Fatalf("unknown reservation must block every new refund, even within unreserved balance: %v", err)
 	}

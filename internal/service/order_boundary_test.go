@@ -337,7 +337,7 @@ func TestMerchantOrderServiceEnforcesTenantBoundaryForReadsAndWrites(t *testing.
 			return err
 		}},
 		{name: "refund", call: func() error {
-			_, err := service.RefundMerchantOrder(other.ID, order.ID, dto.RefundOrderRequest{Full: true}, 17, "merchant")
+			_, _, err := service.RefundMerchantOrder(other.ID, order.ID, dto.RefundOrderRequest{Full: true}, 17, "merchant")
 			return err
 		}},
 	}
@@ -480,7 +480,7 @@ func TestRefundPersistsActorReasonAndPartialToFullAuditState(t *testing.T) {
 	providerCalls := 0
 	service := NewOrderService(db, newLocalAlipayRefundService(t, &providerCalls))
 
-	partial, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "商品少发"}, 42, "merchant")
+	partial, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 300, Reason: "商品少发"}, 42, "merchant")
 	if err != nil {
 		t.Fatalf("synthetic partial refund: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestRefundPersistsActorReasonAndPartialToFullAuditState(t *testing.T) {
 		t.Fatalf("partial refund state mismatch: %+v", partial)
 	}
 
-	full, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Full: true, Reason: "顾客要求全额退款"}, 7, "admin")
+	full, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Full: true, Reason: "顾客要求全额退款"}, 7, "admin")
 	if err != nil {
 		t.Fatalf("synthetic remaining full refund: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestRefundPersistsActorReasonAndPartialToFullAuditState(t *testing.T) {
 		t.Fatalf("expected two local synthetic gateway calls, got %d", providerCalls)
 	}
 
-	_, err = service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 1, Reason: "超额校验"}, 42, "merchant")
+	_, _, err = service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 1, Reason: "超额校验"}, 42, "merchant")
 	if err == nil || !strings.Contains(err.Error(), "no refundable amount") {
 		t.Fatalf("fully refunded order must reject further refund, got %v", err)
 	}
@@ -549,7 +549,7 @@ func TestRefundRejectsUnpaidAndExcessAmountWithoutChangingAudit(t *testing.T) {
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			_, err := service.RefundMerchantOrder(check.merchantID, check.id, check.req, 42, "merchant")
+			_, _, err := service.RefundMerchantOrder(check.merchantID, check.id, check.req, 42, "merchant")
 			if err == nil || !strings.Contains(err.Error(), check.want) {
 				t.Fatalf("refund validation error = %v, want substring %q", err, check.want)
 			}

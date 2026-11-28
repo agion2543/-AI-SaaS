@@ -1788,6 +1788,43 @@ func (s *AdminService) ListSystemConfigs() ([]model.SystemConfig, error) {
 	return list, nil
 }
 
+// GetRefundReviewThreshold returns the M2 refund-review threshold in
+// cents (default 100000 = 1000 yuan when the key is missing, unparsable,
+// or out of range). It reads the same SystemConfig key the refund path
+// enforces, so the value shown to the super-admin is the value in force.
+func (s *AdminService) GetRefundReviewThreshold() (int64, error) {
+	if s == nil || s.systems == nil {
+		return 0, errors.New("system config database is unavailable")
+	}
+	config, err := s.systems.Get(RefundReviewThresholdConfigKey)
+	if err != nil {
+		return RefundReviewThresholdDefaultCents, nil
+	}
+	parsed, parseErr := strconv.ParseInt(strings.TrimSpace(config.ConfigValue), 10, 64)
+	if parseErr != nil || parsed < 0 || parsed > RefundReviewThresholdMaxCents {
+		return RefundReviewThresholdDefaultCents, nil
+	}
+	return parsed, nil
+}
+
+// SetRefundReviewThreshold stores the M2 refund-review threshold in cents
+// (0..100000000; 0 means every refund needs review). The write and its
+// audit row commit in one transaction, like SaveSystemConfig.
+func (s *AdminService) SetRefundReviewThreshold(cents int64, actor AuditActor) error {
+	if s == nil || s.db == nil {
+		return errors.New("system config database is unavailable")
+	}
+	if cents < 0 || cents > RefundReviewThresholdMaxCents {
+		return fmt.Errorf("refund review threshold must be between 0 and %d cents", RefundReviewThresholdMaxCents)
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := repository.NewSystemRepository(tx).Upsert(RefundReviewThresholdConfigKey, strconv.FormatInt(cents, 10), false); err != nil {
+			return err
+		}
+		return appendSystemConfigAuditTx(tx, actor, "admin_refund_review_threshold_update", "退款复核阈值更新", []string{RefundReviewThresholdConfigKey})
+	})
+}
+
 func (s *AdminService) SaveAIConfigPolicy(req dto.SaveAIConfigPolicyRequest, actor AuditActor) (AIConfigPolicy, error) {
 	if req.Enabled {
 		return AIConfigPolicy{}, errors.New("AI provider 尚未接入，当前不能启用 AI 经营功能")

@@ -283,7 +283,7 @@ func TestConcurrentRefundsReserveAmountBeforeExternalSuccess(t *testing.T) {
 		operatorID := operatorID
 		go func() {
 			<-start
-			_, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 600, Reason: fmt.Sprintf("合成并发部分退款-%d", operatorID)}, operatorID, "merchant")
+			_, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 600, Reason: fmt.Sprintf("合成并发部分退款-%d", operatorID)}, operatorID, "merchant")
 			results <- err
 		}()
 	}
@@ -365,11 +365,11 @@ func TestRefundIdempotencyKeyReplaysSuccessWithoutSecondProviderDispatch(t *test
 	}))
 	service := NewOrderService(db, provider)
 	request := dto.RefundOrderRequest{Amount: 300, Reason: "合成幂等退款", IdempotencyKey: "synthetic-refund-key-001"}
-	first, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant")
+	first, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant")
 	if err != nil {
 		t.Fatalf("first synthetic refund: %v", err)
 	}
-	second, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant")
+	second, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant")
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestRefundIdempotencyKeyReplaysSuccessWithoutSecondProviderDispatch(t *test
 	}
 	changed := request
 	changed.Amount = 400
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, changed, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "different request") {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, changed, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "different request") {
 		t.Fatalf("reusing a key with a different payload must be rejected, got %v", err)
 	}
 	if providerCalls.Load() != 1 {
@@ -411,7 +411,7 @@ func TestUnknownRefundOutcomeRetainsReservationAndBlocksRetry(t *testing.T) {
 	}))
 	service := NewOrderService(db, provider)
 	request := dto.RefundOrderRequest{Amount: 600, Reason: "合成超时退款", IdempotencyKey: "synthetic-unknown-key-001"}
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
 		t.Fatalf("timeout must leave an explicit unknown result, got %v", err)
 	}
 	var refunds []model.RefundRecord
@@ -428,10 +428,10 @@ func TestUnknownRefundOutcomeRetainsReservationAndBlocksRetry(t *testing.T) {
 	if refunds[0].IdempotencyKey == nil || *refunds[0].IdempotencyKey != request.IdempotencyKey {
 		t.Fatalf("unknown reservation must retain idempotency key: %+v", refunds[0])
 	}
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "must be reconciled") {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, request, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "must be reconciled") {
 		t.Fatalf("same-key retry must be blocked for reconciliation, got %v", err)
 	}
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 100, Reason: "另一笔合成退款", IdempotencyKey: "synthetic-unknown-key-002"}, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "must be reconciled before any further refund") {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 100, Reason: "另一笔合成退款", IdempotencyKey: "synthetic-unknown-key-002"}, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "must be reconciled before any further refund") {
 		t.Fatalf("another request must wait for reconciliation even within remaining balance, got %v", err)
 	}
 	if providerCalls.Load() != 1 {
@@ -467,7 +467,7 @@ func TestDefinitiveProviderRejectionReleasesReservationForNewKey(t *testing.T) {
 	}))
 	service := NewOrderService(db, provider)
 	firstRequest := dto.RefundOrderRequest{Amount: 600, Reason: "合成确定失败退款", IdempotencyKey: "synthetic-failed-key-001"}
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, firstRequest, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "definitively rejected") {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, firstRequest, 42, "merchant"); err == nil || !strings.Contains(err.Error(), "definitively rejected") {
 		t.Fatalf("provider's explicit rejection must be reported as definitive, got %v", err)
 	}
 	var afterFailure model.Order
@@ -485,7 +485,7 @@ func TestDefinitiveProviderRejectionReleasesReservationForNewKey(t *testing.T) {
 		t.Fatalf("explicit provider rejection should be persisted as failed, got %q", failed.Status)
 	}
 	secondRequest := dto.RefundOrderRequest{Amount: 600, Reason: "合成重新发起退款", IdempotencyKey: "synthetic-failed-key-002"}
-	if _, err := service.RefundMerchantOrder(merchant.ID, order.ID, secondRequest, 42, "merchant"); err != nil {
+	if _, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, secondRequest, 42, "merchant"); err != nil {
 		t.Fatalf("new key should be allowed after a definitive provider rejection: %v", err)
 	}
 	if providerCalls.Load() != 2 {
@@ -527,7 +527,7 @@ func TestRefundFinalizationReconcilesExistingSuccessfulRecordTotal(t *testing.T)
 		}, nil
 	}))
 	service := NewOrderService(db, provider)
-	updated, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 200, Reason: "新的合成退款"}, 42, "merchant")
+	updated, _, err := service.RefundMerchantOrder(merchant.ID, order.ID, dto.RefundOrderRequest{Amount: 200, Reason: "新的合成退款"}, 42, "merchant")
 	if err != nil {
 		t.Fatalf("refund after legacy success row: %v", err)
 	}

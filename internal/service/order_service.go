@@ -1176,6 +1176,15 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint, aud
 			Status:         "success",
 			RawPayload:     `{"source":"merchant_confirmed_qr"}`,
 		}
+		// v15: record who confirmed the payment on the payment record
+		// itself, in the same transaction as the audit row below (M1
+		// follow-up). The operator comes from the audit actor; without an
+		// audit event the columns stay 0/"" (unknown operator) rather
+		// than guessing from the merchant id.
+		if len(audit) > 0 {
+			record.OperatorID = audit[0].Actor.ID
+			record.OperatorRole = audit[0].Actor.Type
+		}
 		if err := tx.Create(record).Error; err != nil {
 			return err
 		}
@@ -1273,23 +1282,31 @@ func (s *OrderService) UpdateMerchantOrderNote(merchantID, orderID uint, note st
 	return order, nil
 }
 
-func (s *OrderService) RefundMerchantOrder(merchantID, orderID uint, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, error) {
+func (s *OrderService) RefundMerchantOrder(merchantID, orderID uint, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, bool, error) {
 	order, err := s.orders.FindByMerchantAndID(merchantID, orderID)
 	if err != nil {
-		return nil, errors.New("order not found")
+		return nil, false, errors.New("order not found")
 	}
 	return s.refundOrder(order, req, operatorID, operatorRole, audit...)
 }
 
-func (s *OrderService) RefundAdminOrder(orderID uint, req dto.RefundOrderRequest, operatorID uint, audit ...AuditEvent) (*model.Order, error) {
+func (s *OrderService) RefundAdminOrder(orderID uint, req dto.RefundOrderRequest, operatorID uint, audit ...AuditEvent) (*model.Order, bool, error) {
 	var order model.Order
 	if err := s.db.Preload("Store").Preload("Merchant").First(&order, orderID).Error; err != nil {
-		return nil, errors.New("order not found")
+		return nil, false, errors.New("order not found")
 	}
-	return s.refundOrder(&order, req, operatorID, "admin", audit...)
+	// Record the admin's effective role (super_admin vs admin) from the
+	// audit actor instead of a fixed "admin": the M2 review check compares
+	// (role, id) pairs, and a super-admin applicant must not be able to
+	// approve their own refund under a different label.
+	operatorRole := "admin"
+	if len(audit) > 0 && audit[0].Actor.Type != "" {
+		operatorRole = audit[0].Actor.Type
+	}
+	return s.refundOrder(&order, req, operatorID, operatorRole, audit...)
 }
 
-func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, error) {
+func (s *OrderService) refundOrder(order *model.Order, req dto.RefundOrderRequest, operatorID uint, operatorRole string, audit ...AuditEvent) (*model.Order, bool, error) {
 	return s.processReservedRefund(order, req, operatorID, operatorRole, audit...)
 }
 

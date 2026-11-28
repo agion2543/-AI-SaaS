@@ -69,6 +69,21 @@ type RefundOrderRequest struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
+// RefundReviewRequest is the super-admin decision on a pending-review
+// refund (M2). Approve dispatches the refund; reject releases the
+// reservation. A rejection reason is required.
+type RefundReviewRequest struct {
+	Approve bool   `json:"approve"`
+	Reason  string `json:"reason"`
+}
+
+// RefundReviewThresholdRequest sets the M2 review threshold in cents
+// (0..100000000; default 100000 = 1000 yuan; 0 means every refund needs
+// review).
+type RefundReviewThresholdRequest struct {
+	ThresholdCents int64 `json:"threshold_cents"`
+}
+
 type PaymentCallbackRequest struct {
 	OrderNo        string      `json:"order_no" binding:"required"`
 	TransactionNo  string      `json:"transaction_no" binding:"required"`

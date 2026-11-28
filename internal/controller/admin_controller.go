@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -704,6 +705,39 @@ func (ctl *AdminController) Configs(c *gin.Context) {
 		return
 	}
 	utils.Success(c, list)
+}
+
+// GetRefundReviewThreshold returns the M2 refund-review threshold in
+// cents (default 100000 = 1000 yuan) and its value in yuan for display.
+// Super-admin only.
+func (ctl *AdminController) GetRefundReviewThreshold(c *gin.Context) {
+	cents, err := ctl.admin.GetRefundReviewThreshold()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, "failed to load refund review threshold")
+		return
+	}
+	utils.Success(c, gin.H{
+		"threshold_cents": cents,
+		"threshold_yuan":  fmt.Sprintf("%d.%02d", cents/100, cents%100),
+		"default_cents":   service.RefundReviewThresholdDefaultCents,
+		"max_cents":       service.RefundReviewThresholdMaxCents,
+	})
+}
+
+// UpdateRefundReviewThreshold stores the M2 refund-review threshold in
+// cents (0..100000000; 0 means every refund needs review). Super-admin
+// only; the change is audited.
+func (ctl *AdminController) UpdateRefundReviewThreshold(c *gin.Context) {
+	var req dto.RefundReviewThresholdRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := ctl.admin.SetRefundReviewThreshold(req.ThresholdCents, service.AuditActorFromContext(c)); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"threshold_cents": req.ThresholdCents})
 }
 
 func (ctl *AdminController) MaintenanceNotice(c *gin.Context) {

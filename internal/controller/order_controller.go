@@ -478,7 +478,7 @@ func (ctl *OrderController) RefundMerchantOrder(c *gin.Context) {
 		return
 	}
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.RefundMerchantOrder(merchantID, orderID, req, c.GetUint("user_id"), "merchant", service.AuditEvent{
+	order, pendingReview, err := ctl.service.RefundMerchantOrder(merchantID, orderID, req, c.GetUint("user_id"), "merchant", service.AuditEvent{
 		Actor: service.AuditActorFromContext(c),
 		Input: service.AuditRecordInput{Action: "merchant_order_refund", TargetType: "order", Detail: gin.H{
 			"amount": req.Amount, "full_refund": req.Full, "reason": req.Reason,
@@ -486,6 +486,10 @@ func (ctl *OrderController) RefundMerchantOrder(c *gin.Context) {
 	})
 	if err != nil {
 		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if pendingReview {
+		utils.Success(c, gin.H{"order": serializeMerchantOrderSummary(order), "refunded": false, "review_pending": true, "message": "退款申请已提交，等待超管复核后才能执行"})
 		return
 	}
 	utils.Success(c, gin.H{"order": serializeMerchantOrderSummary(order), "refunded": true})
@@ -498,7 +502,7 @@ func (ctl *OrderController) RefundAdminOrder(c *gin.Context) {
 		return
 	}
 	orderID := uint(atoi(c.Param("id")))
-	order, err := ctl.service.RefundAdminOrder(orderID, req, c.GetUint("user_id"), service.AuditEvent{
+	order, pendingReview, err := ctl.service.RefundAdminOrder(orderID, req, c.GetUint("user_id"), service.AuditEvent{
 		Actor: service.AuditActorFromContext(c),
 		Input: service.AuditRecordInput{Action: "admin_order_refund", TargetType: "order", Detail: gin.H{
 			"amount": req.Amount, "full_refund": req.Full, "reason": req.Reason,
@@ -508,7 +512,64 @@ func (ctl *OrderController) RefundAdminOrder(c *gin.Context) {
 		utils.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if pendingReview {
+		utils.Success(c, gin.H{"order": serializeAdminOrder(order, false), "refunded": false, "review_pending": true, "message": "退款申请已提交，等待超管复核后才能执行"})
+		return
+	}
 	utils.Success(c, gin.H{"order": serializeAdminOrder(order, false), "refunded": true})
+}
+
+// PendingReviewRefunds lists above-threshold refunds waiting for a
+// super-admin decision (M2). Route is super-admin only.
+func (ctl *OrderController) PendingReviewRefunds(c *gin.Context) {
+	list, err := ctl.service.PendingReviewRefunds()
+	if err != nil {
+		utils.Error(c, http.StatusInternalServerError, "failed to load pending review refunds")
+		return
+	}
+	utils.Success(c, serializePendingReviewRefunds(list))
+}
+
+// ReviewRefund records a super-admin decision on a pending-review refund
+// (M2). The reviewer must differ from the applicant; the service enforces
+// it. Route is super-admin only.
+func (ctl *OrderController) ReviewRefund(c *gin.Context) {
+	var req dto.RefundReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	refundID := uint(atoi(c.Param("id")))
+	actor := service.AuditActorFromContext(c)
+	order, err := ctl.service.ReviewRefund(refundID, req.Approve, req.Reason, c.GetUint("user_id"), actor.Type, service.AuditEvent{
+		Actor: actor,
+		Input: service.AuditRecordInput{Action: "admin_order_refund_review", TargetType: "order", Detail: gin.H{
+			"approve": req.Approve, "reason": req.Reason,
+		}},
+	})
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.Success(c, gin.H{"order": serializeAdminOrder(order, false), "reviewed": true, "approved": req.Approve})
+}
+
+func serializePendingReviewRefunds(records []model.RefundRecord) []gin.H {
+	rows := make([]gin.H, 0, len(records))
+	for _, record := range records {
+		rows = append(rows, gin.H{
+			"id": record.ID, "order_id": record.OrderID, "merchant_id": record.MerchantID,
+			"store_id": record.StoreID, "refund_no": record.RefundNo,
+			"transaction_no": record.TransactionNo, "amount": record.Amount,
+			"reason": record.Reason, "operator_id": record.OperatorID,
+			"operator_role": record.OperatorRole,
+			"status":        record.Status, "created_at": record.CreatedAt,
+			"reviewer_id": record.ReviewerID, "reviewer_role": record.ReviewerRole,
+			"review_reason": record.ReviewReason, "reviewed_at": record.ReviewedAt,
+			"order": serializeAdminOrderFinanceSummary(record.Order),
+		})
+	}
+	return rows
 }
 
 func (ctl *OrderController) ListAll(c *gin.Context) {
