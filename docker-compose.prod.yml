@@ -36,6 +36,8 @@ services:
     # Use docker-compose.managed.yml for a separately managed database.
     env_file:
       - .env.production
+    environment:
+      TZ: Asia/Shanghai
     command: ["/app/schema-migrate"]
     depends_on:
       mysql:
@@ -53,6 +55,7 @@ services:
       - .env.production
     environment:
       DB_AUTO_MIGRATE: "false"
+      TZ: Asia/Shanghai
       INITIAL_DATA_SEED_ENABLED: "false"
     depends_on:
       schema-migrate:
@@ -73,6 +76,8 @@ services:
       dockerfile: web/Dockerfile
     container_name: saas-frontend-prod
     restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
     depends_on:
       backend:
         condition: service_started

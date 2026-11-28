@@ -122,3 +122,13 @@ MYSQL_REFUND_IT_DSN='root@unix(/tmp/cue-refund-mysql-<id>/mysql.sock)/cue_refund
 - 增加订单支付失败率、退款率、商家响应超时的阈值告警。
 - 增加数据库备份恢复演练记录。
 - 真实支付资质准备好后，再接入服务商分账或子商户模式。
+
+## 9. 时区约定（Asia/Shanghai）
+
+全平台按北京时间计日、计月，约定见 `docs/production-deploy.md` 第 10 节。日常巡检与每次发布前确认三点：
+
+- 容器 `TZ=Asia/Shanghai` 未被改动，容器内 `date` 显示 `CST`/`+0800`；
+- MySQL `SELECT @@global.time_zone, @@system_time_zone;` 为 `SYSTEM` 加 `CST` 或 `Asia/Shanghai`；
+- `.env.production` 的 `MYSQL_DSN` 用 `loc=Asia/Shanghai`，不是 `loc=Local`。
+
+不要只改容器时区就以为换了时区：每日总结、复盘、营业额按日归属用代码内固定的北京时间，成本中心等处的 `time.Local` 仍依赖容器 TZ；改时区约定前先改代码。

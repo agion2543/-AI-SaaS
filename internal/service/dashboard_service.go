@@ -226,18 +226,22 @@ func (s *DashboardService) Summary() (map[string]interface{}, error) {
 	return s.SummaryWithRange("", "")
 }
 
+// dashboardRange resolves the dashboard/turnover date window in Beijing
+// time (Asia/Shanghai, fixed UTC+8). It must not use time.Local: on a UTC
+// container the day boundary would shift by 8 hours and trades near
+// midnight would be attributed to the wrong day.
 func dashboardRange(startValue, endValue string) (time.Time, time.Time) {
-	now := time.Now()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
-	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, time.Local)
+	now := time.Now().In(beijingTimeZone)
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingTimeZone)
+	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, beijingTimeZone)
 	if strings.TrimSpace(startValue) != "" {
-		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(startValue), time.Local); err == nil {
+		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(startValue), beijingTimeZone); err == nil {
 			start = parsed
 		}
 	}
 	if strings.TrimSpace(endValue) != "" {
-		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(endValue), time.Local); err == nil {
-			end = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, time.Local)
+		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(endValue), beijingTimeZone); err == nil {
+			end = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, beijingTimeZone)
 		}
 	}
 	if start.After(end) {

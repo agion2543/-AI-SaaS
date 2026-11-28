@@ -31,6 +31,8 @@ services:
     restart: "no"
     env_file:
       - .env.production
+    environment:
+      TZ: Asia/Shanghai
     command: ["/app/schema-migrate"]
     depends_on:
       mysql:
@@ -47,6 +49,7 @@ services:
       - .env.production
     environment:
       DB_AUTO_MIGRATE: "false"
+      TZ: Asia/Shanghai
       INITIAL_DATA_SEED_ENABLED: "true"
     depends_on:
       schema-migrate:
@@ -66,6 +69,8 @@ services:
       context: .
       dockerfile: web/Dockerfile
     restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
     depends_on:
       backend:
         condition: service_started

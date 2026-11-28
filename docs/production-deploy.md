@@ -265,3 +265,15 @@ bash scripts/test-backup-restore-age.sh
 不建议早期使用“平台统一收款再手动分给商家”，这可能涉及资金清分、二清和对账合规风险。后期如需平台统一收款，应接入官方服务商/分账能力。
 
 上线 MVP 时建议把后台“收款策略说明”配置为：平台收 SaaS 订阅费，顾客点单款走商家自有收款账户，平台仅做订单记录、退款记录、运营巡检和人工对账。
+
+## 10. 时区约定（Asia/Shanghai）
+
+全平台按北京时间（Asia/Shanghai，UTC+8）计日、计月。UTC 容器在日边界附近 8 小时内会把交易归属到错误的日期，所以时区必须在三层同时 pin 住，缺一层都不可靠：
+
+1. **容器**：四个 Compose 文件（默认、生产、新装、托管）的全部服务都设 `TZ=Asia/Shanghai`；MySQL 的 `time_zone` 默认是 `SYSTEM`，跟随容器时区。镜像 runtime 层装了 `tzdata`（见 `Dockerfile`），没有它 Go 的 `time.Local` 认不出 `TZ`，容器会悄悄回到 UTC。
+2. **DSN**：`MYSQL_DSN` 必须用 `loc=Asia/Shanghai`，不能用 `loc=Local`（`.env.example` 已改；生产 `.env.production` 同样检查）。`loc=Local` 会跟随容器时区，容器时区一旦漂移，写入/读取的日期就跟着漂移。
+3. **代码**：每日经营总结、活动复盘、营业额按日归属使用代码内固定的 `beijingTimeZone`（UTC+8 固定偏移，不依赖容器时区）；仪表盘的日期窗口也已从 `time.Local` 改为 `beijingTimeZone`。
+
+部署后验证（部署前不要只信配置）：容器内 `date` 应显示 `CST`/`+0800`；MySQL 执行 `SELECT @@global.time_zone, @@system_time_zone;` 应为 `SYSTEM` 加 `CST` 或 `Asia/Shanghai`；在 00:30 前后各做一笔测试订单，确认都归属到同一北京时间日期。
+
+注意：成本中心、AI 成本统计、套餐到期等处的 `time.Local` 目前仍依赖容器 TZ，只改 `TZ` 不能换时区；如需改时区约定，先改代码再改配置。
