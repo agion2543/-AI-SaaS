@@ -324,7 +324,7 @@ DATE_ADD(NOW(3), INTERVAL 30 DAY), NOW(3), NOW(3))`, reviewID, orderID, merchant
 
 func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns int
+	var tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -373,6 +373,12 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.PlatformFinanceV14Version, schema.PlatformFinanceV14Checksum).Scan(&v14Rows); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.RefundReviewV15Version, schema.RefundReviewV15Checksum).Scan(&v15Rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_schema_migrations WHERE version=? AND checksum=? AND state='applied' AND schema_fingerprint IS NOT NULL`, schema.CustomerProfilesV16Version, schema.CustomerProfilesV16Checksum).Scan(&v16Rows); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='store_products' AND COLUMN_NAME IN ('sales_unit','specification','minimum_order_quantity','price_tiers')`).Scan(&productPricingColumns); err != nil {
 		t.Fatal(err)
 	}
@@ -385,8 +391,11 @@ func assertLifecycleInventory(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('store_table_configs','store_tables','table_sessions','table_cart_items','table_order_details')`).Scan(&tableOrderingColumns); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 53 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || v14Rows != 1 || productPricingColumns != 4 || expenseColumns != 16 || expenseReversalColumns != 9 || tableOrderingColumns != 34 {
-		t.Fatalf("managed schema inventory tables/triggers/v1-v14=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; want 53/10/fourteen applied rows and 4/16/9/34 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_profiles'`).Scan(&customerProfileColumns); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 54 || triggers != 10 || v1Rows != 1 || v2Rows != 1 || v3Rows != 1 || v4Rows != 1 || v5Rows != 1 || v6Rows != 1 || v7Rows != 1 || v8Rows != 1 || v9Rows != 1 || v10Rows != 1 || v11Rows != 1 || v12Rows != 1 || v13Rows != 1 || v14Rows != 1 || v15Rows != 1 || v16Rows != 1 || productPricingColumns != 4 || expenseColumns != 16 || expenseReversalColumns != 9 || tableOrderingColumns != 34 || customerProfileColumns != 15 {
+		t.Fatalf("managed schema inventory tables/triggers/v1-v16=%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d; product pricing columns=%d; expense columns=%d; reversal columns=%d; table-ordering columns=%d; customer profile columns=%d; want 54/10/sixteen applied rows and 4/16/9/34/15 columns", tables, triggers, v1Rows, v2Rows, v3Rows, v4Rows, v5Rows, v6Rows, v7Rows, v8Rows, v9Rows, v10Rows, v11Rows, v12Rows, v13Rows, v14Rows, v15Rows, v16Rows, productPricingColumns, expenseColumns, expenseReversalColumns, tableOrderingColumns, customerProfileColumns)
 	}
 }
 
@@ -555,10 +564,10 @@ func assertMatchingLedgers(t *testing.T, source, restored *sql.DB) {
 		return out
 	}
 	left, right := read(source), read(restored)
-	if len(left) != 15 || len(right) != 15 {
-		t.Fatalf("source/restored migration ledger entries=%d/%d; want 15/15", len(left), len(right))
+	if len(left) != 16 || len(right) != 16 {
+		t.Fatalf("source/restored migration ledger entries=%d/%d; want 16/16", len(left), len(right))
 	}
-	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version, schema.PlatformFinanceV14Version, schema.RefundReviewV15Version} {
+	for _, version := range []string{schema.BaselineVersion, schema.ManualReviewV2Version, schema.AdminAuthV3Version, schema.OTPSafetyV4Version, schema.EmailOTPSafetyV5Version, schema.WholesaleRetailV6Version, schema.PlatformExpensesV7Version, schema.PlatformExpenseReversalsV8Version, schema.TableOrderingV9Version, schema.TableLabelsV10Version, schema.OrderItemsV11Version, schema.AICostControlV12Version, schema.AnnouncementsMaintenanceV13Version, schema.PlatformFinanceV14Version, schema.RefundReviewV15Version, schema.CustomerProfilesV16Version} {
 		leftValue, leftOK := left[version]
 		rightValue, rightOK := right[version]
 		if !leftOK || !rightOK || leftValue != rightValue {

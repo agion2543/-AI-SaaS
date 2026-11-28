@@ -383,17 +383,21 @@ func (s *MerchantService) OpsDormantCustomers(merchantID uint) (*OpsDormantCusto
 	}
 	now := time.Now().In(beijingTimeZone)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingTimeZone)
-	// 直接取 phone + paid_at 两列、在 Go 里按手机号取最近一次：同上，
-	// MAX(paid_at) 表达式列在 SQLite 下扫不进 time.Time。
+	// Materialized profiles (v16) carry last_paid_at per (merchant, phone),
+	// so the tiers read one row per customer instead of every paid order.
+	// The population is identical to the old orders scan: only valid trades
+	// (paid_at set, total_amount > 0) ever create a profile row. Note the
+	// old code used MAX(paid_at) while the profile list used
+	// MAX(created_at); both facts are now stored side by side, and this
+	// function reads last_paid_at.
 	type tradeRow struct {
 		Phone  string    `gorm:"column:phone"`
 		PaidAt time.Time `gorm:"column:paid_at"`
 	}
 	var tradeRows []tradeRow
-	if err := s.db.Model(&model.Order{}).
-		Select("customer_phone AS phone, paid_at AS paid_at").
-		Where("merchant_id = ? AND order_type = ? AND "+ValidTradeAmountCondition, merchantID, "store_order").
-		Where("customer_phone <> ''").
+	if err := s.db.Model(&model.CustomerProfile{}).
+		Select("customer_phone AS phone, last_paid_at AS paid_at").
+		Where("merchant_id = ? AND last_paid_at IS NOT NULL", merchantID).
 		Scan(&tradeRows).Error; err != nil {
 		return nil, err
 	}

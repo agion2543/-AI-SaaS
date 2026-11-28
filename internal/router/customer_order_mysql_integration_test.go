@@ -56,6 +56,7 @@ func TestMySQLMobileCustomerOrderAPIContract(t *testing.T) {
 		&model.PaymentRecord{},
 		&model.MaintenancePlan{},
 		&model.OrderItem{},
+		&model.CustomerProfile{},
 	); err != nil {
 		t.Fatalf("migrate disposable customer-order schema: %v", err)
 	}

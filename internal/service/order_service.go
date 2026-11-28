@@ -887,7 +887,11 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 			return nil
 		}
 		if exceptionAction != "" {
-			if order.PaidAt == nil {
+			// v16: only a nil -> set PaidAt transition is a profile event.
+			// A duplicate success on an already-paid order keeps the old
+			// PaidAt and must not count a second time.
+			paidTransition := order.PaidAt == nil
+			if paidTransition {
 				paidAt := time.Now()
 				order.PaidAt = &paidAt
 				order.TransactionNo = req.TransactionNo
@@ -896,6 +900,11 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 			order.OperationLogs = s.appendOrderLog(order.OperationLogs, exceptionAction, exceptionText)
 			if err := tx.Save(&order).Error; err != nil {
 				return err
+			}
+			if paidTransition {
+				if err := upsertCustomerProfileForPaidOrderTx(tx, order); err != nil {
+					return err
+				}
 			}
 			result = order
 			return nil
@@ -917,6 +926,11 @@ func (s *OrderService) HandlePaymentCallback(req dto.PaymentCallbackRequest) (*m
 			order.Status = "received"
 			order.OperationLogs = s.appendOrderLog(order.OperationLogs, "paid", "支付成功，订单已发送给商家处理")
 			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+			// v16: PaidAt just transitioned nil -> set; fold the order
+			// into the customer profile in the same transaction.
+			if err := upsertCustomerProfileForPaidOrderTx(tx, order); err != nil {
 				return err
 			}
 			if err := NewShareService(tx).ConsumeCouponForOrder(&order); err != nil {
@@ -1128,22 +1142,30 @@ func (s *OrderService) MerchantOrderDetail(merchantID, orderID uint) (*model.Ord
 }
 
 func (s *OrderService) AcceptMerchantOrder(merchantID, orderID uint) error {
-	order, err := s.orders.FindByMerchantAndID(merchantID, orderID)
-	if err != nil {
-		return errors.New("order not found")
-	}
-	if order.OrderType != "store_order" {
-		return errors.New("order not found")
-	}
-	if order.Status != "received" && order.Status != "submitted" {
-		return errors.New("only submitted or received orders can be accepted")
-	}
-	if !orderCanProceedToFulfillment(*order) {
-		return errors.New("payment must be confirmed before accepting this order")
-	}
-	order.Status = "accepted"
-	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "accepted", "商家已接单")
-	return s.orders.Save(order)
+	// v16: the status change and the profile last_status update share one
+	// transaction, so the materialized row can never disagree with the
+	// order about which status is latest.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Preload("Store").Preload("Promotion").Where("merchant_id = ? AND id = ?", merchantID, orderID).First(&order).Error; err != nil {
+			return errors.New("order not found")
+		}
+		if order.OrderType != "store_order" {
+			return errors.New("order not found")
+		}
+		if order.Status != "received" && order.Status != "submitted" {
+			return errors.New("only submitted or received orders can be accepted")
+		}
+		if !orderCanProceedToFulfillment(order) {
+			return errors.New("payment must be confirmed before accepting this order")
+		}
+		order.Status = "accepted"
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "accepted", "商家已接单")
+		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+		return updateCustomerProfileLastStatusTx(tx, order)
+	})
 }
 
 func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint, audit ...AuditEvent) (*model.Order, error) {
@@ -1200,6 +1222,12 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint, aud
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
+		// v16: PaidAt just transitioned nil -> set (the function returns
+		// early when PaidAt is already set); fold the order into the
+		// customer profile in the same transaction.
+		if err := upsertCustomerProfileForPaidOrderTx(tx, order); err != nil {
+			return err
+		}
 		// M1: merchant payment confirmation is a money-relevant act: record
 		// who confirmed it in the same transaction as the PaymentRecord.
 		// Amount and transaction number are recoverable from the order and
@@ -1228,38 +1256,48 @@ func (s *OrderService) ConfirmMerchantOrderPayment(merchantID, orderID uint, aud
 }
 
 func (s *OrderService) CompleteMerchantOrder(merchantID, orderID uint) error {
-	order, err := s.orders.FindByMerchantAndID(merchantID, orderID)
-	if err != nil {
-		return errors.New("order not found")
-	}
-	if order.OrderType != "store_order" {
-		return errors.New("order not found")
-	}
-	if order.Status != "accepted" && order.Status != "preparing" {
-		return errors.New("only accepted or preparing orders can be completed")
-	}
-	if !orderPaymentSatisfied(*order) {
-		return errors.New("payment must be confirmed before completing this order")
-	}
-	order.Status = "completed"
-	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "completed", "商家已完成订单")
-	return s.orders.Save(order)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Preload("Store").Preload("Promotion").Where("merchant_id = ? AND id = ?", merchantID, orderID).First(&order).Error; err != nil {
+			return errors.New("order not found")
+		}
+		if order.OrderType != "store_order" {
+			return errors.New("order not found")
+		}
+		if order.Status != "accepted" && order.Status != "preparing" {
+			return errors.New("only accepted or preparing orders can be completed")
+		}
+		if !orderPaymentSatisfied(order) {
+			return errors.New("payment must be confirmed before completing this order")
+		}
+		order.Status = "completed"
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "completed", "商家已完成订单")
+		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+		return updateCustomerProfileLastStatusTx(tx, order)
+	})
 }
 
 func (s *OrderService) CloseMerchantOrder(merchantID, orderID uint) error {
-	order, err := s.orders.FindByMerchantAndID(merchantID, orderID)
-	if err != nil {
-		return errors.New("order not found")
-	}
-	if order.OrderType != "store_order" {
-		return errors.New("order not found")
-	}
-	if order.Status != "submitted" && order.Status != "payment_confirming" && order.Status != "preparing" && order.Status != "received" && order.Status != "accepted" {
-		return errors.New("only submitted, received or accepted orders can be cancelled")
-	}
-	order.Status = "closed"
-	order.OperationLogs = s.appendOrderLog(order.OperationLogs, "closed", "商家已取消订单")
-	return s.orders.Save(order)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Preload("Store").Preload("Promotion").Where("merchant_id = ? AND id = ?", merchantID, orderID).First(&order).Error; err != nil {
+			return errors.New("order not found")
+		}
+		if order.OrderType != "store_order" {
+			return errors.New("order not found")
+		}
+		if order.Status != "submitted" && order.Status != "payment_confirming" && order.Status != "preparing" && order.Status != "received" && order.Status != "accepted" {
+			return errors.New("only submitted, received or accepted orders can be cancelled")
+		}
+		order.Status = "closed"
+		order.OperationLogs = s.appendOrderLog(order.OperationLogs, "closed", "商家已取消订单")
+		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+		return updateCustomerProfileLastStatusTx(tx, order)
+	})
 }
 
 func (s *OrderService) UpdateMerchantOrderNote(merchantID, orderID uint, note string) (*model.Order, error) {

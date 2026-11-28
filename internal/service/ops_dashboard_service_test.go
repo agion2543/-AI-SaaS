@@ -23,7 +23,7 @@ func newOpsDashboardTestService(t *testing.T) (*MerchantService, *gorm.DB) {
 		&model.Order{}, &model.OrderItem{}, &model.Store{}, &model.StoreProduct{},
 		&model.RefundRecord{}, &model.GroupBuyManualRedemption{},
 		&model.CampaignPostmortem{}, &model.AISuggestionExecution{},
-		&model.MerchantAIUsageLog{},
+		&model.MerchantAIUsageLog{}, &model.CustomerProfile{},
 	); err != nil {
 		t.Fatalf("migrate synthetic ops dashboard tables: %v", err)
 	}
@@ -139,6 +139,11 @@ func seedOpsDashboardOrders(t *testing.T, db *gorm.DB) {
 		GeneratedAt: time.Now(),
 	}).Error; err != nil {
 		t.Fatalf("seed ops postmortem: %v", err)
+	}
+	// v16: dormant tiers read the materialized profiles, so materialize
+	// the seeded orders here; other tests using this seed are unaffected.
+	if _, err := rebuildCustomerProfiles(db, 0); err != nil {
+		t.Fatalf("rebuild customer profiles for ops seed: %v", err)
 	}
 }
 

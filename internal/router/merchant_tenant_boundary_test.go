@@ -35,6 +35,7 @@ func TestMerchantCannotReadOrWriteAnotherMerchantsResources(t *testing.T) {
 		&model.MembershipPackage{}, &model.Order{}, &model.MerchantSettlement{}, &model.PaymentRecord{}, &model.RefundRecord{},
 		&model.Promotion{}, &model.MerchantPaymentConfig{}, &model.MerchantGroupBuyLink{},
 		&model.MerchantGroupBuyLinkAudit{}, &model.ShareCampaign{}, &model.ReferralCoupon{},
+		&model.CustomerProfile{},
 	); err != nil {
 		t.Fatalf("migrate synthetic route schema: %v", err)
 	}

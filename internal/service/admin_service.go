@@ -210,40 +210,25 @@ type CustomerProfileFilter struct {
 }
 
 func (s *AdminService) ListCustomerProfiles(page, pageSize int, filter CustomerProfileFilter) ([]CustomerProfileRow, int64, error) {
-	var rows []CustomerProfileRow
-	query := s.db.Table("orders").
-		Select(`orders.customer_phone AS customer_phone,
-			orders.merchant_id AS merchant_id,
-			MAX(merchants.name) AS merchant_name,
-			MAX(stores.name) AS store_name,
-			COUNT(orders.id) AS order_count,
-			COALESCE(SUM(orders.total_amount),0) AS total_amount,
-			COALESCE(SUM(orders.discount_amount),0) AS discount_amount,
-			MAX(orders.created_at) AS last_order_at,
-			SUBSTRING_INDEX(GROUP_CONCAT(orders.status ORDER BY orders.created_at DESC), ',', 1) AS last_status`).
-		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
-		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
-		Where("orders.order_type = ? AND orders.customer_phone <> ''", "store_order").
-		Where(ValidTradeAmountConditionFor("orders"))
-
-	keyword := strings.TrimSpace(filter.Keyword)
-	if keyword != "" {
-		like := "%" + keyword + "%"
-		query = query.Where("orders.customer_phone LIKE ? OR merchants.name LIKE ? OR stores.name LIKE ?", like, like, like)
+	if page <= 0 {
+		page = 1
 	}
-
-	query = query.Group("orders.customer_phone, orders.merchant_id")
-	if err := query.Order("last_order_at desc").Scan(&rows).Error; err != nil {
-		return nil, 0, err
-	}
-
-	for i := range rows {
-		rows[i].AITag, rows[i].AISuggestion = buildCustomerInsight(rows[i])
-	}
-
+	sortClause := customerProfileSortClause(filter.SortBy, filter.SortOrder)
 	aiTag := strings.TrimSpace(filter.AITag)
 	status := strings.TrimSpace(filter.Status)
+
+	// AITag / Status are derived at read time (buildCustomerInsight), so
+	// they cannot be pushed into SQL: when either filter is set, fetch the
+	// keyword-filtered, SQL-sorted rows and filter + paginate in Go, exactly
+	// as the old live-aggregation version did. Without those filters the
+	// count and the page both come from SQL.
 	if aiTag != "" || status != "" {
+		var scanned []customerProfileListRow
+		if err := customerProfileListSelect(customerProfileBaseQuery(s.db, filter.Keyword)).
+			Order(sortClause).Scan(&scanned).Error; err != nil {
+			return nil, 0, err
+		}
+		rows := customerProfileRowsFromListRows(scanned)
 		filtered := rows[:0]
 		for _, row := range rows {
 			if aiTag != "" && row.AITag != aiTag {
@@ -255,74 +240,45 @@ func (s *AdminService) ListCustomerProfiles(page, pageSize int, filter CustomerP
 			filtered = append(filtered, row)
 		}
 		rows = filtered
+		total := int64(len(rows))
+		start := (page - 1) * pageSize
+		if start >= len(rows) {
+			return []CustomerProfileRow{}, total, nil
+		}
+		end := start + pageSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		return rows[start:end], total, nil
 	}
 
-	sortBy := strings.TrimSpace(filter.SortBy)
-	sortOrder := strings.ToLower(strings.TrimSpace(filter.SortOrder))
-	desc := sortOrder != "asc"
-	sort.SliceStable(rows, func(i, j int) bool {
-		var compare int
-		switch sortBy {
-		case "order_count":
-			compare = int(rows[i].OrderCount - rows[j].OrderCount)
-		case "total_amount":
-			compare = int(rows[i].TotalAmount - rows[j].TotalAmount)
-		case "discount_amount":
-			compare = int(rows[i].DiscountAmount - rows[j].DiscountAmount)
-		case "customer_phone":
-			compare = strings.Compare(rows[i].CustomerPhone, rows[j].CustomerPhone)
-		default:
-			compare = rows[i].LastOrderAt.Compare(rows[j].LastOrderAt)
-		}
-		if compare == 0 {
-			compare = rows[i].LastOrderAt.Compare(rows[j].LastOrderAt)
-		}
-		if desc {
-			return compare > 0
-		}
-		return compare < 0
-	})
-
-	total := int64(len(rows))
-	start := (page - 1) * pageSize
-	if start >= len(rows) {
-		return []CustomerProfileRow{}, total, nil
+	var total int64
+	if err := customerProfileBaseQuery(s.db, filter.Keyword).Model(&model.CustomerProfile{}).Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
-	end := start + pageSize
-	if end > len(rows) {
-		end = len(rows)
+	var scanned []customerProfileListRow
+	if err := customerProfileListSelect(customerProfileBaseQuery(s.db, filter.Keyword)).
+		Order(sortClause).Offset((page - 1) * pageSize).Limit(pageSize).Scan(&scanned).Error; err != nil {
+		return nil, 0, err
 	}
-	return rows[start:end], total, nil
+	return customerProfileRowsFromListRows(scanned), total, nil
 }
 
 func (s *AdminService) ListMerchantCustomerProfiles(merchantID uint, limit int) ([]CustomerProfileRow, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	var rows []CustomerProfileRow
-	err := s.db.Table("orders").
-		Select(`orders.customer_phone AS customer_phone,
-			orders.merchant_id AS merchant_id,
-			MAX(merchants.name) AS merchant_name,
-			MAX(stores.name) AS store_name,
-			COUNT(orders.id) AS order_count,
-			COALESCE(SUM(orders.total_amount),0) AS total_amount,
-			COALESCE(SUM(orders.discount_amount),0) AS discount_amount,
-			MAX(orders.created_at) AS last_order_at,
-			SUBSTRING_INDEX(GROUP_CONCAT(orders.status ORDER BY orders.created_at DESC), ',', 1) AS last_status`).
-		Joins("LEFT JOIN merchants ON merchants.id = orders.merchant_id").
-		Joins("LEFT JOIN stores ON stores.id = orders.store_id").
-		Where("orders.merchant_id = ? AND orders.order_type = ? AND orders.customer_phone <> ''", merchantID, "store_order").
-		Where(ValidTradeAmountConditionFor("orders")).
-		Group("orders.customer_phone, orders.merchant_id").
-		Order("total_amount desc, last_order_at desc").
+	var scanned []customerProfileListRow
+	err := customerProfileListSelect(customerProfileBaseQuery(s.db, "")).
+		Where("customer_profiles.merchant_id = ?", merchantID).
+		Order("customer_profiles.total_amount_cents DESC, customer_profiles.last_order_at DESC, customer_profiles.customer_phone ASC").
 		Limit(limit).
-		Scan(&rows).Error
+		Scan(&scanned).Error
 	if err != nil {
 		return nil, err
 	}
+	rows := customerProfileRowsFromListRows(scanned)
 	for i := range rows {
-		rows[i].AITag, rows[i].AISuggestion = buildCustomerInsight(rows[i])
 		rows[i].CustomerPhone = utils.MaskPhone(rows[i].CustomerPhone)
 	}
 	return rows, nil
