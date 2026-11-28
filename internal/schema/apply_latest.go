@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// LatestVersion is the newest managed schema version ApplyLatest can
+// install. Keep it in step with the last entry of the steps list in
+// ApplyLatest so operator output never prints a stale version.
+const LatestVersion = SupportTicketsV18Version
+
 // ApplyLatest installs v1 into a genuinely empty schema, then appends the
 // subscription manual-review v2, administrator auth-version v3, phone OTP
 // safety v4, email OTP safety v5, light wholesale/retail v6, append-only

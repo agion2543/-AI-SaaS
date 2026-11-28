@@ -42,6 +42,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("managed schema through %s (v1 %s): %s\n", schema.PlatformExpenseReversalsV8Version, schema.BaselineVersion, result)
+	fmt.Printf("managed schema through %s (v1 %s): %s\n", schema.LatestVersion, schema.BaselineVersion, result)
 	return nil
 }
