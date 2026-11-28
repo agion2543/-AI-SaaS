@@ -834,6 +834,14 @@ func (s *AdminService) UpdateMerchantStatus(id uint, status string, audit ...Aud
 		if err := tx.First(&merchant, id).Error; err != nil {
 			return err
 		}
+		// P3 fix: pending merchants must be activated through the onboarding
+		// review API only (ReviewMerchantOnboarding). The generic status
+		// endpoint must not bypass that review, so pending→active is
+		// rejected here before any write or audit. All other transitions
+		// (e.g. suspended→active manual unfreeze) are unchanged.
+		if merchant.Status == "pending" && status == "active" {
+			return errors.New("待审核商家须通过入驻审核接口开通，不能直接改状态")
+		}
 		merchant.Status = status
 		if err := tx.Save(&merchant).Error; err != nil {
 			return err

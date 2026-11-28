@@ -156,6 +156,78 @@ func TestReviewMerchantOnboardingApproveRejectResubmit(t *testing.T) {
 	}
 }
 
+func TestUpdateMerchantStatusCannotActivatePendingMerchant(t *testing.T) {
+	db := newMerchantOnboardingTestDB(t)
+	admin := NewAdminService(nil, db)
+	actor := AuditActor{ID: 7, Type: "super_admin"}
+	update := func(id uint, status string) error {
+		return admin.UpdateMerchantStatus(id, status, AuditEvent{
+			Actor: actor,
+			Input: AuditRecordInput{Action: "merchant_status_update", TargetType: "merchant", MerchantID: &id},
+		})
+	}
+
+	// pending→active through the generic endpoint is rejected: no write,
+	// no audit row. The review API remains the only activation path.
+	pending := &model.Merchant{Name: "旁路拦截测试商家", Status: "pending"}
+	if err := db.Create(pending).Error; err != nil {
+		t.Fatalf("create pending merchant: %v", err)
+	}
+	if err := update(pending.ID, "active"); err == nil {
+		t.Fatal("generic status update unexpectedly activated a pending merchant")
+	} else if err.Error() != "待审核商家须通过入驻审核接口开通，不能直接改状态" {
+		t.Fatalf("pending→active err=%v, want onboarding-review message", err)
+	}
+	var after model.Merchant
+	if err := db.First(&after, pending.ID).Error; err != nil {
+		t.Fatalf("reload pending merchant: %v", err)
+	}
+	if after.Status != "pending" {
+		t.Fatalf("pending merchant status=%q after rejected update, want pending", after.Status)
+	}
+	var auditCount int64
+	if err := db.Model(&model.AuditLog{}).Where("action = ?", "merchant_status_update").Count(&auditCount).Error; err != nil {
+		t.Fatalf("count status-update audit rows: %v", err)
+	}
+	if auditCount != 0 {
+		t.Fatalf("rejected status update wrote %d audit rows, want 0", auditCount)
+	}
+	// The review API still activates the same merchant.
+	if _, err := admin.ReviewMerchantOnboarding(pending.ID, true, "", actor.ID, AuditEvent{
+		Actor: actor,
+		Input: AuditRecordInput{Action: "merchant_onboarding_approved", TargetType: "merchant", MerchantID: &pending.ID},
+	}); err != nil {
+		t.Fatalf("review approve after rejected generic update: %v", err)
+	}
+
+	// Other transitions are unchanged: suspended→active (manual unfreeze),
+	// active→suspended, and pending→suspended all still succeed.
+	suspended := &model.Merchant{Name: "解冻测试商家", Status: "suspended"}
+	if err := db.Create(suspended).Error; err != nil {
+		t.Fatalf("create suspended merchant: %v", err)
+	}
+	if err := update(suspended.ID, "active"); err != nil {
+		t.Fatalf("suspended→active: %v", err)
+	}
+	if err := update(suspended.ID, "suspended"); err != nil {
+		t.Fatalf("active→suspended: %v", err)
+	}
+	pending2 := &model.Merchant{Name: "待审核禁用测试商家", Status: "pending"}
+	if err := db.Create(pending2).Error; err != nil {
+		t.Fatalf("create second pending merchant: %v", err)
+	}
+	if err := update(pending2.ID, "suspended"); err != nil {
+		t.Fatalf("pending→suspended: %v", err)
+	}
+	var after2 model.Merchant
+	if err := db.First(&after2, pending2.ID).Error; err != nil {
+		t.Fatalf("reload second pending merchant: %v", err)
+	}
+	if after2.Status != "suspended" {
+		t.Fatalf("second pending merchant status=%q, want suspended", after2.Status)
+	}
+}
+
 func TestPendingMerchantCannotBuildOrBuy(t *testing.T) {
 	db := newMerchantOnboardingTestDB(t)
 	service := NewMerchantService(nil, db)
