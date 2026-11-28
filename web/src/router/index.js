@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/auth'
 import { useUserAuthStore } from '../stores/userAuth'
 import { useMerchantAuthStore } from '../stores/merchantAuth'
 import { fetchMerchantInfo, fetchAdminSession } from '../api/modules'
-import { merchantSubscriptionAccessState } from '../utils/merchantSubscriptionState'
+import { merchantSubscriptionAccessState, isMerchantRouteAllowedBySubscription } from '../utils/merchantSubscriptionState'
 const AdminLayout = () => import('../layout/AdminLayout.vue')
 const MerchantLayout = () => import('../layout/MerchantLayout.vue')
 const UserLayout = () => import('../layout/UserLayout.vue')
@@ -111,8 +111,8 @@ const routes = [
           { path: 'group-buy', component: MerchantGroupBuyView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
           { path: 'ai', component: MerchantAIView, meta: { requiresMerchantAuth: true } },
           { path: 'ops-dashboard', component: MerchantOpsDashboardView, meta: { requiresMerchantAuth: true } },
-          { path: 'announcements', component: MerchantAnnouncementsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
-          { path: 'tickets', component: MerchantTicketsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
+          { path: 'announcements', component: MerchantAnnouncementsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true, allowNoSubscription: true } },
+          { path: 'tickets', component: MerchantTicketsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true, allowNoSubscription: true } },
           { path: 'share', component: MerchantShareView, meta: { requiresMerchantAuth: true } },
           { path: 'subscription', component: MerchantSubscriptionView, meta: { requiresMerchantAuth: true, allowExpiredSubscription: true } },
           { path: 'profile', component: MerchantProfileView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true } },
@@ -179,8 +179,7 @@ router.beforeEach(async (to) => {
         return { path: '/merchant/profile', query: { redirect: to.fullPath } }
       }
       const accessState = merchantSubscriptionAccessState(merchant)
-      if (accessState === 'active') return
-      if (accessState === 'expired' && to.meta.allowExpiredReadOnly) return
+      if (isMerchantRouteAllowedBySubscription(accessState, to.meta)) return
       return { path: '/merchant/subscription', query: { redirect: to.fullPath } }
     } catch {
       return { path: '/merchant/subscription', query: { redirect: to.fullPath } }

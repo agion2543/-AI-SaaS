@@ -9,6 +9,7 @@ import {
 const mobileRoutes = await readFile(new URL('../router/mobile.js', import.meta.url), 'utf8')
 const pcRoutes = await readFile(new URL('../router/index.js', import.meta.url), 'utf8')
 const mobileLayout = await readFile(new URL('../mobile/merchant/MerchantLayout.vue', import.meta.url), 'utf8')
+const pcMerchantLayout = await readFile(new URL('../layout/MerchantLayout.vue', import.meta.url), 'utf8')
 const merchantHome = await readFile(new URL('../mobile/merchant/MerchantHome.vue', import.meta.url), 'utf8')
 const merchantAI = await readFile(new URL('../mobile/merchant/MerchantAI.vue', import.meta.url), 'utf8')
 const merchantSettings = await readFile(new URL('../mobile/merchant/MerchantSettings.vue', import.meta.url), 'utf8')
@@ -87,4 +88,20 @@ test('affected PC and H5 routes remain declared', () => {
 
   assert.ok(mobileRoutes.includes("path: 'mine', component: MerchantMine, name: 'MerchantMine', meta: { allowExpiredReadOnly: true }"))
   assert.ok(mobileRoutes.includes("path: 'subscription', component: MerchantSubscription, name: 'MerchantSubscription', meta: { allowSubscriptionLanding: true }"))
+  // P3 fix: tickets (and PC announcements) stay reachable without a
+  // subscription, so merchants who never subscribed or are paused can
+  // still reach support and read announcements.
+  assert.ok(mobileRoutes.includes("path: 'tickets', component: MerchantTickets, name: 'MerchantTickets', meta: { allowExpiredReadOnly: true, allowNoSubscription: true }"))
+  assert.ok(pcRoutes.includes("path: 'announcements', component: MerchantAnnouncementsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true, allowNoSubscription: true }"))
+  assert.ok(pcRoutes.includes("path: 'tickets', component: MerchantTicketsView, meta: { requiresMerchantAuth: true, allowExpiredReadOnly: true, allowNoSubscription: true }"))
+  assert.ok(pcRoutes.includes('isMerchantRouteAllowedBySubscription(accessState, to.meta)'))
+  assert.ok(mobileRoutes.includes('isMerchantRouteAllowedBySubscription(state, to.meta)'))
+  // P3 fix follow-up: the PC merchant layout also blocked paused merchants
+  // with a full-page pause lock instead of the route view, and disabled the
+  // tickets/announcements menu entries. Both must exempt allowNoSubscription
+  // routes, or the router guard fix alone would not make the pages usable.
+  assert.ok(pcMerchantLayout.includes("subscriptionPaused && route.path !== '/merchant/subscription' && !route.meta.allowNoSubscription"))
+  assert.ok(!pcMerchantLayout.includes('<el-sub-menu index="merchant-more" :disabled="subscriptionPaused">'))
+  assert.ok(pcMerchantLayout.includes('<el-menu-item index="/merchant/announcements">{{ text.announcements }}</el-menu-item>'))
+  assert.ok(pcMerchantLayout.includes('<el-menu-item index="/merchant/tickets">{{ text.tickets }}</el-menu-item>'))
 })

@@ -27,14 +27,14 @@
         <el-menu-item index="/merchant/coupons" :disabled="navigationLocked">{{ text.coupons }}</el-menu-item>
         <div class="menu-section">{{ text.sectionSubscription }}</div>
         <el-menu-item index="/merchant/subscription">{{ text.subscription }}</el-menu-item>
-        <el-sub-menu index="merchant-more" :disabled="subscriptionPaused">
+        <el-sub-menu index="merchant-more">
           <template #title>{{ text.more }}</template>
           <el-menu-item index="/merchant/group-buy" :disabled="navigationLocked">{{ text.groupBuy }}</el-menu-item>
           <el-menu-item index="/merchant/promotion-calculator" :disabled="navigationLocked">{{ text.promotionCalculator }}</el-menu-item>
           <el-menu-item index="/merchant/ai" :disabled="navigationLocked">{{ text.ai }}</el-menu-item>
           <el-menu-item index="/merchant/ops-dashboard" :disabled="navigationLocked">{{ text.opsDashboard }}</el-menu-item>
-          <el-menu-item index="/merchant/announcements" :disabled="subscriptionPaused">{{ text.announcements }}</el-menu-item>
-          <el-menu-item index="/merchant/tickets" :disabled="subscriptionPaused">{{ text.tickets }}</el-menu-item>
+          <el-menu-item index="/merchant/announcements">{{ text.announcements }}</el-menu-item>
+          <el-menu-item index="/merchant/tickets">{{ text.tickets }}</el-menu-item>
           <el-menu-item index="/merchant/payment-settings" :disabled="navigationLocked">{{ text.paymentSettings }}</el-menu-item>
           <el-menu-item index="/merchant/profile" :disabled="subscriptionPaused">{{ text.profile }}</el-menu-item>
         </el-sub-menu>
@@ -71,7 +71,7 @@
           :closable="false"
           title="订阅已到期：现有经营数据可只读查看，新建、修改、删除和业务处理操作已锁定。续费后恢复。"
         />
-        <div v-if="subscriptionPaused && route.path !== '/merchant/subscription'" class="pause-lock-screen">
+        <div v-if="subscriptionPaused && route.path !== '/merchant/subscription' && !route.meta.allowNoSubscription" class="pause-lock-screen">
           <h2>商家业务已被平台安全暂停</h2>
           <p>暂停期间不能查看或操作经营数据。请前往订阅页查看状态及恢复方式。</p>
           <el-button type="primary" @click="router.push('/merchant/subscription')">查看订阅状态与恢复入口</el-button>

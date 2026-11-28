@@ -20,6 +20,19 @@ export const merchantSubscriptionAccessState = (merchant = {}, now = Date.now())
   return 'unavailable'
 }
 
+// P3 fix: whether a merchant route may open under the given subscription
+// access state. Support tickets and announcements carry
+// meta.allowNoSubscription so merchants who never subscribed or whose
+// subscription is paused can still reach support and read announcements.
+// This only reads the access state; it does not change what
+// merchantSubscriptionAccessState returns.
+export const isMerchantRouteAllowedBySubscription = (accessState, meta = {}) => {
+  if (accessState === 'active') return true
+  if (accessState === 'expired' && meta.allowExpiredReadOnly) return true
+  if (meta.allowNoSubscription) return true
+  return false
+}
+
 export const merchantSubscriptionDisplayState = (merchant = {}, now = Date.now()) => {
   const status = String(merchant.subscription_status || '')
   const expiry = merchantSubscriptionExpiry(merchant)

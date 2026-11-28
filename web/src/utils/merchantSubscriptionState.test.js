@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isMerchantSubscriptionActive,
+  isMerchantRouteAllowedBySubscription,
   merchantSubscriptionAccessState,
   merchantSubscriptionDisplayState
 } from './merchantSubscriptionState.js'
@@ -105,4 +106,25 @@ test('a manually verified subscription remains outside provider-paid count and r
   const existingPaidOrder = { order_type: 'merchant_subscription', status: 'paid', total_amount: 34900 }
   assert.deepEqual(providerPaidSubscriptionOrders([...onlyManualRecord, existingPaidOrder]), [existingPaidOrder])
   assert.equal(providerPaidSubscriptionRevenueCents([...onlyManualRecord, existingPaidOrder]), 34900)
+})
+
+test('tickets and announcements stay reachable without a subscription (P3 fix)', () => {
+  const noSubscription = { allowNoSubscription: true }
+  const readOnly = { allowExpiredReadOnly: true }
+  const plain = {}
+
+  // Never subscribed (PC 'unavailable', mobile 'unknown') and paused both
+  // reach tickets/announcements, but not ordinary pages like orders.
+  assert.equal(isMerchantRouteAllowedBySubscription('unavailable', noSubscription), true)
+  assert.equal(isMerchantRouteAllowedBySubscription('unknown', noSubscription), true)
+  assert.equal(isMerchantRouteAllowedBySubscription('paused', noSubscription), true)
+  assert.equal(isMerchantRouteAllowedBySubscription('unavailable', plain), false)
+  assert.equal(isMerchantRouteAllowedBySubscription('unknown', plain), false)
+  assert.equal(isMerchantRouteAllowedBySubscription('paused', plain), false)
+
+  // Existing behaviour is unchanged: active always passes, expired only
+  // with allowExpiredReadOnly.
+  assert.equal(isMerchantRouteAllowedBySubscription('active', plain), true)
+  assert.equal(isMerchantRouteAllowedBySubscription('expired', readOnly), true)
+  assert.equal(isMerchantRouteAllowedBySubscription('expired', plain), false)
 })

@@ -2,6 +2,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { fetchMerchantSubscription } from '../api/modules'
 import { mobileMerchantSubscriptionState } from '../utils/mobileMerchantSubscription'
+import { isMerchantRouteAllowedBySubscription } from '../utils/merchantSubscriptionState'
 
 // 商家端页面（需要认证）
 const MerchantLayout = () => import('../mobile/merchant/MerchantLayout.vue')
@@ -51,7 +52,7 @@ const routes = [
       { path: 'coupons', component: MerchantCoupons, name: 'MerchantCoupons' },
       { path: 'ai', component: MerchantAI, name: 'MerchantAI' },
       { path: 'settings', component: MerchantSettings, name: 'MerchantSettings' },
-      { path: 'tickets', component: MerchantTickets, name: 'MerchantTickets', meta: { allowExpiredReadOnly: true } },
+      { path: 'tickets', component: MerchantTickets, name: 'MerchantTickets', meta: { allowExpiredReadOnly: true, allowNoSubscription: true } },
       { path: 'subscription', component: MerchantSubscription, name: 'MerchantSubscription', meta: { allowSubscriptionLanding: true } },
     ]
   },
@@ -97,8 +98,7 @@ router.beforeEach(async (to) => {
         if (pendingAllowed.includes(to.path)) return true
         return { path: '/m/merchant/mine', query: { redirect: to.fullPath } }
       }
-      if (state === 'active') return true
-      if (state === 'expired' && to.meta.allowExpiredReadOnly) return true
+      if (isMerchantRouteAllowedBySubscription(state, to.meta)) return true
       return { path: '/m/merchant/subscription', query: { redirect: to.fullPath, state } }
     } catch {
       localStorage.removeItem('merchant_current')
